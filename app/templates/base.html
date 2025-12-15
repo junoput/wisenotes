@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ request.app.title }} - Wisenotes</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=12">
+  <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+  <script src="/static/js/app.js?v=13" defer></script>
+</head>
+<body class="page">
+  <header class="topbar">
+    <div class="brand">Wisenotes</div>
+    <nav class="actions">
+      <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none">
+        <input type="hidden" name="title" value="Untitled note">
+        <button type="submit" class="btn">New note</button>
+      </form>
+      <form action="/api/export" method="get">
+        <button class="btn ghost" type="submit">Export JSON</button>
+      </form>
+      <form
+        id="import-form"
+        action="/api/import"
+        method="post"
+        enctype="multipart/form-data"
+        hx-post="/api/import"
+        hx-target="#editor"
+        hx-swap="outerHTML"
+        hx-encoding="multipart/form-data"
+      >
+        <label class="btn ghost" for="import-file">Import JSON</label>
+        <input id="import-file" name="file" type="file" accept="application/json" hidden>
+      </form>
+    </nav>
+  </header>
+  <main class="layout">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

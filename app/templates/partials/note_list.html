@@ -1,0 +1,26 @@
+<div class="pane-header">
+  <div class="pane-title">Notes</div>
+  <div class="pane-actions">
+    <button type="button" class="icon-btn" aria-label="Collapse notes" data-toggle-pane="note-list">&lt;</button>
+    <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none">
+      <input type="hidden" name="title" value="Untitled note">
+      <button type="submit" class="icon-btn" aria-label="Add note">+</button>
+    </form>
+  </div>
+</div>
+<div class="pane-content">
+  <div class="note-list">
+    {% for note in notes %}
+      {% set title = note.title %}
+      {% set meta = note.chapters|length ~ ' chapters' %}
+      {% set body = None %}
+      {% set hx_get = '/notes/' ~ note.id %}
+      {% set hx_target = 'body' %}
+      {% set hx_swap = 'none' %}
+      {% set extra_classes = 'active' if active and note.id == active.id else '' %}
+      {% include "components/item.html" %}
+    {% else %}
+      <div class="empty">No notes yet. Create one.</div>
+    {% endfor %}
+  </div>
+</div>

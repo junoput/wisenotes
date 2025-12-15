@@ -1,0 +1,19 @@
+{% macro render_chapters(chapters, active_note, parent_id=None, depth=0) %}
+  {% set level_chapters = chapters|selectattr('parent_id', 'equalto', parent_id)|list %}
+  {% for chapter in level_chapters|sort(attribute='order') %}
+    <div class="chapter-item" 
+         data-chapter-id="{{ chapter.id }}" 
+         data-parent-id="{{ chapter.parent_id or 'root' }}"
+         draggable="true"
+         style="margin-left: {{ depth * 20 }}px"
+         hx-get="/notes/{{ active_note.id }}"
+         hx-target="body"
+         hx-swap="none"
+         hx-trigger="click from:.chapter-item-title">
+      <div class="chapter-item-title">{{ chapter.title }}</div>
+      <div class="chapter-item-children">
+        {{ render_chapters(chapters, active_note, chapter.id, depth + 1) }}
+      </div>
+    </div>
+  {% endfor %}
+{% endmacro %}

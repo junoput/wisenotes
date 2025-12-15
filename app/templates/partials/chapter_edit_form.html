@@ -1,0 +1,31 @@
+<div class="chapter-edit-mode">
+  <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
+        hx-target="body" 
+        hx-swap="none"
+        class="chapter-edit-form">
+    <div class="field">
+      <label>Chapter JSON</label>
+      <textarea name="content" 
+                rows="20" 
+                placeholder="Edit chapter as JSON..."
+                class="chapter-content-input chapter-json-editor">{{ chapter_json }}</textarea>
+    </div>
+    <div class="editor-help">
+      <small>
+        Edit as JSON where <strong>content</strong> is a mixed array of strings and embedded chapter objects. 
+        The top-level object omits <em>id</em>. Embedded chapters may include <em>id</em> (existing) or omit it (new). 
+        Press <kbd>⌘+Enter</kbd> or <kbd>Ctrl+Enter</kbd> to save.
+      </small>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 8px;">
+      <button type="submit" class="btn">Save</button>
+      <button type="button" 
+              class="btn ghost" 
+              hx-get="/notes/{{ note.id }}" 
+              hx-target="body" 
+              hx-swap="none">
+        Cancel
+      </button>
+    </div>
+  </form>
+</div>

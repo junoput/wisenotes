@@ -1,0 +1,5 @@
+<div class="item {{ extra_classes|default('') }}" hx-get="{{ hx_get }}" hx-target="{{ hx_target }}" hx-swap="{{ hx_swap|default('outerHTML') }}">
+  <div class="item-title">{{ title }}</div>
+  {% if meta %}<div class="item-meta">{{ meta }}</div>{% endif %}
+  {% if body %}<div class="item-body">{{ body }}</div>{% endif %}
+</div>

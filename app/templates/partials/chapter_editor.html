@@ -1,0 +1,37 @@
+<div class="pane-header">
+  <h2>Edit: {{ chapter.title }}</h2>
+  <div class="pane-actions">
+    <button type="button" 
+            class="btn" 
+            hx-get="/notes/{{ active.id }}" 
+            hx-target="#editor" 
+            hx-swap="innerHTML">
+      ← Back
+    </button>
+  </div>
+</div>
+<div class="editor-body">
+  <form hx-post="/notes/{{ active.id }}/chapters/{{ chapter.id }}/edit" 
+        hx-target="body" 
+        hx-swap="none"
+        class="stack">
+    <div class="field">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" value="{{ chapter.title }}" required>
+    </div>
+    <div class="field">
+      <label for="content">Content</label>
+      <textarea id="content" name="content" rows="15" style="resize: vertical;">{{ chapter.content }}</textarea>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button type="submit" class="btn">Save</button>
+      <button type="button" 
+              class="btn ghost" 
+              hx-get="/notes/{{ active.id }}" 
+              hx-target="#editor" 
+              hx-swap="innerHTML">
+        Cancel
+      </button>
+    </div>
+  </form>
+</div>

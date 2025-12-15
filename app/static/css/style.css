@@ -1,0 +1,359 @@
+:root {
+  --bg: #0f172a;
+  --panel: #111827;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #22d3ee;
+  --danger: #f87171;
+  --border: #1f2937;
+}
+
+* { box-sizing: border-box; }
+body.page {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+a { color: var(--accent); }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: #0b1220;
+}
+
+.brand { font-weight: 700; letter-spacing: 0.02em; }
+.actions { display: flex; gap: 8px; align-items: center; }
+.toolbar-control { display: flex; flex-direction: column; gap: 4px; }
+.toolbar-control label { font-size: 12px; color: var(--muted); }
+.toolbar-select {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  min-width: 140px;
+}
+.toolbar-select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.layout {
+  display: grid;
+  grid-template-columns: var(--notes-col, 260px) 1fr;
+  min-height: calc(100vh - 60px);
+}
+
+.pane {
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.pane.collapsed {
+  padding: 12px 8px;
+  overflow: hidden;
+}
+.pane.collapsed .pane-header { margin-bottom: 0; }
+.pane.collapsed .pane-title,
+.pane.collapsed .note-list,
+.pane.collapsed .chapter-list,
+.pane.collapsed form { display: none; }
+.pane.collapsed .pane-actions { gap: 0; }
+.pane.collapsed .icon-btn { width: 32px; height: 32px; }
+
+.pane.editor { border-right: none; }
+
+.pane-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.pane-title { font-weight: 700; letter-spacing: 0.01em; }
+.pane-actions { display: flex; gap: 6px; align-items: center; }
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:hover { border-color: var(--accent); }
+
+.note-list { display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
+.item { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; cursor: pointer; transition: border-color 0.2s, transform 0.1s; }
+.item:hover { border-color: var(--accent); transform: translateY(-1px); }
+.item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.item-title { font-weight: 600; }
+.item-meta { color: var(--muted); font-size: 12px; }
+
+.btn {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #1e293b;
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.ghost { background: transparent; }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field input, .field textarea {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--text);
+}
+.field select {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  color: var(--text);
+}
+
+.chapter-edit-form {
+  padding: 16px;
+  background: #0b1220;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  margin: 8px 0;
+}
+
+.chapter-edit-form .field {
+  margin-bottom: 12px;
+}
+
+.stack { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+
+.chapters .chapter-list { padding-left: 16px; display: flex; flex-direction: column; gap: 10px; }
+.chapters .block-list { padding-left: 16px; display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.chapter .item-title { font-weight: 700; }
+.chapter .item-body { color: var(--muted); white-space: pre-wrap; }
+.block .item-body { color: var(--text); white-space: pre-wrap; }
+
+.chapters-display { display: flex; flex-direction: column; gap: 0; }
+.chapter-section { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; margin-bottom: 2px; }
+.chapter-header { margin: 0 0 12px 0; font-size: 18px; font-weight: 700; }
+.chapter-content { transition: all 0.3s ease; }
+.block-content { color: var(--text); white-space: normal; line-height: 1.6; margin-bottom: 8px; }
+.block-content p { margin: 0 0 10px 0; }
+.block-content ul, .block-content ol { margin: 0 0 10px 20px; padding-left: 18px; }
+.block-content code { background: #1e293b; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+.block-content pre { background: #0b1220; border: 1px solid var(--border); padding: 10px; border-radius: 8px; overflow: auto; }
+.block-content:last-child { margin-bottom: 0; }
+
+.chapter-item {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0d1526;
+  cursor: move;
+  transition: border-color 0.2s, background-color 0.2s;
+  margin-bottom: 6px;
+}
+
+.chapter-item:hover { border-color: var(--accent); }
+.chapter-item.drag-over { border-color: var(--accent); background: #1a2744; }
+
+.chapter-item-title {
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.chapter-item-children { margin-top: 4px; }
+
+.chapter-section {
+  position: relative;
+}
+
+.chapter-view {
+  cursor: pointer;
+  transition: background-color 0.2s;
+  border-radius: 8px;
+  padding: 4px;
+  margin: -4px;
+}
+
+.chapter-view:hover {
+  background: rgba(34, 211, 238, 0.05);
+}
+
+.chapter-edit-mode {
+  padding: 0;
+}
+
+.chapter-title-input {
+  font-size: 18px;
+  font-weight: 700;
+  background: #0b1220;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px;
+  color: var(--text);
+  width: 100%;
+}
+
+.chapter-content-input {
+  background: #0b1220;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  color: var(--text);
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+.chapter-hierarchy-editor, .chapter-json-editor {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 14px;
+  tab-size: 2;
+}
+
+.editor-help {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.editor-help code {
+  background: #1e293b;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.editor-help kbd {
+  background: #1e293b;
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+/* removed chapter insert affordance */
+/* Add chapter affordances (hidden until delayed hover reveal) */
+.add-zone {
+  position: relative;
+}
+
+/* Between/top/bottom zones act as small spacers with centered button */
+.add-zone.add-between,
+.add-zone.add-top,
+.add-zone.add-bottom,
+.add-zone.add-empty {
+  height: 30px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease;
+  border-radius: 4px;
+}
+
+.add-zone.add-between:hover,
+.add-zone.add-top:hover,
+.add-zone.add-bottom:hover,
+.add-zone.add-empty:hover {
+  background-color: rgba(59, 130, 246, 0.05);
+}
+
+/* Child overlay spans the chapter card but only the button is interactive */
+.chapter-section { position: relative; }
+.add-zone.add-child {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.add-form { position: relative; }
+
+.add-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  display: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.add-zone:not(.show) .add-btn {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Place the child button at the bottom-right of the chapter */
+.add-zone.add-child .add-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+}
+
+.add-zone.show .add-btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  pointer-events: auto !important;
+}
+
+.add-btn:hover {
+  border-color: var(--accent);
+}
+
+.add-zone-permanent {
+  margin: 16px 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.add-btn-permanent {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-btn-permanent:hover {
+  border-color: var(--accent);
+}
+
+.empty, .empty-state { color: var(--muted); padding: 12px; }
+
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+  .pane { border-right: none; border-bottom: 1px solid var(--border); }
+}

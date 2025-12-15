@@ -1,0 +1,22 @@
+{% if active %}
+<div class="pane-header">
+  <h2>{{ active.title }}</h2>
+  <div class="pane-actions">
+    <form hx-delete="/notes/{{ active.id }}" hx-target="body" hx-swap="none" style="display: inline;">
+      <button type="submit" class="btn danger">Delete</button>
+    </form>
+  </div>
+</div>
+<div class="editor-body">
+  <div class="chapters-display">
+    {% if active.chapters %}
+      {% import "components/editor_chapters.html" as editor_chapters %}
+      {{ editor_chapters.render_editor_chapters(active.chapters, active, parent_id=None, depth=0) }}
+    {% else %}
+      <div class="empty">No chapters yet. Click "+ Chapter" above to add one.</div>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="empty-state">Select or create a note to begin.</div>
+{% endif %}

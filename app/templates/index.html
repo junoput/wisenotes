@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+  <section id="note-list" class="pane list" data-col-var="--notes-col">
+    {% include "partials/note_list.html" %}
+  </section>
+  <section id="editor" class="pane editor" {% if active %}data-note-id="{{ active.id }}"{% endif %}>
+    {% include "partials/editor.html" %}
+  </section>
+{% endblock %}

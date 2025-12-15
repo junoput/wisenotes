@@ -1,0 +1,23 @@
+<div class="pane-header">
+  <div class="pane-title">Chapters</div>
+  <div class="pane-actions">
+    <button type="button" class="icon-btn" aria-label="Collapse chapters" data-toggle-pane="chapter-list">&lt;</button>
+    {% if active %}
+    <form action="/notes/{{ active.id }}/chapters" method="post" hx-post="/notes/{{ active.id }}/chapters" hx-target="body" hx-swap="none">
+      <button type="submit" class="icon-btn" aria-label="Add chapter">+</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+<div class="pane-content">
+  <div class="note-list">
+    {% if active and active.chapters %}
+      {% import "components/chapter_tree.html" as chapter_tree %}
+      {{ chapter_tree.render_chapters(active.chapters, active) }}
+    {% else %}
+      <div class="empty">No chapters yet.</div>
+    {% endif %}
+  </div>
+</div>
+
+

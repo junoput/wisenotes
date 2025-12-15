@@ -1,0 +1,9 @@
+services:
+  wisenotes:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - WISENOTES_DATA_DIR=/data
+    volumes:
+      - ./data:/data
