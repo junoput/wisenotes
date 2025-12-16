@@ -1,5 +1,45 @@
+/**
+ * Dynamically load and instantiate editor class
+ */
+async function loadEditorClass(editorType) {
+  switch (editorType) {
+    case 'codemirror': {
+      const { CodeMirrorEditor } = await import('./editors/codemirror-editor.js');
+      return CodeMirrorEditor;
+    }
+    case 'textarea':
+    default: {
+      const { TextareaEditor } = await import('./editors/textarea-editor.js');
+      return TextareaEditor;
+    }
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const root = document.documentElement;
+
+  // Persist collapsed state per pane across reloads
+  const paneKeys = {
+    'note-list': '--notes-col',
+    'chapter-list': null,
+  };
+
+  function applyCollapsedStateFromStorage() {
+    Object.keys(paneKeys).forEach((paneId) => {
+      const collapsed = localStorage.getItem(`pane:${paneId}:collapsed`) === '1';
+      const el = document.getElementById(paneId);
+      if (!el) return;
+      el.classList.toggle('collapsed', collapsed);
+      const content = el.querySelector('.pane-content');
+      if (content) content.style.display = collapsed ? 'none' : '';
+      const colVar = paneKeys[paneId];
+      if (colVar) {
+        root.style.setProperty(colVar, collapsed ? '48px' : '260px');
+      }
+    });
+  }
+
+  applyCollapsedStateFromStorage();
 
   document.body.addEventListener('click', (e) => {
     const target = e.target.closest('[data-toggle-pane]');
@@ -16,33 +56,117 @@ document.addEventListener('DOMContentLoaded', () => {
     if (colVar) {
       root.style.setProperty(colVar, collapsed ? '48px' : '260px');
     }
+    // Save state
+    localStorage.setItem(`pane:${paneId}:collapsed`, collapsed ? '1' : '0');
   });
 
   // Handle Enter key in chapter edit forms
   document.body.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    if (e.key === 'Enter') {
       const form = e.target.closest('.chapter-edit-form');
       if (form) {
         e.preventDefault();
+        // Block submit on invalid JSON
+        const textarea = form.querySelector('textarea');
+        if (textarea) {
+          try {
+            JSON.parse(textarea.value);
+          } catch (err) {
+            console.warn('Submit blocked: JSON parse error', err?.message || err);
+            return;
+          }
+        }
         const submitBtn = form.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.click();
       }
     }
   });
 
-  // Delayed hover reveal for add zones and chapter child overlays
+  // Editor initialization and UI reset after HTMX swaps
+  // Before swapping content, close any editor attached to the old container
+  document.body.addEventListener('htmx:beforeSwap', (e) => {
+    // Find and close all existing editors in the document
+    document.querySelectorAll('.chapter-edit-mode').forEach((editForm) => {
+      if (editForm._editorInstance) {
+        try {
+          editForm._editorInstance.unmount();
+          editForm._editorInstance = null;
+        } catch (err) {
+          console.warn('Editor unmount on beforeSwap failed:', err);
+        }
+      }
+    });
+    // Also remove any orphaned CodeMirror wrappers
+    document.querySelectorAll('.CodeMirror').forEach((wrapper) => {
+      try {
+        if (wrapper.parentNode) {
+          wrapper.parentNode.removeChild(wrapper);
+        }
+      } catch (err) {
+        console.warn('Orphaned CodeMirror cleanup failed:', err);
+      }
+    });
+  });
+
+  document.body.addEventListener('htmx:afterSwap', async () => {
+    document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
+    applyCollapsedStateFromStorage();
+
+    // Initialize editor for chapter edit form
+    const editForm = document.querySelector('.chapter-edit-mode');
+    // Always use codemirror for consistency
+    const editorType = 'codemirror';
+    
+    if (editForm) {
+      try {
+
+        const EditorClass = await loadEditorClass(editorType);
+        const editor = new EditorClass(editForm);
+        await editor.mount();
+        // Attach editor instance to the container so it's tied to that element's lifecycle
+        editForm._editorInstance = editor;
+
+        editor.on('submit', () => {
+          const form = editForm.querySelector('form');
+          const textarea = editForm.querySelector('textarea');
+          if (textarea) {
+            textarea.value = editor.getValue();
+          }
+          if (form) {
+            htmx.ajax('POST', form.getAttribute('hx-post'), {
+              values: new FormData(form),
+              target: form.getAttribute('hx-target') || 'body',
+              swap: form.getAttribute('hx-swap') || 'innerHTML',
+            });
+          }
+        });
+
+          // Click-outside auto-save removed per request; rely on explicit Save/Cancel.
+      } catch (err) {
+        console.error('Failed to initialize editor:', err);
+      }
+    }
+
+    // Focus textarea only if using the plain textarea editor
+    if (editForm && editorType === 'textarea') {
+      const textarea = editForm.querySelector('textarea');
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(0, 0);
+      }
+    }
+  });
+
   const INSERT_DELAY = 800; // ms
-  const PERSIST_DELAY = 2500; // ms - how long to keep button visible after hover ends
+  const PERSIST_DELAY = 2500; // ms
   const timers = new WeakMap();
   const persistTimers = new WeakMap();
 
   function hideAllAddButtons() {
-    // Hide all add zone buttons
     document.querySelectorAll('.add-zone.show').forEach((el) => {
       el.classList.remove('show');
       clearPersistTimer(el);
     });
-    // Clear all persist timers
     document.querySelectorAll('.chapter-section').forEach((section) => {
       clearPersistTimer(section);
     });
@@ -51,7 +175,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function startTimer(el, showFn) {
     if (timers.has(el)) return;
     const t = setTimeout(() => {
-      hideAllAddButtons(); // Hide any previously visible buttons
+      hideAllAddButtons();
       showFn();
       timers.delete(el);
     }, INSERT_DELAY);
@@ -87,7 +211,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.body.addEventListener('mouseover', (e) => {
-    // Child overlay: trigger when hovering the chapter section
     const section = e.target.closest('.chapter-section');
     if (section) {
       const from = e.relatedTarget;
@@ -100,7 +223,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Between/top/bottom/empty zones: trigger when hovering the zone itself
     const zone = e.target.closest('.add-zone');
     if (zone && !zone.classList.contains('add-child')) {
       const from = e.relatedTarget;
@@ -136,10 +258,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Ensure all add zones start hidden on initial load and after swaps
-  document.body.addEventListener('htmx:afterSwap', () => {
-    document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
-  });
+  // Ensure all add zones start hidden on initial load
   document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
 
   document.body.addEventListener('dragstart', (e) => {
@@ -188,5 +307,4 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
-
 });

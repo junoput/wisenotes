@@ -1,4 +1,4 @@
-<div class="chapter-edit-mode">
+<div class="chapter-edit-mode" data-editor="codemirror">
   <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
         hx-target="body" 
         hx-swap="none"
@@ -8,14 +8,8 @@
       <textarea name="content" 
                 rows="20" 
                 placeholder="Edit chapter as JSON..."
-                class="chapter-content-input chapter-json-editor">{{ chapter_json }}</textarea>
-    </div>
-    <div class="editor-help">
-      <small>
-        Edit as JSON where <strong>content</strong> is a mixed array of strings and embedded chapter objects. 
-        The top-level object omits <em>id</em>. Embedded chapters may include <em>id</em> (existing) or omit it (new). 
-        Press <kbd>⌘+Enter</kbd> or <kbd>Ctrl+Enter</kbd> to save.
-      </small>
+                class="chapter-content-input chapter-json-editor"
+                autofocus>{{ chapter_json }}</textarea>
     </div>
     <div style="display: flex; gap: 8px; margin-top: 8px;">
       <button type="submit" class="btn">Save</button>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CodeMirror Test</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #333;
+    }
+    .editor-container {
+      border: 1px solid #ccc;
+      margin: 20px 0;
+      padding: 10px;
+      border-radius: 4px;
+    }
+    .CodeMirror {
+      height: 400px;
+      border: 1px solid #ddd;
+    }
+    .info {
+      background: #f0f0f0;
+      padding: 10px;
+      margin: 10px 0;
+      border-left: 4px solid #007bff;
+      border-radius: 2px;
+    }
+    button {
+      padding: 8px 16px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    #output {
+      background: #f9f9f9;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      margin-top: 10px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>CodeMirror Test</h1>
+  
+  <div class="info">
+    <strong>Instructions:</strong> Type JSON below. Test Shift+Enter for newline, Enter to submit.
+  </div>
+
+  <div class="editor-container">
+    <textarea id="code">{
+  "title": "Test Chapter",
+  "content": []
+}</textarea>
+  </div>
+
+  <div>
+    <button id="submitBtn">Submit (simulates Enter)</button>
+    <button id="getValueBtn">Get Editor Value</button>
+  </div>
+
+  <div id="output">Output appears here...</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/javascript/javascript.min.js"></script>
+  <script>
+    const output = document.getElementById('output');
+    
+    // Initialize CodeMirror
+    const editor = CodeMirror.fromTextArea(document.getElementById('code'), {
+      mode: 'application/json',
+      lineNumbers: true,
+      indentUnit: 2,
+      tabSize: 2,
+      indentWithTabs: false,
+      extraKeys: {
+        'Enter': function(cm) {
+          log('Enter pressed → submitting form');
+          // Simulate form submission
+          submitForm();
+        },
+        'Shift-Enter': function(cm) {
+          log('Shift+Enter pressed → inserting newline');
+          cm.replaceSelection('\n', 'end');
+        }
+      }
+    });
+
+    function log(msg) {
+      const now = new Date().toLocaleTimeString();
+      output.textContent += `[${now}] ${msg}\n`;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    function submitForm() {
+      const value = editor.getValue();
+      log('--- FORM SUBMITTED ---');
+      log('Editor Value:');
+      log(value);
+      log('--- END SUBMISSION ---\n');
+    }
+
+    document.getElementById('submitBtn').addEventListener('click', submitForm);
+    
+    document.getElementById('getValueBtn').addEventListener('click', () => {
+      const value = editor.getValue();
+      log('Current value:');
+      log(value);
+    });
+
+    log('CodeMirror initialized');
+    log('Try typing JSON, then press:');
+    log('  - Enter to submit');
+    log('  - Shift+Enter to add a newline');
+  </script>
+</body>
+</html>
