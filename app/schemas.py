@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -13,6 +13,8 @@ class Chapter(BaseModel):
     content: str = Field(default="", max_length=20_000)
     order: int = Field(ge=0)
     parent_id: Optional[str] = None  # For nested chapters
+    type: Literal["chapter", "paragraph", "code", "math"] = Field(default="chapter")
+    language: Optional[str] = None  # Language for code/math blocks (e.g., 'python', 'latex')
 
 
 class Note(BaseModel):

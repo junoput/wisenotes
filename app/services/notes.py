@@ -98,10 +98,20 @@ class NoteService:
         ]
         return others + normalized_siblings
 
-    def add_chapter(self, note_id: str, title: str = "New chapter", parent_id: Optional[str] = None) -> Optional[Note]:
+    def add_chapter(self, note_id: str, title: str = "New chapter", parent_id: Optional[str] = None, block_type: str = "chapter") -> Optional[Note]:
         note = self.repo.get_note(note_id)
         if not note:
             return None
+        
+        # Enforce rule: only chapters allowed at root level
+        if parent_id is None and block_type != "chapter":
+            return None
+        
+        # Enforce rule: parent must be a chapter to have children
+        if parent_id is not None:
+            parent = next((c for c in note.chapters if c.id == parent_id), None)
+            if not parent or parent.type != "chapter":
+                return None
         
         # Get the next order among siblings (chapters with the same parent)
         siblings = [c for c in note.chapters if c.parent_id == parent_id]
@@ -110,6 +120,13 @@ class NoteService:
         existing_ids = {c.id for c in note.chapters}
         new_id = self._new_chapter_id(existing_ids)
         
+        # Set default language based on block type
+        language = None
+        if block_type == "code":
+            language = "python"
+        elif block_type == "math":
+            language = "latex"
+        
         now = datetime.utcnow()
         new_chapter = Chapter(
             id=new_id,
@@ -117,6 +134,8 @@ class NoteService:
             content="",
             order=next_sibling_order,
             parent_id=parent_id,
+            type=block_type,
+            language=language,
         )
         updated = note.model_copy(update={
             "chapters": self._normalize_sibling_orders(note.chapters + [new_chapter], parent_id),
@@ -126,7 +145,7 @@ class NoteService:
         self.plugins.notify_note_saved(saved)
         return saved
 
-    def add_chapter_after(self, note_id: str, prev_id: str, title: str = "New chapter") -> Optional[Note]:
+    def add_chapter_after(self, note_id: str, prev_id: str, title: str = "New chapter", block_type: str = "chapter") -> Optional[Note]:
         note = self.repo.get_note(note_id)
         if not note:
             return None
@@ -134,6 +153,17 @@ class NoteService:
         if not prev:
             return None
         parent_id = prev.parent_id
+        
+        # Enforce rule: only chapters allowed at root level
+        if parent_id is None and block_type != "chapter":
+            return None
+        
+        # Enforce rule: parent must be a chapter to have children
+        if parent_id is not None:
+            parent = next((c for c in note.chapters if c.id == parent_id), None)
+            if not parent or parent.type != "chapter":
+                return None
+        
         insert_index = prev.order + 1
 
         shifted: List[Chapter] = []
@@ -145,12 +175,22 @@ class NoteService:
 
         existing_ids = {c.id for c in note.chapters}
         new_id = self._new_chapter_id(existing_ids)
+        
+        # Set default language based on block type
+        language = None
+        if block_type == "code":
+            language = "python"
+        elif block_type == "math":
+            language = "latex"
+        
         new_chapter = Chapter(
             id=new_id,
             title=title,
             content="",
             order=insert_index,
             parent_id=parent_id,
+            type=block_type,
+            language=language,
         )
 
         updated_chapters = self._normalize_sibling_orders(shifted + [new_chapter], parent_id)
@@ -197,7 +237,7 @@ class NoteService:
         self.plugins.notify_note_saved(saved)
         return saved
 
-    def add_chapter_before(self, note_id: str, next_id: str, title: str = "New chapter") -> Optional[Note]:
+    def add_chapter_before(self, note_id: str, next_id: str, title: str = "New chapter", block_type: str = "chapter") -> Optional[Note]:
         note = self.repo.get_note(note_id)
         if not note:
             return None
@@ -205,6 +245,17 @@ class NoteService:
         if not nxt:
             return None
         parent_id = nxt.parent_id
+        
+        # Enforce rule: only chapters allowed at root level
+        if parent_id is None and block_type != "chapter":
+            return None
+        
+        # Enforce rule: parent must be a chapter to have children
+        if parent_id is not None:
+            parent = next((c for c in note.chapters if c.id == parent_id), None)
+            if not parent or parent.type != "chapter":
+                return None
+        
         insert_index = nxt.order
 
         shifted: List[Chapter] = []
@@ -216,12 +267,22 @@ class NoteService:
 
         existing_ids = {c.id for c in note.chapters}
         new_id = self._new_chapter_id(existing_ids)
+        
+        # Set default language based on block type
+        language = None
+        if block_type == "code":
+            language = "python"
+        elif block_type == "math":
+            language = "latex"
+        
         new_chapter = Chapter(
             id=new_id,
             title=title,
             content="",
             order=insert_index,
             parent_id=parent_id,
+            type=block_type,
+            language=language,
         )
 
         updated_chapters = self._normalize_sibling_orders(shifted + [new_chapter], parent_id)
@@ -230,9 +291,14 @@ class NoteService:
         self.plugins.notify_note_saved(saved)
         return saved
 
-    def add_chapter_child(self, note_id: str, parent_id: str, title: str = "New chapter") -> Optional[Note]:
+    def add_chapter_child(self, note_id: str, parent_id: str, title: str = "New chapter", block_type: str = "chapter") -> Optional[Note]:
         note = self.repo.get_note(note_id)
         if not note:
+            return None
+        
+        # Enforce rule: parent must exist and be a chapter type
+        parent = next((c for c in note.chapters if c.id == parent_id), None)
+        if not parent or parent.type != "chapter":
             return None
         
         # Get the next order among siblings (children of the same parent)
@@ -244,12 +310,21 @@ class NoteService:
         if new_id == parent_id:
             new_id = self._new_chapter_id(existing_ids | {parent_id})
         
+        # Set default language based on block type
+        language = None
+        if block_type == "code":
+            language = "python"
+        elif block_type == "math":
+            language = "latex"
+        
         new_chapter = Chapter(
             id=new_id,
             title=title,
             content="",
             order=next_sibling_order,
             parent_id=parent_id,
+            type=block_type,
+            language=language,
         )
         updated = note.model_copy(update={
             "chapters": self._normalize_sibling_orders(note.chapters + [new_chapter], parent_id),

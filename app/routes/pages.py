@@ -63,9 +63,10 @@ async def add_chapter(
     note_id: str,
     request: Request,
     parent_id: str = Form(None),
+    block_type: str = Form("chapter"),
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.add_chapter(note_id, parent_id=parent_id)
+    note = service.add_chapter(note_id, parent_id=parent_id, block_type=block_type)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
@@ -79,9 +80,10 @@ async def add_chapter_after(
     note_id: str,
     request: Request,
     prev_id: str = Form(...),
+    block_type: str = Form("chapter"),
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.add_chapter_after(note_id, prev_id=prev_id)
+    note = service.add_chapter_after(note_id, prev_id=prev_id, block_type=block_type)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
@@ -95,9 +97,10 @@ async def add_chapter_before(
     note_id: str,
     request: Request,
     next_id: str = Form(...),
+    block_type: str = Form("chapter"),
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.add_chapter_before(note_id, next_id=next_id)
+    note = service.add_chapter_before(note_id, next_id=next_id, block_type=block_type)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
@@ -111,9 +114,10 @@ async def add_chapter_child(
     note_id: str,
     request: Request,
     parent_id: str = Form(...),
+    block_type: str = Form("chapter"),
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.add_chapter_child(note_id, parent_id=parent_id)
+    note = service.add_chapter_child(note_id, parent_id=parent_id, block_type=block_type)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()

@@ -1,39 +1,58 @@
-{% macro render_editor_chapters(chapters, active_note, parent_id=None, depth=0) %}
+{% macro render_editor_chapters(chapters, active_note, parent_id=none, depth=0) %}
   {% set level_chapters = chapters|selectattr('parent_id', 'equalto', parent_id)|list %}
   {% set siblings = level_chapters|sort(attribute='order') %}
   {% if siblings|length > 0 %}
     {% set first = siblings[0] %}
     <div class="add-zone add-top" aria-hidden="true">
-      <form class="add-form" 
-            hx-post="/notes/{{ active_note.id }}/chapters/before" 
-            hx-target="body" 
-            hx-swap="none">
-        <input type="hidden" name="next_id" value="{{ first.id }}">
-        <button type="submit" class="add-btn" title="Add chapter above" style="display:none" aria-hidden="true">+</button>
-      </form>
+      <div class="add-buttons-row">
+        <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/before" hx-target="body" hx-swap="none">
+          <input type="hidden" name="next_id" value="{{ first.id }}">
+          <input type="hidden" name="block_type" value="chapter">
+          <button type="submit" class="add-btn-type" title="Add chapter" data-type="chapter">📄</button>
+        </form>
+      </div>
     </div>
   {% endif %}
   {% for chapter in siblings %}
     <section class="chapter-section chapter-item-container" 
              id="chapter-{{ chapter.id }}"
              style="margin-left: {{ 1 if depth > 0 else 0 }}px; border-left: {{ 4 + depth * 2 }}px solid var(--accent);"
-             data-chapter-id="{{ chapter.id }}">
+             data-chapter-id="{{ chapter.id }}"
+             data-chapter-type="{{ chapter.type }}">
       <div class="chapter-view" 
            hx-get="/notes/{{ active_note.id }}/chapters/{{ chapter.id }}/edit" 
            hx-target="#chapter-{{ chapter.id }}" 
            hx-swap="innerHTML">
-        <h3 class="chapter-header">{{ chapter.title }}</h3>
+        <h3 class="chapter-header">
+          <span class="block-type-badge">{{ chapter.type }}</span>
+          {{ chapter.title }}
+        </h3>
         <div class="block-content">{{ chapter.content }}</div>
       </div>
-      {% if depth < 3 %}
+      {% if depth < 3 and chapter.type == "chapter" %}
         <div class="add-zone add-child" aria-hidden="true">
-          <form class="add-form" 
-                hx-post="/notes/{{ active_note.id }}/chapters/child" 
-                hx-target="body" 
-                hx-swap="none">
-            <input type="hidden" name="parent_id" value="{{ chapter.id }}">
-            <button type="submit" class="add-btn" title="Add nested chapter" style="display:none" aria-hidden="true">+</button>
-          </form>
+          <div class="add-buttons-row">
+            <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/child" hx-target="body" hx-swap="none">
+              <input type="hidden" name="parent_id" value="{{ chapter.id }}">
+              <input type="hidden" name="block_type" value="chapter">
+              <button type="submit" class="add-btn-type" title="Add nested chapter" data-type="chapter">📄</button>
+            </form>
+            <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/child" hx-target="body" hx-swap="none">
+              <input type="hidden" name="parent_id" value="{{ chapter.id }}">
+              <input type="hidden" name="block_type" value="paragraph">
+              <button type="submit" class="add-btn-type" title="Add nested paragraph" data-type="paragraph">¶</button>
+            </form>
+            <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/child" hx-target="body" hx-swap="none">
+              <input type="hidden" name="parent_id" value="{{ chapter.id }}">
+              <input type="hidden" name="block_type" value="code">
+              <button type="submit" class="add-btn-type" title="Add nested code" data-type="code">{}</button>
+            </form>
+            <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/child" hx-target="body" hx-swap="none">
+              <input type="hidden" name="parent_id" value="{{ chapter.id }}">
+              <input type="hidden" name="block_type" value="math">
+              <button type="submit" class="add-btn-type" title="Add nested math" data-type="math">∑</button>
+            </form>
+          </div>
         </div>
       {% endif %}
       {% if depth < 3 and chapters|selectattr('parent_id', 'equalto', chapter.id)|list %}
@@ -43,35 +62,58 @@
       {% endif %}
     </section>
     <div class="add-zone add-between" aria-hidden="true">
-      <form class="add-form" 
-            hx-post="/notes/{{ active_note.id }}/chapters/after" 
-            hx-target="body" 
-            hx-swap="none">
-        <input type="hidden" name="prev_id" value="{{ chapter.id }}">
-        <button type="submit" class="add-btn" title="Add chapter here" style="display:none" aria-hidden="true">+</button>
-      </form>
+      <div class="add-buttons-row">
+        {% if parent_id is none %}
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+            <input type="hidden" name="prev_id" value="{{ chapter.id }}">
+            <input type="hidden" name="block_type" value="chapter">
+            <button type="submit" class="add-btn-type" title="Add chapter" data-type="chapter">📄</button>
+          </form>
+        {% else %}
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+            <input type="hidden" name="prev_id" value="{{ chapter.id }}">
+            <input type="hidden" name="block_type" value="chapter">
+            <button type="submit" class="add-btn-type" title="Add chapter" data-type="chapter">📄</button>
+          </form>
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+            <input type="hidden" name="prev_id" value="{{ chapter.id }}">
+            <input type="hidden" name="block_type" value="paragraph">
+            <button type="submit" class="add-btn-type" title="Add paragraph" data-type="paragraph">¶</button>
+          </form>
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+            <input type="hidden" name="prev_id" value="{{ chapter.id }}">
+            <input type="hidden" name="block_type" value="code">
+            <button type="submit" class="add-btn-type" title="Add code" data-type="code">{}</button>
+          </form>
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+            <input type="hidden" name="prev_id" value="{{ chapter.id }}">
+            <input type="hidden" name="block_type" value="math">
+            <button type="submit" class="add-btn-type" title="Add math" data-type="math">∑</button>
+          </form>
+        {% endif %}
+      </div>
     </div>
   {% endfor %}
   {% if siblings|length > 0 and parent_id is none %}
     {% set last = siblings[-1] %}
     <div class="add-zone-permanent">
-      <form class="add-form" 
-            hx-post="/notes/{{ active_note.id }}/chapters/after" 
-            hx-target="body" 
-            hx-swap="none">
-        <input type="hidden" name="prev_id" value="{{ last.id }}">
-        <button type="submit" class="add-btn-permanent" title="Add chapter">+ Add Chapter</button>
-      </form>
+      <div class="add-buttons-row-permanent">
+        <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters/after" hx-target="body" hx-swap="none">
+          <input type="hidden" name="prev_id" value="{{ last.id }}">
+          <input type="hidden" name="block_type" value="chapter">
+          <button type="submit" class="add-btn-permanent-type" title="Add chapter" data-type="chapter">+ Chapter</button>
+        </form>
+      </div>
     </div>
   {% elif siblings|length == 0 %}
     {% if parent_id is none %}
       <div class="add-zone add-empty" aria-hidden="true">
-        <form class="add-form" 
-              hx-post="/notes/{{ active_note.id }}/chapters" 
-              hx-target="body" 
-              hx-swap="none">
-          <button type="submit" class="add-btn" title="Add first chapter" style="display:none" aria-hidden="true">+</button>
-        </form>
+        <div class="add-buttons-row">
+          <form class="add-form-inline" hx-post="/notes/{{ active_note.id }}/chapters" hx-target="body" hx-swap="none">
+            <input type="hidden" name="block_type" value="chapter">
+            <button type="submit" class="add-btn-type" title="Add first chapter" data-type="chapter">📄</button>
+          </form>
+        </div>
       </div>
     {% endif %}
   {% endif %}
