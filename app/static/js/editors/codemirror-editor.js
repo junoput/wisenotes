@@ -22,14 +22,32 @@ export class CodeMirrorEditor extends Editor {
       throw new Error('No textarea found in container');
     }
 
-    // Create CodeMirror instance anchored to the textarea position
-    this.editor = window.CodeMirror.fromTextArea(textarea, {
+    const modeAttr = this.container.dataset.codemirrorMode || CODEMIRROR_CONFIG.mode;
+    const language = this.container.dataset.language;
+    
+    // Load language mode if needed
+    if (modeAttr && modeAttr !== 'application/json') {
+      await this._loadLanguageMode(modeAttr);
+    }
+
+    const mode = this._getMimeType(modeAttr, language);
+    const isJsonMode = mode === 'application/json';
+    const config = {
       ...CODEMIRROR_CONFIG,
-      extraKeys: createExtraKeys({
-        onEnter: (cm) => this._handleEnter(cm),
-        onShiftEnter: (cm) => cm.execCommand('newlineAndIndent'),
-      }),
-    });
+      mode,
+      lint: isJsonMode ? CODEMIRROR_CONFIG.lint : false,
+      extraKeys: createExtraKeys(
+        isJsonMode
+          ? {
+              onEnter: (cm) => this._handleEnter(cm),
+              onShiftEnter: (cm) => cm.execCommand('newlineAndIndent'),
+            }
+          : {}
+      ),
+    };
+
+    // Create CodeMirror instance anchored to the textarea position
+    this.editor = window.CodeMirror.fromTextArea(textarea, config);
 
     // Ensure the CodeMirror wrapper stays above the button row
     const wrapper = this.editor.getWrapperElement();
@@ -80,6 +98,13 @@ export class CodeMirrorEditor extends Editor {
     const textarea = this.container.querySelector('textarea');
     if (textarea) {
       textarea.value = this.editor.getValue();
+    }
+
+    // Only auto-submit for JSON mode where Enter acts as submit
+    const mode = this.editor?.getOption('mode');
+    if (mode !== 'application/json') {
+      cm.execCommand('newlineAndIndent');
+      return;
     }
 
     // Block submit if JSON is invalid
@@ -199,6 +224,42 @@ export class CodeMirrorEditor extends Editor {
       script.onerror = reject;
       document.head.appendChild(script);
     });
+  }
+
+  async _loadLanguageMode(mode) {
+    const modeFiles = {
+      'python': '/static/vendor/codemirror/python.js',
+      'javascript': '/static/vendor/codemirror/javascript.js',
+      'go': '/static/vendor/codemirror/go.js',
+      'rust': '/static/vendor/codemirror/rust.js',
+    };
+
+    const modeFile = modeFiles[mode];
+    if (!modeFile) return;
+
+    // Check if already loaded
+    const scriptId = `cm-mode-${mode}`;
+    if (document.getElementById(scriptId)) return;
+
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.id = scriptId;
+      script.src = modeFile;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  _getMimeType(mode, language) {
+    const mimeMap = {
+      'python': 'text/x-python',
+      'javascript': language === 'typescript' ? 'text/typescript' : 'text/javascript',
+      'go': 'text/x-go',
+      'rust': 'text/x-rustsrc',
+      'application/json': 'application/json',
+    };
+    return mimeMap[mode] || mode;
   }
 }
 

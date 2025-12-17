@@ -1,0 +1,25 @@
+<div class="chapter-edit-mode" data-editor="codemirror">
+  <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
+        hx-target="body" 
+        hx-swap="none"
+        class="chapter-edit-form">
+    <div class="field">
+      <label>Chapter JSON</label>
+      <textarea name="content" 
+                rows="20" 
+                placeholder="Edit chapter as JSON..."
+                class="chapter-content-input chapter-json-editor"
+                autofocus>{{ chapter_json }}</textarea>
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 8px;">
+      <button type="submit" class="btn">Save</button>
+      <button type="button" 
+              class="btn ghost" 
+              hx-get="/notes/{{ note.id }}" 
+              hx-target="body" 
+              hx-swap="none">
+        Cancel
+      </button>
+    </div>
+  </form>
+</div>

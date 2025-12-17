@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ request.app.title }} - Wisenotes</title>
   <link rel="stylesheet" href="/static/css/style.css?v=12">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
   <script src="/static/js/init-layout.js"></script>
   <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
   <script type="module" src="/static/js/app.js?v=15" defer></script>
@@ -13,6 +16,14 @@
   <header class="topbar">
     <div class="brand">Wisenotes</div>
     <nav class="actions">
+      <div class="toolbar-control">
+        <label for="editor-mode-select">Editor Mode</label>
+        <select id="editor-mode-select" class="toolbar-select">
+          <option value="graphical">JSON Editor</option>
+          <option value="json">Raw Code</option>
+          <option value="graphical-2">Graphical Editor</option>
+        </select>
+      </div>
       <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none">
         <input type="hidden" name="title" value="Untitled note">
         <button type="submit" class="btn">New note</button>

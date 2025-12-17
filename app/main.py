@@ -18,8 +18,9 @@ async def set_security_headers(request: Request, call_next):  # type: ignore[ove
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; "
-        "script-src 'self' https://unpkg.com; "
-        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' https://unpkg.com https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "font-src 'self' https://cdn.jsdelivr.net data:; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "

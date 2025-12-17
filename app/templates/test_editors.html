@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 900px; margin: 0 auto; padding: 24px;">
+  <h1 style="margin-bottom: 24px;">Editor Test Page</h1>
+  
+  <div style="margin-bottom: 24px; padding: 16px; background: #1e293b; border-radius: 8px; border: 1px solid var(--border);">
+    <label for="editor-type-select" style="display: block; margin-bottom: 8px; font-weight: 600;">Select Editor Type</label>
+    <select id="editor-type-select" style="width: 100%; padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+      <option value="paragraph">Paragraph (Textarea)</option>
+      <option value="code" selected>Code (CodeMirror with Syntax)</option>
+      <option value="math">Math Formula (Textarea)</option>
+    </select>
+  </div>
+
+  <section id="editor-container" style="padding: 24px; background: var(--panel); border-radius: 12px;">
+    <!-- Editor will be dynamically inserted here -->
+  </section>
+
+  <div style="margin-top: 24px; padding: 24px; background: #1e293b; border-radius: 12px; border: 1px solid var(--border);">
+    <h3 style="margin-bottom: 12px;">Instructions</h3>
+    <ul style="color: var(--muted); line-height: 1.8;">
+      <li>Use the dropdown above to switch between editor types</li>
+      <li>Code editor uses CodeMirror with syntax highlighting for multiple languages</li>
+      <li>Change the language dropdown in code mode to see syntax highlighting update</li>
+      <li>Paragraph and Math editors use plain textareas</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  const editorTemplates = {
+    paragraph: `
+      <h2 style="margin-bottom: 16px;">Paragraph Editor</h2>
+      <div class="chapter-edit-mode" data-editor="textarea" data-chapter-type="paragraph">
+        <form class="chapter-edit-form">
+          <input type="hidden" name="content" class="chapter-json-payload">
+          <input type="hidden" name="chapter_type" value="paragraph">
+          <div class="field">
+            <label>Title</label>
+            <input type="text" name="title" value="Sample Paragraph">
+          </div>
+          <div class="field">
+            <label>Language</label>
+            <input type="hidden" name="language" value="">
+            <div class="muted">Plain text block</div>
+          </div>
+          <div class="field">
+            <label>Text</label>
+            <textarea name="content_text" rows="14" data-editor-target class="chapter-content-input">This is a sample paragraph block. You can write plain text here.</textarea>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <button type="button" class="btn" onclick="alert('Saved!')">Save</button>
+            <button type="button" class="btn ghost" onclick="this.form.reset()">Cancel</button>
+          </div>
+        </form>
+      </div>
+    `,
+    code: `
+      <h2 style="margin-bottom: 16px;">Code Editor</h2>
+      <div class="chapter-edit-mode" data-editor="codemirror" data-chapter-type="code" data-codemirror-mode="python" data-language="python">
+        <form class="chapter-edit-form">
+          <input type="hidden" name="content" class="chapter-json-payload">
+          <input type="hidden" name="chapter_type" value="code">
+          <div class="field">
+            <label>Title</label>
+            <input type="text" name="title" value="Python Code Sample">
+          </div>
+          <div class="field">
+            <label>Language</label>
+            <select name="language">
+              <option value="python" selected>Python</option>
+              <option value="javascript">JavaScript</option>
+              <option value="typescript">TypeScript</option>
+              <option value="go">Go</option>
+              <option value="rust">Rust</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Code</label>
+            <textarea name="content_text" rows="14" data-editor-target class="chapter-content-input">def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+# Test the function
+for i in range(10):
+    print(f"fib({i}) = {fibonacci(i)}")</textarea>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <button type="button" class="btn" onclick="alert('Saved!')">Save</button>
+            <button type="button" class="btn ghost" onclick="this.form.reset()">Cancel</button>
+          </div>
+        </form>
+      </div>
+    `,
+    math: `
+      <h2 style="margin-bottom: 16px;">Math Formula Editor</h2>
+      <div class="chapter-edit-mode" data-editor="textarea" data-chapter-type="math">
+        <form class="chapter-edit-form">
+          <input type="hidden" name="content" class="chapter-json-payload">
+          <input type="hidden" name="chapter_type" value="math">
+          <div class="field">
+            <label>Title</label>
+            <input type="text" name="title" value="Quadratic Formula">
+          </div>
+          <div class="field">
+            <label>Language</label>
+            <select name="language">
+              <option value="latex" selected>LaTeX</option>
+              <option value="asciimath">AsciiMath</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Formula</label>
+            <textarea name="content_text" rows="8" data-editor-target class="chapter-content-input">x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}</textarea>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px;">
+            <button type="button" class="btn" onclick="alert('Saved!')">Save</button>
+            <button type="button" class="btn ghost" onclick="this.form.reset()">Cancel</button>
+          </div>
+        </form>
+      </div>
+    `
+  };
+
+  const editorTypeSelect = document.getElementById('editor-type-select');
+  const editorContainer = document.getElementById('editor-container');
+
+  async function switchEditor(type) {
+    // Clean up existing editor
+    const existingEdit = editorContainer.querySelector('.chapter-edit-mode');
+    if (existingEdit && existingEdit._editorInstance) {
+      try {
+        existingEdit._editorInstance.unmount();
+        existingEdit._editorInstance = null;
+      } catch (err) {
+        console.warn('Editor cleanup failed:', err);
+      }
+    }
+
+    // Remove any orphaned CodeMirror wrappers
+    editorContainer.querySelectorAll('.CodeMirror').forEach((wrapper) => {
+      try {
+        if (wrapper.parentNode) {
+          wrapper.parentNode.removeChild(wrapper);
+        }
+      } catch (err) {}
+    });
+
+    // Insert new editor HTML
+    editorContainer.innerHTML = editorTemplates[type];
+    
+    // Trigger editor initialization
+    await new Promise(resolve => setTimeout(resolve, 50));
+    document.body.dispatchEvent(new CustomEvent('htmx:afterSwap'));
+  }
+
+  editorTypeSelect.addEventListener('change', (e) => {
+    switchEditor(e.target.value);
+  });
+
+  // Initialize with code editor immediately
+  setTimeout(() => switchEditor('code'), 100);
+</script>
+{% endblock %}
+

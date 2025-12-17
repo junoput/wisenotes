@@ -1,0 +1,26 @@
+{% macro render_block_type_buttons(note_id, action_url, reference_field, reference_id, parent_id=none) %}
+  {# Render buttons for all available block types based on context #}
+  {% for type_name, type_config in block_types.items() %}
+    {% if parent_id is none %}
+      {# At root level, only show chapter blocks #}
+      {% if type_name == 'chapter' %}
+        <form class="add-form-inline" hx-post="{{ action_url }}" hx-target="body" hx-swap="none">
+          <input type="hidden" name="{{ reference_field }}" value="{{ reference_id }}">
+          <input type="hidden" name="block_type" value="{{ type_name }}">
+          <button type="submit" class="add-btn-type" 
+                  title="Add {{ type_name }}" 
+                  data-type="{{ type_name }}">{{ type_config.emoji }}</button>
+        </form>
+      {% endif %}
+    {% else %}
+      {# Inside chapters, show all block types #}
+      <form class="add-form-inline" hx-post="{{ action_url }}" hx-target="body" hx-swap="none">
+        <input type="hidden" name="{{ reference_field }}" value="{{ reference_id }}">
+        <input type="hidden" name="block_type" value="{{ type_name }}">
+        <button type="submit" class="add-btn-type" 
+                title="Add {{ type_name }}" 
+                data-type="{{ type_name }}">{{ type_config.emoji }}</button>
+      </form>
+    {% endif %}
+  {% endfor %}
+{% endmacro %}

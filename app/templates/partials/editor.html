@@ -8,13 +8,31 @@
   </div>
 </div>
 <div class="editor-body">
-  <div class="chapters-display">
-    {% if active.chapters %}
-      {% import "components/editor_chapters.html" as editor_chapters %}
-      {{ editor_chapters.render_editor_chapters(active.chapters, active, parent_id=None, depth=0) }}
-    {% else %}
-      <div class="empty">No chapters yet. Click "+ Chapter" above to add one.</div>
-    {% endif %}
+  <!-- Graphical Editor View -->
+  <div id="graphical-editor-view" class="editor-view" style="display: block;">
+    <div class="chapters-display">
+      {% if active.chapters %}
+        {% import "components/editor_chapters.html" as editor_chapters %}
+        {{ editor_chapters.render_editor_chapters(active.chapters, active, parent_id=None, depth=0) }}
+      {% else %}
+        <div class="empty">No chapters yet. Click "+ Chapter" above to add one.</div>
+      {% endif %}
+    </div>
+  </div>
+  
+  <!-- JSON Editor View -->
+  <div id="json-editor-view" class="editor-view" style="display: none;">
+    <div class="json-editor-container">
+      <div class="json-editor-help">
+        <p>Edit the note structure in JSON format. Changes are saved automatically.</p>
+      </div>
+      <div id="json-codemirror-wrapper"></div>
+      <textarea id="json-editor-textarea" style="display:none;">{{ active.model_dump_json(indent=2) }}</textarea>
+      <div class="json-editor-actions">
+        <button id="json-editor-save" class="btn" type="button">Save JSON</button>
+        <span id="json-editor-status" class="json-editor-status"></span>
+      </div>
+    </div>
   </div>
 </div>
 {% else %}

@@ -1,10 +1,15 @@
 import json
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import Form
+from fastapi import HTTPException
+from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from app.block_types import BLOCK_TYPES
 from app.editor.mixed_content import build_editor_json
 from app.editor.mixed_content import split_mixed_content
 from app.schemas import Chapter
@@ -16,12 +21,17 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _template_context(request: Request, **kwargs) -> dict:
+    """Build template context with block types configuration."""
+    return {"request": request, "block_types": BLOCK_TYPES, **kwargs}
+
+
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, service: NoteService = Depends(get_note_service)):
     notes = service.list_notes()
     active = notes[0] if notes else None
     return templates.TemplateResponse(
-        "index.html", {"request": request, "notes": notes, "active": active}
+        "index.html", _template_context(request, notes=notes, active=active)
     )
 
 
@@ -39,7 +49,7 @@ async def create_note(
     )
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -54,7 +64,7 @@ async def fetch_note(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "active": note, "notes": notes}
+        "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
     )
 
 
@@ -71,7 +81,7 @@ async def add_chapter(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -88,7 +98,7 @@ async def add_chapter_after(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -105,7 +115,7 @@ async def add_chapter_before(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -122,7 +132,7 @@ async def add_chapter_child(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -139,7 +149,7 @@ async def move_chapter(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -148,6 +158,7 @@ async def edit_chapter(
     note_id: str,
     chapter_id: str,
     request: Request,
+    mode: str = "graphical",
     service: NoteService = Depends(get_note_service),
 ):
     note = service.get_note(note_id)
@@ -160,9 +171,12 @@ async def edit_chapter(
     chapter_dict = build_editor_json(chapter, note.chapters, 0, max_depth=3)
     chapter_json = json.dumps(chapter_dict, indent=2)
 
+    # Use JSON editor template for "JSON Editor" mode, graphical template for "Graphical Editor" mode
+    template = "partials/chapter_edit_json.html" if mode == "json" else "partials/chapter_edit_form.html"
+    
     return templates.TemplateResponse(
-        "partials/chapter_edit_form.html", 
-        {"request": request, "note": note, "chapter": chapter, "chapter_json": chapter_json}
+        template, 
+        _template_context(request, note=note, chapter=chapter, chapter_json=chapter_json)
     )
 
 
@@ -185,13 +199,14 @@ def _process_chapter_children(
         
         child_id = child_data.get("id")
         child_title = child_data["title"]
+        child_language = child_data.get("language")
 
         child_content, child_children = split_mixed_content(child_data.get("content"))
         
         if child_id:
             existing_child = next((c for c in existing_chapters if c.id == child_id), None)
             if existing_child:
-                service.update_chapter(note_id, child_id, child_title, child_content)
+                service.update_chapter(note_id, child_id, child_title, child_content, child_language)
                 processed_ids.append(child_id)
             else:
                 continue
@@ -204,7 +219,7 @@ def _process_chapter_children(
                 )
                 if new_child:
                     child_id = new_child.id
-                    service.update_chapter(note_id, child_id, child_title, child_content)
+                    service.update_chapter(note_id, child_id, child_title, child_content, child_language)
                     processed_ids.append(child_id)
                     note = service.get_note(note_id)
                     if note:
@@ -246,11 +261,12 @@ async def update_chapter(
             raise ValueError("JSON must contain 'title' field")
         title = chapter_data["title"]
         content_text, children_data = split_mixed_content(chapter_data.get("content"))
+        language = chapter_data.get("language")
     except (json.JSONDecodeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
     
     # Update the main chapter
-    note = service.update_chapter(note_id, chapter_id, title, content_text)
+    note = service.update_chapter(note_id, chapter_id, title, content_text, language)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     
@@ -274,7 +290,7 @@ async def update_chapter(
     note = service.get_note(note_id)
     notes = service.list_notes()
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": note}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 
@@ -290,7 +306,7 @@ async def delete_note(
     notes = service.list_notes()
     active = notes[0] if notes else None
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", {"request": request, "notes": notes, "active": active}
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=active)
     )
 
 

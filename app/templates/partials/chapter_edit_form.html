@@ -1,16 +1,67 @@
-<div class="chapter-edit-mode" data-editor="codemirror">
+{% set block_type = chapter.type %}
+{% set is_code = block_type == 'code' %}
+{% set is_math = block_type == 'math' %}
+{% set is_paragraph = block_type == 'paragraph' %}
+{% set lang = chapter.language or 'python' %}
+{% set mode_map = {
+  'python': 'python',
+  'javascript': 'javascript',
+  'typescript': 'javascript',
+  'go': 'go',
+  'rust': 'rust'
+} %}
+
+<div class="chapter-edit-mode"
+     data-editor="{{ 'codemirror' if is_code else 'textarea' }}"
+     data-chapter-type="{{ block_type }}"
+     {% if is_code %}data-codemirror-mode="{{ mode_map.get(lang, 'javascript') }}" data-language="{{ lang }}"{% endif %}>
   <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
         hx-target="body" 
         hx-swap="none"
         class="chapter-edit-form">
+    <input type="hidden" name="content" class="chapter-json-payload">
+    <input type="hidden" name="chapter_type" value="{{ block_type }}">
+
     <div class="field">
-      <label>Chapter JSON</label>
-      <textarea name="content" 
-                rows="20" 
-                placeholder="Edit chapter as JSON..."
-                class="chapter-content-input chapter-json-editor"
-                autofocus>{{ chapter_json }}</textarea>
+      <label for="title-{{ chapter.id }}">Title</label>
+      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" {% if block_type == 'chapter' %}required{% endif %}>
     </div>
+
+    <div class="field">
+      <label for="language-{{ chapter.id }}">Language</label>
+      {% if is_code %}
+        <select id="language-{{ chapter.id }}" name="language">
+          {% set lang = chapter.language or 'python' %}
+          <option value="python" {{ 'selected' if lang == 'python' else '' }}>Python</option>
+          <option value="javascript" {{ 'selected' if lang == 'javascript' else '' }}>JavaScript</option>
+          <option value="typescript" {{ 'selected' if lang == 'typescript' else '' }}>TypeScript</option>
+          <option value="go" {{ 'selected' if lang == 'go' else '' }}>Go</option>
+          <option value="rust" {{ 'selected' if lang == 'rust' else '' }}>Rust</option>
+        </select>
+      {% elif is_math %}
+        <select id="language-{{ chapter.id }}" name="language">
+          {% set lang = chapter.language or 'latex' %}
+          <option value="latex" {{ 'selected' if lang == 'latex' else '' }}>LaTeX</option>
+          <option value="asciimath" {{ 'selected' if lang == 'asciimath' else '' }}>AsciiMath</option>
+        </select>
+      {% else %}
+        <input type="hidden" name="language" value="{{ chapter.language or '' }}">
+        <div class="muted">Plain text block</div>
+      {% endif %}
+    </div>
+
+    <div class="field">
+      <label for="content-{{ chapter.id }}">
+        {% if is_code %}Code{% elif is_math %}Formula{% else %}Text{% endif %}
+      </label>
+      <textarea id="content-{{ chapter.id }}"
+                name="content_text"
+                rows="14"
+                data-editor-target
+                class="chapter-content-input"
+                autofocus>{{ chapter.content }}</textarea>
+    </div>
+
     <div style="display: flex; gap: 8px; margin-top: 8px;">
       <button type="submit" class="btn">Save</button>
       <button type="button" 

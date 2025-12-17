@@ -71,6 +71,22 @@ Product goal: a modern, fast note-taking web app where each note contains chapte
 ## 10) Next Delivery
 - Generate initial Python-first codebase skeleton (FastAPI + Jinja + HTMX, lint/type/test configs, storage abstraction, sample plugin, Dockerfile + compose) aligned to this plan.
 
+## Developer Documentation
+
+### Extending Wisenotes
+
+- **[Block Types Reference](docs/BLOCK_TYPES_REFERENCE.md)** - Quick reference for all block types
+- **[Adding Block Types](docs/ADDING_BLOCK_TYPES.md)** - Complete guide to adding new block types
+- **[Cleanup Summary](docs/CLEANUP_SUMMARY.md)** - Recent refactoring and improvements
+
+### Architecture Notes
+
+Wisenotes uses a modular block type system:
+- Block types are defined in `app/block_types.py`
+- Configuration includes emoji, color, nesting rules, and language options
+- Adding a new block type requires minimal changes (5-15 lines of code)
+- All templates automatically receive block type configuration
+
 ## Quickstart (dev)
 - Prereqs: Python 3.12, `pip`.
 - Setup: `python -m venv .venv && source .venv/bin/activate && pip install -e .[dev]`.

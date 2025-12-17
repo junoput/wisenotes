@@ -9,7 +9,7 @@ from pydantic import model_validator
 
 class Chapter(BaseModel):
     id: str
-    title: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=0, max_length=120)
     content: str = Field(default="", max_length=20_000)
     order: int = Field(ge=0)
     parent_id: Optional[str] = None  # For nested chapters
