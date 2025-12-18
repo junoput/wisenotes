@@ -15,6 +15,125 @@ async function loadEditorClass(editorType) {
   }
 }
 
+// --- Token Input (chip) component for semicolon-separated sources ---
+function initializeTokenInputs(root = document) {
+  const fields = root.querySelectorAll('[data-token-input]');
+  fields.forEach(setupTokenField);
+}
+
+function setupTokenField(field) {
+  if (field._tokenSetup) return;
+  const listEl = field.querySelector('.token-list');
+  const textEl = field.querySelector('.token-input-text');
+  const hiddenEl = field.querySelector('input[type="hidden"][name]');
+  if (!listEl || !textEl || !hiddenEl) return;
+
+  const tokens = [];
+
+  // Initialize tokens from hidden field if present
+  if (hiddenEl.value) {
+    hiddenEl.value.split(';').map(s => s.trim()).filter(Boolean).forEach(v => tokens.push(v));
+  }
+
+  function renderTokens() {
+    listEl.innerHTML = '';
+    tokens.forEach((t, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = t;
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'chip-remove';
+      x.setAttribute('aria-label', `Remove ${t}`);
+      x.textContent = '×';
+      x.addEventListener('click', () => {
+        tokens.splice(idx, 1);
+        updateHidden();
+        renderTokens();
+        textEl.focus();
+      });
+      chip.appendChild(x);
+      listEl.appendChild(chip);
+    });
+  }
+
+  function updateHidden() {
+    hiddenEl.value = tokens.join('; ');
+  }
+
+  function commitFromInput(force = false) {
+    let val = textEl.value;
+    if (!val && !force) return;
+    const parts = val.split(';').map(s => s.trim()).filter(Boolean);
+    const endsWithSemi = /;\s*$/.test(val);
+    const addCount = (endsWithSemi || force) ? parts.length : Math.max(parts.length - 1, 0);
+    for (let i = 0; i < addCount; i++) {
+      const candidate = parts[i];
+      if (candidate && !tokens.includes(candidate)) tokens.push(candidate);
+    }
+    const remainder = (endsWithSemi || force) ? '' : (parts.length ? parts[parts.length - 1] : '');
+    textEl.value = remainder;
+    updateHidden();
+    renderTokens();
+  }
+
+  renderTokens();
+
+  textEl.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+      const val = textEl.value;
+      if (/;\s*$/.test(val) || val.includes(';')) {
+        e.preventDefault();
+        commitFromInput();
+      }
+    } else if (e.key === ';') {
+      // Defer actual commit to input/blur handlers
+      setTimeout(() => commitFromInput(), 0);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      commitFromInput(true);
+    } else if (e.key === 'Backspace' && textEl.selectionStart === 0 && textEl.selectionEnd === 0) {
+      if (tokens.length > 0) {
+        tokens.pop();
+        updateHidden();
+        renderTokens();
+      }
+    }
+  });
+
+  textEl.addEventListener('input', () => {
+    const val = textEl.value;
+    if (/;\s/.test(val)) {
+      commitFromInput();
+    }
+  });
+
+  textEl.addEventListener('blur', () => {
+    commitFromInput(true);
+  });
+
+  textEl.addEventListener('paste', (e) => {
+    const pasted = (e.clipboardData || window.clipboardData)?.getData('text');
+    if (pasted && pasted.includes(';')) {
+      e.preventDefault();
+      textEl.value += pasted;
+      commitFromInput();
+    }
+  });
+
+  field._tokenSetup = true;
+}
+
+function synchronizeAllTokenInputs(scope = document) {
+  const fields = scope.querySelectorAll('[data-token-input]');
+  fields.forEach((field) => {
+    const textEl = field.querySelector('.token-input-text');
+    if (textEl && textEl.value) {
+      textEl.dispatchEvent(new Event('blur'));
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const root = document.documentElement;
 
@@ -250,19 +369,96 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!payloadInput) return;
 
     const title = editForm.querySelector('input[name="title"]')?.value || '';
+    const sourceHidden = editForm.querySelector('input[name="source"]');
+    const sourceText = editForm.querySelector('.token-input-text');
+    let sourceValue = sourceHidden?.value || '';
+    // Fallback 1: if hidden is empty, gather current chips
+    if (!sourceValue) {
+      const tokenField = editForm.querySelector('[data-token-input]');
+      if (tokenField) {
+        const chips = Array.from(tokenField.querySelectorAll('.chip'));
+        const values = chips.map(chip => chip.childNodes[0]?.textContent?.trim() || '').filter(Boolean);
+        if (values.length) {
+          sourceValue = values.join('; ');
+          if (sourceHidden) sourceHidden.value = sourceValue;
+        }
+      }
+    }
+
+    // Fallback 2: if still empty, split whatever is in the text box
+    if (!sourceValue && sourceText && sourceText.value) {
+      const parts = sourceText.value.split(';').map(s => s.trim()).filter(Boolean);
+      if (parts.length) {
+        sourceValue = parts.join('; ');
+        if (sourceHidden) sourceHidden.value = sourceValue;
+      }
+    }
+
+    console.log('[sources] build payload', {
+      title,
+      sourceValue,
+      hiddenValue: sourceHidden?.value,
+      textValue: sourceText?.value,
+    });
     const contentField = editForm.querySelector('[data-editor-target]');
     const languageField = editForm.querySelector('select[name="language"], input[name="language"]');
     const language = languageField ? languageField.value || '' : '';
     const text = contentField ? contentField.value || '' : '';
 
+    console.log('[sources] build payload fields', {
+      hasContentField: Boolean(contentField),
+      hasLanguageField: Boolean(languageField),
+      hasHidden: Boolean(sourceHidden),
+      hasText: Boolean(sourceText),
+    });
+
+    // Get original chapter JSON to preserve children
+    const originalJsonInput = editForm.querySelector('.original-chapter-json');
+    let originalData = {};
+    if (originalJsonInput) {
+      try {
+        originalData = JSON.parse(originalJsonInput.value);
+      } catch (err) {
+        console.warn('Failed to parse original chapter JSON:', err);
+      }
+    }
+
+    // Build payload preserving children from original
     const payload = {
       title,
-      content: text,
+      content: originalData.content || text,
     };
+
+    // If we have original content with children, merge our text into it
+    if (originalData.content && Array.isArray(originalData.content)) {
+      const textParts = [];
+      const children = [];
+      
+      // Separate text and children from original
+      for (const item of originalData.content) {
+        if (typeof item === 'string') {
+          textParts.push(item);
+        } else if (typeof item === 'object') {
+          children.push(item);
+        }
+      }
+      
+      // Build new content with updated text and preserved children
+      payload.content = [];
+      if (text) {
+        payload.content.push(text);
+      }
+      payload.content.push(...children);
+    } else {
+      // No children, just use text
+      payload.content = text;
+    }
 
     if (language) {
       payload.language = language;
     }
+    // Always include source (empty string will clear it server-side)
+    payload.source = sourceValue;
 
     payloadInput.value = JSON.stringify(payload);
   }
@@ -355,6 +551,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize math block rendering (with slight delay to ensure KaTeX is loaded)
     setTimeout(() => initializeMathBlocks(), 100);
+
+    // Initialize token inputs (e.g., Sources chips)
+    initializeTokenInputs();
   });
 
   // Persist collapsed state per pane across reloads
@@ -379,6 +578,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   applyCollapsedStateFromStorage();
+
+  // Initialize read-only displays on initial page load
+  initializeCodeBlockDisplays();
+  setTimeout(() => initializeMathBlocks(), 100);
+  // Initialize token inputs on initial load
+  initializeTokenInputs();
 
   document.body.addEventListener('click', (e) => {
     const target = e.target.closest('[data-toggle-pane]');
@@ -405,11 +610,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const form = e.target.closest('.chapter-edit-form');
       if (form) {
         e.preventDefault();
-        // Block submit on invalid JSON
-        const textarea = form.querySelector('textarea');
-        if (textarea) {
+        // Only block submit on invalid JSON in JSON editor mode
+        const jsonTextarea = form.querySelector('textarea.chapter-json-editor');
+        if (jsonTextarea) {
           try {
-            JSON.parse(textarea.value);
+            JSON.parse(jsonTextarea.value);
           } catch (err) {
             console.warn('Submit blocked: JSON parse error', err?.message || err);
             return;
@@ -453,12 +658,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize editor for chapter edit form
     const editForm = document.querySelector('.chapter-edit-mode');
+    const hasTextarea = editForm?.querySelector('textarea');
     const editorType = editForm?.dataset.editor || 'textarea';
-    const editorOptions = {
-      mode: editForm?.dataset.codemirrorMode,
-    };
     
-    if (editForm) {
+    // Skip editor initialization if no textarea (e.g., for chapter blocks)
+    if (editForm && hasTextarea) {
+      const editorOptions = {
+        mode: editForm.dataset.codemirrorMode,
+      };
+      
       try {
 
         const EditorClass = await loadEditorClass(editorType);
@@ -474,6 +682,8 @@ document.addEventListener('DOMContentLoaded', () => {
             textarea.value = editor.getValue();
           }
           if (form) {
+            // Commit token inputs (e.g., sources) before building payload
+            synchronizeAllTokenInputs(form);
             buildChapterJsonPayload(form);
           }
           if (form) {
@@ -536,7 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
           });
         }
 
-          // Click-outside auto-save removed per request; rely on explicit Save/Cancel.
+        // Click-outside auto-save removed per request; rely on explicit Save/Cancel.
       } catch (err) {
         console.error('Failed to initialize editor:', err);
       }
@@ -554,13 +764,113 @@ document.addEventListener('DOMContentLoaded', () => {
     // Re-initialize read-only displays after swap
     initializeCodeBlockDisplays();
     setTimeout(() => initializeMathBlocks(), 100);
+    // Initialize token inputs for newly inserted forms
+    initializeTokenInputs();
+
+    // Initialize settings pane controls if present
+    const settingsOverlay = document.getElementById('note-settings');
+    if (settingsOverlay) {
+      // Initialize editor mode radios from localStorage
+      const mode = localStorage.getItem('editor-mode') || 'graphical';
+      const radio = settingsOverlay.querySelector(`input[name="editor-mode-setting"][value="${mode}"]`);
+      if (radio) radio.checked = true;
+
+      // Initialize text language select
+      const textSel = settingsOverlay.querySelector('#text-language');
+      if (textSel) {
+        const storedTextLang = localStorage.getItem('text-language') || 'en';
+        textSel.value = storedTextLang;
+      }
+    }
+
+    // Apply text language to any open paragraph editors
+    (function applyTextLangOnSwap(){
+      const lang = localStorage.getItem('text-language') || 'en';
+      document.querySelectorAll('.chapter-edit-mode').forEach((editForm) => {
+        const isParagraph = editForm.dataset.chapterType === 'paragraph';
+        if (!isParagraph) return;
+        const textarea = editForm.querySelector('textarea.chapter-content-input');
+        if (textarea) {
+          textarea.setAttribute('lang', lang);
+          textarea.setAttribute('spellcheck', 'true');
+          textarea.setAttribute('autocapitalize', 'sentences');
+          textarea.setAttribute('autocomplete', 'on');
+          textarea.setAttribute('autocorrect', 'on');
+        }
+      });
+    })();
   });
 
   document.body.addEventListener('submit', (e) => {
+    // Generic confirm handler for forms with data-confirm (capture early)
+    const confirmForm = e.target.closest('form[data-confirm]');
+    if (confirmForm) {
+      const msg = confirmForm.getAttribute('data-confirm') || 'Are you sure?';
+      if (!window.confirm(msg)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+
     const form = e.target.closest('.chapter-edit-form');
     if (!form) return;
+    synchronizeAllTokenInputs(form);
     buildChapterJsonPayload(form);
   }, true);
+
+  // Settings pane interactions
+  // Close the note settings overlay when server triggers it (on delete)
+  document.body.addEventListener('close-note-settings', () => {
+    const overlay = document.getElementById('note-settings');
+    if (overlay) overlay.remove();
+  });
+
+  // Close settings pane
+  document.body.addEventListener('click', (e) => {
+    const closeBtn = e.target.closest('[data-close-settings]');
+    if (!closeBtn) return;
+    const overlay = closeBtn.closest('.note-settings-overlay');
+    if (overlay) overlay.remove();
+  });
+
+  // Apply editor mode from settings (graphical/json)
+  document.body.addEventListener('change', (e) => {
+    const radio = e.target.closest('input[name="editor-mode-setting"]');
+    if (!radio) return;
+    const mode = radio.value;
+    localStorage.setItem('editor-mode', mode);
+    // Apply immediately
+    try {
+      if (typeof applyEditorMode === 'function') {
+        applyEditorMode(mode);
+      }
+    } catch {}
+  });
+
+  // Persist and apply text language for paragraph editors
+  function applyTextLanguageToEditors() {
+    const lang = localStorage.getItem('text-language') || 'en';
+    document.querySelectorAll('.chapter-edit-mode').forEach((editForm) => {
+      const isParagraph = editForm.dataset.chapterType === 'paragraph';
+      if (!isParagraph) return;
+      const textarea = editForm.querySelector('textarea.chapter-content-input');
+      if (textarea) {
+        textarea.setAttribute('lang', lang);
+        textarea.setAttribute('spellcheck', 'true');
+        textarea.setAttribute('autocapitalize', 'sentences');
+        textarea.setAttribute('autocomplete', 'on');
+        textarea.setAttribute('autocorrect', 'on');
+      }
+    });
+  }
+
+  document.body.addEventListener('change', (e) => {
+    const select = e.target.closest('#text-language');
+    if (!select) return;
+    localStorage.setItem('text-language', select.value);
+    applyTextLanguageToEditors();
+  });
 
   // Handle chapter click with mode detection
   document.body.addEventListener('click', (e) => {
@@ -570,7 +880,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const noteId = chapterView.dataset.noteId;
     const chapterId = chapterView.dataset.chapterId;
     const editorMode = localStorage.getItem('editor-mode') || 'graphical';
-    const useJsonEditor = editorMode === 'graphical'; // "JSON Editor" mode
+    const useJsonEditor = editorMode === 'json';
     
     const url = `/notes/${noteId}/chapters/${chapterId}/edit?mode=${useJsonEditor ? 'json' : 'graphical'}`;
     const target = `#chapter-${chapterId}`;

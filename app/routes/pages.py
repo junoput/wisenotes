@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from typing import Optional
 
 from app.block_types import BLOCK_TYPES
 from app.editor.mixed_content import build_editor_json
@@ -24,6 +25,31 @@ templates = Jinja2Templates(directory="app/templates")
 def _template_context(request: Request, **kwargs) -> dict:
     """Build template context with block types configuration."""
     return {"request": request, "block_types": BLOCK_TYPES, **kwargs}
+
+
+def _normalize_source_multi(value) -> Optional[str]:
+    """Normalize a semicolon-separated source string.
+
+    - Accepts None or string
+    - Splits on ';', trims whitespace
+    - Removes empty entries
+    - Joins with '; ' for consistent storage
+    - Returns None if nothing remains
+    """
+    if value is None:
+        return None
+    # If an array is provided from JSON editor, join it
+    if isinstance(value, list):
+        parts = [str(p).strip() for p in value]
+        parts = [p for p in parts if p]
+        return "; ".join(parts) if parts else None
+    if not isinstance(value, str):
+        return None
+    parts = [p.strip() for p in value.split(";")]
+    parts = [p for p in parts if p]
+    if not parts:
+        return None
+    return "; ".join(parts)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -180,6 +206,31 @@ async def edit_chapter(
     )
 
 
+@router.get("/notes/{note_id}/settings", response_class=HTMLResponse)
+async def note_settings(
+    note_id: str,
+    request: Request,
+    service: NoteService = Depends(get_note_service),
+):
+    note = service.get_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return templates.TemplateResponse(
+        "partials/note_settings.html",
+        _template_context(request, note=note),
+    )
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def app_settings(
+    request: Request,
+):
+    return templates.TemplateResponse(
+        "partials/app_settings.html",
+        _template_context(request),
+    )
+
+
 def _process_chapter_children(
     note_id: str,
     parent_chapter_id: str,
@@ -200,13 +251,14 @@ def _process_chapter_children(
         child_id = child_data.get("id")
         child_title = child_data["title"]
         child_language = child_data.get("language")
+        child_source = _normalize_source_multi(child_data.get("source"))
 
         child_content, child_children = split_mixed_content(child_data.get("content"))
         
         if child_id:
             existing_child = next((c for c in existing_chapters if c.id == child_id), None)
             if existing_child:
-                service.update_chapter(note_id, child_id, child_title, child_content, child_language)
+                service.update_chapter(note_id, child_id, child_title, child_content, child_language, child_source)
                 processed_ids.append(child_id)
             else:
                 continue
@@ -219,7 +271,7 @@ def _process_chapter_children(
                 )
                 if new_child:
                     child_id = new_child.id
-                    service.update_chapter(note_id, child_id, child_title, child_content, child_language)
+                    service.update_chapter(note_id, child_id, child_title, child_content, child_language, child_source)
                     processed_ids.append(child_id)
                     note = service.get_note(note_id)
                     if note:
@@ -262,11 +314,13 @@ async def update_chapter(
         title = chapter_data["title"]
         content_text, children_data = split_mixed_content(chapter_data.get("content"))
         language = chapter_data.get("language")
+        source = _normalize_source_multi(chapter_data.get("source"))
+
     except (json.JSONDecodeError, ValueError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
     
     # Update the main chapter
-    note = service.update_chapter(note_id, chapter_id, title, content_text, language)
+    note = service.update_chapter(note_id, chapter_id, title, content_text, language, source)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     
@@ -306,7 +360,9 @@ async def delete_note(
     notes = service.list_notes()
     active = notes[0] if notes else None
     return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=active)
+        "partials/hx_refresh.html",
+        _template_context(request, notes=notes, active=active),
+        headers={"HX-Trigger": "close-note-settings"},
     )
 
 

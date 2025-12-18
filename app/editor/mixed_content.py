@@ -27,17 +27,20 @@ def build_editor_json(chapter: Chapter, all_chapters: list[Chapter], depth: int 
     children = [c for c in all_chapters if c.parent_id == chapter.id]
     children.sort(key=lambda c: c.order)
 
-    result: dict[str, Any] = {"title": chapter.title, "type": chapter.type, "content": []}
+    result: dict[str, Any] = {"id": chapter.id, "title": chapter.title, "type": chapter.type, "content": []}
     
     # Include language if it exists
     if chapter.language:
         result["language"] = chapter.language
+    # Include source if it exists
+    if chapter.source:
+        result["source"] = chapter.source
 
     if chapter.content:
         result["content"].append(chapter.content)
 
     if children and depth < max_depth:
         for child in children:
-            result["content"].append(build_editor_json(child, all_chapters, depth + 1, max_depth=max_depth))
+                result["content"].append(build_editor_json(child, all_chapters, depth + 1, max_depth=max_depth))
 
     return result

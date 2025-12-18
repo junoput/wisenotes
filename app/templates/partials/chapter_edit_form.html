@@ -20,17 +20,25 @@
         hx-swap="none"
         class="chapter-edit-form">
     <input type="hidden" name="content" class="chapter-json-payload">
+    <input type="hidden" name="original_chapter_json" class="original-chapter-json" value='{{ chapter_json }}'>
     <input type="hidden" name="chapter_type" value="{{ block_type }}">
 
     <div class="field">
-      <label for="title-{{ chapter.id }}">Title</label>
-      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" {% if block_type == 'chapter' %}required{% endif %}>
+      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" placeholder="add title" {% if block_type == 'chapter' %}required{% endif %}>
     </div>
 
     <div class="field">
-      <label for="language-{{ chapter.id }}">Language</label>
+      <div class="token-field" data-token-input data-name="source">
+        <div class="token-list" aria-label="Sources"></div>
+        <input type="text" class="token-input-text" id="source-{{ chapter.id }}" placeholder='add sources, separate them with a ";"'>
+        <input type="hidden" name="source" value="{{ chapter.source or '' }}">
+      </div>
+    </div>
+
+    {% if block_type != 'chapter' %}
+    <div class="field">
       {% if is_code %}
-        <select id="language-{{ chapter.id }}" name="language">
+        <select id="language-{{ chapter.id }}" name="language" aria-label="Language">
           {% set lang = chapter.language or 'python' %}
           <option value="python" {{ 'selected' if lang == 'python' else '' }}>Python</option>
           <option value="javascript" {{ 'selected' if lang == 'javascript' else '' }}>JavaScript</option>
@@ -51,16 +59,15 @@
     </div>
 
     <div class="field">
-      <label for="content-{{ chapter.id }}">
-        {% if is_code %}Code{% elif is_math %}Formula{% else %}Text{% endif %}
-      </label>
       <textarea id="content-{{ chapter.id }}"
                 name="content_text"
                 rows="14"
                 data-editor-target
                 class="chapter-content-input"
-                autofocus>{{ chapter.content }}</textarea>
+                autofocus
+                placeholder="{% if is_code %}add code{% elif is_math %}add formula{% else %}add text{% endif %}">{{ chapter.content }}</textarea>
     </div>
+    {% endif %}
 
     <div style="display: flex; gap: 8px; margin-top: 8px;">
       <button type="submit" class="btn">Save</button>

@@ -224,7 +224,7 @@ class NoteService:
         self.plugins.notify_note_saved(saved)
         return saved
 
-    def update_chapter(self, note_id: str, chapter_id: str, title: str, content: str, language: Optional[str] = None) -> Optional[Note]:
+    def update_chapter(self, note_id: str, chapter_id: str, title: str, content: str, language: Optional[str] = None, source: Optional[str] = None) -> Optional[Note]:
         note = self.repo.get_note(note_id)
         if not note:
             return None
@@ -238,6 +238,7 @@ class NoteService:
                             "title": title,
                             "content": content,
                             "language": language if language is not None else ch.language,
+                            "source": source if source is not None else ch.source,
                         }
                     )
                 )
