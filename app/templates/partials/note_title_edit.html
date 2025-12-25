@@ -1,0 +1,5 @@
+<form class="inline-note-title" hx-post="/notes/{{ note.id }}/title" hx-target="body" hx-swap="none" onsubmit="event.stopPropagation()">
+  <input type="text" name="title" value="{{ note.title }}" class="inline-note-title-input" autocomplete="off" />
+  <button type="submit" class="btn">Save</button>
+  <button type="button" class="btn" hx-get="/notes/{{ note.id }}" hx-target="body" hx-swap="none">Cancel</button>
+</form>

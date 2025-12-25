@@ -20,9 +20,13 @@ class NoteService:
 
     def create_note(self, payload: NoteCreate) -> Note:
         now = datetime.utcnow()
+        # Derive a unique name from title
+        base_name = self.repo._derive_name(payload.title)  # type: ignore[attr-defined]
+        unique_name = self.repo._ensure_unique_name(base_name)  # type: ignore[attr-defined]
         note = Note(
             id=str(uuid4()),
-            title=payload.title,
+            name=unique_name,
+            title=self.repo._name_to_title(unique_name),  # type: ignore[attr-defined]
             tags=payload.tags,
             created_at=now,
             updated_at=now,
@@ -36,13 +40,23 @@ class NoteService:
         existing = self.repo.get_note(note_id)
         if not existing:
             return None
+        # Compute new name if title changes
+        new_title_input = payload.title or existing.title
+        base_name = self.repo._derive_name(new_title_input)  # type: ignore[attr-defined]
+        # If title unchanged, keep existing name; otherwise ensure uniqueness
+        if new_title_input == existing.title:
+            new_name = existing.name
+        else:
+            new_name = self.repo._ensure_unique_name(base_name)  # type: ignore[attr-defined]
         updated = existing.model_copy(update={
-            "title": payload.title or existing.title,
+            "name": new_name,
+            "title": self.repo._name_to_title(new_name),  # type: ignore[attr-defined]
             "tags": payload.tags if payload.tags is not None else existing.tags,
             "chapters": payload.chapters if payload.chapters is not None else existing.chapters,
             "updated_at": datetime.utcnow(),
         })
-        saved = self.repo.upsert_note(updated)
+        # Pass old name to allow repo to rename folder/file if needed
+        saved = self.repo.upsert_note(updated, old_name=existing.name)
         self.plugins.notify_note_saved(saved)
         return saved
 
@@ -122,7 +136,8 @@ class NoteService:
         
         # Set default title and language based on block type
         if title is None:
-            title = "New chapter" if block_type == "chapter" else ""
+            # Root chapters get a default title; nested chapters can be empty
+            title = "New chapter" if (block_type == "chapter" and parent_id is None) else ""
         
         language = None
         if block_type == "code":
@@ -181,7 +196,8 @@ class NoteService:
         
         # Set default title and language based on block type
         if title is None:
-            title = "New chapter" if block_type == "chapter" else ""
+            # Root chapters get a default title; nested chapters can be empty
+            title = "New chapter" if (block_type == "chapter" and parent_id is None) else ""
         
         language = None
         if block_type == "code":
@@ -285,7 +301,8 @@ class NoteService:
         
         # Set default title and language based on block type
         if title is None:
-            title = "New chapter" if block_type == "chapter" else ""
+            # Root chapters get a default title; nested chapters can be empty
+            title = "New chapter" if (block_type == "chapter" and parent_id is None) else ""
         
         language = None
         if block_type == "code":
@@ -330,6 +347,7 @@ class NoteService:
         
         # Set default title and language based on block type
         if title is None:
+            # For child chapters, allow empty title
             title = "New chapter" if block_type == "chapter" else ""
         
         language = None

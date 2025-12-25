@@ -20,6 +20,7 @@ class Chapter(BaseModel):
 
 class Note(BaseModel):
     id: str
+    name: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=200)
     tags: List[str] = Field(default_factory=list)
     created_at: datetime

@@ -15,6 +15,7 @@ from app.editor.mixed_content import build_editor_json
 from app.editor.mixed_content import split_mixed_content
 from app.schemas import Chapter
 from app.schemas import NoteCreate
+from app.schemas import NoteUpdate
 from app.services.notes import NoteService
 from app.web.dependencies import get_note_service
 
@@ -218,6 +219,22 @@ async def note_settings(
     return templates.TemplateResponse(
         "partials/note_settings.html",
         _template_context(request, note=note),
+    )
+
+
+@router.post("/notes/{note_id}/title", response_class=HTMLResponse)
+async def update_note_title(
+    note_id: str,
+    request: Request,
+    title: str = Form(...),
+    service: NoteService = Depends(get_note_service),
+):
+    note = service.update_note(note_id, NoteUpdate(title=title))
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    notes = service.list_notes()
+    return templates.TemplateResponse(
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
 

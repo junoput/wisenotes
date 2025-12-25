@@ -11,6 +11,16 @@
     </div>
     <div class="note-settings-body">
       <div class="note-settings-section">
+        <strong>Title</strong>
+        <div class="field" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+          <form hx-post="/notes/{{ note.id }}/title" hx-target="body" hx-swap="none" style="display:flex; gap:8px; width:100%;">
+            <input name="title" value="{{ note.title }}" placeholder="Note title" style="flex:1; padding:8px; border-radius:6px; border:1px solid var(--border); background:#0b1220; color:var(--text);" />
+            <button type="submit" class="btn">Save</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="note-settings-section">
         <strong>Language</strong>
         <div class="field" style="margin-top:8px;">
           <label for="text-language">Text language for paragraphs</label>
