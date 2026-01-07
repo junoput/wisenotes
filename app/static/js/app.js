@@ -772,6 +772,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initializeTokenInputs();
   // Initialize drag and drop
   initDragAndDrop();
+  // Initialize add block handlers
+    // CSS-only add button module active; no JS initialization required
 
   document.body.addEventListener('click', (e) => {
     const target = e.target.closest('[data-toggle-pane]');

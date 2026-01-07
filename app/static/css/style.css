@@ -76,7 +76,6 @@ a { color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  margin: 12px 0;
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease;
 }
@@ -104,7 +103,6 @@ a { color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
-  margin: 12px 0;
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease;
   background: #0b1220;
@@ -161,6 +159,33 @@ a { color: var(--accent); }
 .chapter-section {
   position: relative;
   transition: opacity 0.2s ease, transform 0.2s ease, margin 0.2s ease;
+  overflow: visible; /* allow menus to extend outside the section */
+}
+
+/* Ensure inner wrappers don't clip the add-menu */
+.chapter-item-container,
+.chapter-content-wrapper,
+.chapter-view,
+.chapter-children,
+.chapter-children > * {
+  overflow: visible !important;
+}
+
+/* Ensure the content wrapper is the positioning context for the add button */
+.chapter-content-wrapper { position: relative; }
+
+/* Add more bottom padding so half-overlapped buttons and menus have room */
+.chapter-section {
+  padding-bottom: 48px;
+}
+
+/* Ensure higher-level containers won't clip the menus */
+.chapter-list,
+.chapters,
+.pane,
+.pane.editor,
+.layout {
+  overflow: visible !important;
 }
 
 /* Drag handle - left colored bar overlay */
@@ -536,7 +561,7 @@ a { color: var(--accent); }
 .chapter .item-body { color: var(--muted); white-space: pre-wrap; }
 .block .item-body { color: var(--text); white-space: pre-wrap; }
 
-.chapters-display { display: flex; flex-direction: column; gap: 0; margin-left: 40px; }
+.chapters-display { display: flex; flex-direction: column; gap: 0; }
 .chapter-section { padding: 12px 12px 12px 8px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; margin-bottom: 1px; position: relative; }
 .chapter-children {
   padding-left: 5px;
@@ -616,6 +641,8 @@ a { color: var(--accent); }
 }
 .chapter-content { transition: all 0.3s ease; }
 .block-content { color: var(--text); white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; margin-bottom: 8px; }
+
+.block-content.media-block-display { white-space: normal; }
 
 .chapter-view:has(> .chapter-header) .block-content {
   margin-top: 12px;
@@ -723,24 +750,324 @@ a { color: var(--accent); }
 }
 
 /* removed chapter insert affordance */
-/* Add chapter affordances (hidden until delayed hover reveal) */
+/* Hide add zones - replaced with hover plus icon */
 .add-zone {
-  position: relative;
+  display: none !important;
 }
 
-/* Between/top/bottom zones act as small spacers with centered button */
-.add-zone.add-between,
-.add-zone.add-top,
-.add-zone.add-bottom,
-.add-zone.add-empty {
-  height: 30px;
-  margin: 0;
+/* Floating plus icon for adding blocks */
+.add-block-icon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.2s ease;
-  border-radius: 4px;
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  padding: 0;
+  color: #0f172a;
 }
+
+/* Header add-icon (appears near the chapter title) */
+.chapter-header {
+  position: relative;
+}
+
+.add-block-icon.header {
+  /* same visuals as base, slightly smaller placement handled by container */
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  z-index: 102;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+
+/* show the + only for the section that is hovered and NOT when a descendant section is hovered */
+/* uses :has() to detect hovered child sections so parent sections don't show their + */
+.chapter-section:hover:not(:has(.chapter-section:hover)) > .add-button-wrap .add-block-icon,
+.chapter-section:focus-within:not(:has(.chapter-section:hover)) > .add-button-wrap .add-block-icon {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* show child button when hovering the content wrapper (for chapter-type blocks) */
+.chapter-content-wrapper:hover > .add-button-wrap[data-add-mode="child"] .add-block-icon,
+.chapter-content-wrapper:focus-within > .add-button-wrap[data-add-mode="child"] .add-block-icon {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* hide header icon when section menu is open */
+.chapter-section.add-open .add-block-icon.header {
+  display: none;
+}
+
+.add-block-icon:hover {
+  opacity: 1;
+}
+
+.add-block-icon:hover {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* translucent backgrounds for add icons */
+.add-block-icon,
+.add-block-icon.header {
+  background: color-mix(in srgb, #ffffff 6%, transparent); /* subtle translucent base */
+  backdrop-filter: blur(2px);
+}
+
+/* Default: keep add icons invisible and non-interactive until
+   revealed by hovering the section or header. */
+.add-block-icon {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+/* Dropdown menu for block options */
+.add-block-menu {
+  position: absolute;
+  top: auto;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 101;
+  display: none;
+  flex-direction: column;
+  min-width: 130px;
+  overflow: hidden;
+}
+
+.add-block-menu.visible {
+  display: flex;
+}
+
+.add-block-menu button {
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  width: 100%;
+}
+
+.add-block-menu button:hover {
+  background: rgba(34, 211, 238, 0.1);
+}
+
+/* Global expanded mode: show all menus horizontally */
+body.add-expanded .add-block-menu {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+}
+
+body.add-expanded .add-block-menu button {
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+/* Ensure icons are visible when expanded */
+body.add-expanded .add-block-icon {
+  opacity: 1;
+}
+
+/* Per-section horizontal menu (used when a single plus is clicked) */
+.add-block-menu.horizontal {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+  /* position the horizontal menu at the same Y as the plus icon and animate from center */
+  bottom: -12px; /* matches .add-block-icon bottom */
+  transform-origin: 50% 50%;
+  transform: translateX(-50%) scaleX(0);
+  opacity: 0;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+  z-index: 9999;
+}
+
+.add-block-menu.horizontal.visible {
+  transform: translateX(-50%) scaleX(1);
+  opacity: 1;
+}
+
+/* CSS-only add button wrapper and menu */
+/* Default: "add after" button on section bottom edge */
+.add-button-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translate(-50%, 50%); /* half-overlap the bottom edge of section */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+/* "add child" button (header class) sits on the content wrapper bottom edge */
+.add-button-wrap[data-add-mode="child"] {
+  /* positioned inside .chapter-content-wrapper which has position: relative */
+  bottom: 0;
+  transform: translate(-50%, 50%);
+}
+
+.add-button-wrap .add-block-menu.css-only {
+  position: absolute;
+  left: 50%;
+  top: 50%; /* align vertically with the + icon inside the wrapper */
+  transform: translate(-50%, -50%) scaleX(0);
+  transform-origin: 50% 50%;
+  opacity: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 8px;
+  /* match menu container height to icon buttons */
+  height: 32px;
+  min-height: 32px;
+  padding: 0 6px; /* horizontal padding only */
+  align-items: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  z-index: 9999;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.add-button-wrap:hover .add-block-menu.css-only,
+.add-button-wrap:focus-within .add-block-menu.css-only {
+  transform: translate(-50%, -50%) scaleX(1);
+  opacity: 1;
+}
+
+/* Ensure header add-button shows its menu when hovered */
+.add-button-wrap:hover .add-block-menu.css-only,
+.add-button-wrap:focus-within .add-block-menu.css-only {
+  transform: translate(-50%, -50%) scaleX(1);
+  opacity: 1;
+}
+
+/* Chapter content wrapper needs position relative for child button placement */
+.chapter-content-wrapper {
+  position: relative;
+}
+
+/* hide + while menu is visible */
+.add-button-wrap:hover > .add-block-icon,
+.add-button-wrap:focus-within > .add-block-icon {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(4px) !important;
+}
+
+/* hide plus when the menu itself is hovered or focused (menu comes before button) */
+.add-button-wrap .add-block-menu.css-only:hover + .add-block-icon,
+.add-button-wrap .add-block-menu.css-only:focus-within + .add-block-icon {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(4px) !important;
+}
+
+/* place the icon inside the wrapper without using absolute positioning
+   so it sits at the wrapper center (vertically midway in the chapter) */
+.add-button-wrap > .add-block-icon {
+  position: static;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  transform: none;
+}
+
+.add-block-menu.css-only form { margin: 0; }
+.add-block-menu.css-only form > button { width: 32px; height: 32px; padding: 0; border-radius: 6px; border: none; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; color: white; }
+
+/* color mapping for forms in css-only menu */
+.add-block-menu.css-only form[hx-post$="/child"] > button { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+.add-block-menu.css-only form[hx-post$="/after"] > button { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* Color icons by the block type they create */
+.add-block-menu.css-only form > button[data-type="chapter"] { background: color-mix(in srgb, var(--color-chapter) 70%, transparent); }
+.add-block-menu.css-only form > button[data-type="paragraph"] { background: color-mix(in srgb, var(--color-paragraph) 70%, transparent); }
+.add-block-menu.css-only form > button[data-type="code"] { background: color-mix(in srgb, var(--color-code) 70%, transparent); }
+.add-block-menu.css-only form > button[data-type="math"] { background: color-mix(in srgb, var(--color-math) 70%, transparent); }
+.add-block-menu.css-only form > button[data-type="media"] { background: color-mix(in srgb, #ec4899 70%, transparent); }
+
+/* Show horizontal menu when hovering the plus icon or the menu itself (temporary hover mode) */
+.chapter-section .add-block-icon:hover + .add-block-menu,
+.chapter-section .add-block-icon:focus + .add-block-menu,
+.chapter-section .add-block-menu:hover {
+  /* render as horizontal toolbar */
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+  bottom: -12px; /* align with icon */
+  transform-origin: 50% 50%;
+  transform: translateX(-50%) scaleX(1);
+  opacity: 1;
+  z-index: 105;
+}
+
+/* Icon-only square buttons */
+.add-block-menu.horizontal button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 16px;
+  color: white;
+  border: none;
+}
+
+/* Match colors to block types (subtle translucent fills) */
+.add-block-menu.horizontal button[data-block-type="chapter"] { background: color-mix(in srgb, var(--accent) 50%, transparent); color: #0f172a; }
+.add-block-menu.horizontal button[data-block-type="paragraph"] { background: color-mix(in srgb, var(--color-paragraph) 70%, transparent); }
+.add-block-menu.horizontal button[data-block-type="code"] { background: color-mix(in srgb, var(--color-code) 70%, transparent); }
+.add-block-menu.horizontal button[data-block-type="math"] { background: color-mix(in srgb, var(--color-math) 70%, transparent); }
+.add-block-menu.horizontal button[data-block-type="media"] { background: color-mix(in srgb, #ec4899 70%, transparent); }
+
+/* Hide the + icon when this section has the menu open */
+.chapter-section.add-open .add-block-icon {
+  display: none;
+}
+
+/* Between/top/bottom zones act as small spacers with centered button */
 
 .add-zone.add-between {
   height: 5px;

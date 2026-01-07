@@ -1,3 +1,4 @@
+{% from 'components/add_block_button.html' import add_block_button %}
 {% macro render_editor_chapters(chapters, active_note, parent_id=none, depth=0) %}
   {% set level_chapters = chapters|selectattr('parent_id', 'equalto', parent_id)|list %}
   {% set siblings = level_chapters|sort(attribute='order') %}
@@ -34,6 +35,9 @@
           </form>
         {% endif %}
       </div>
+      {# Section-level add button: rendered inside each section's wrapper to
+        avoid referencing `chapter` before the loop. See per-section button
+        inside `.chapter-content-wrapper`. #}
     </div>
   {% endif %}
   {% for chapter in siblings %}
@@ -45,9 +49,16 @@
          data-chapter-id="{{ chapter.id }}"
          data-chapter-type="{{ chapter.type }}"
          data-parent-id="{{ chapter.parent_id or '' }}"
-         data-order="{{ chapter.order }}">
+         data-order="{{ chapter.order }}"
+         data-note-id="{{ active_note.id }}">
+      <!-- Floating plus icon for adding blocks below (on section bottom edge) -->
+      {{ add_block_button(active_note.id, chapter.id, 'after', False, 'Add block below') }}
       <div class="drag-handle" title="Drag to reorder"></div>
       <div class="chapter-content-wrapper">
+        {# For chapter-type blocks only: add child button on wrapper bottom edge #}
+        {% if chapter.type == 'chapter' %}
+          {{ add_block_button(active_note.id, chapter.id, 'child', True, 'Add child block') }}
+        {% endif %}
         <div class="chapter-view chapter-click" 
              data-note-id="{{ active_note.id }}"
              data-chapter-id="{{ chapter.id }}"
@@ -56,9 +67,11 @@
              hx-swap="innerHTML"
              style="cursor: pointer;">
           {% if chapter.type == 'chapter' or chapter.title %}
-            <h3 class="chapter-header">
-              {{ chapter.title }}
-            </h3>
+            {% if chapter.type == 'chapter' %}
+              <h3 class="chapter-header">{{ chapter.title }}</h3>
+            {% else %}
+              <h3 class="chapter-header">{{ chapter.title }}</h3>
+            {% endif %}
           {% endif %}
           {% if chapter.type == 'code' %}
             <div class="block-content code-block-display" 
