@@ -5,7 +5,20 @@
          data-chapter-id="{{ chapter.id }}">
       <textarea class="code-block-textarea" style="display:none;">{{ chapter.content }}</textarea>
     </div>
+  {% elif chapter.type == 'media' %}
+    <div class="block-content media-block-display">
+      {% if chapter.content %}
+        <img src="{{ chapter.content }}" alt="{{ chapter.title or 'Media' }}" style="max-width: 100%; max-height: 400px; border-radius: 4px;">
+        {% if chapter.title %}
+          <p style="margin-top: 8px; font-size: 0.9em; color: #666;">{{ chapter.title }}</p>
+        {% endif %}
+      {% else %}
+        <div style="padding: 20px; text-align: center; background: #f0f0f0; border-radius: 4px; color: #999;">
+          No image added
+        </div>
+      {% endif %}
+    </div>
   {% else %}
-    <div class="block-content">{{ chapter.content }}</div>
+    <div class="block-content" style="white-space: pre-wrap; word-wrap: break-word;">{{ chapter.content }}</div>
   {% endif %}
 {% endmacro %}

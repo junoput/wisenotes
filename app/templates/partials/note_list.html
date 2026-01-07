@@ -18,6 +18,7 @@
       {% set hx_target = 'body' %}
       {% set hx_swap = 'none' %}
       {% set extra_classes = 'active' if active and note.id == active.id else '' %}
+      {% set focus_first = loop.first %}
       {% include "components/item.html" %}
     {% else %}
       <div class="empty">No notes yet. Create one.</div>

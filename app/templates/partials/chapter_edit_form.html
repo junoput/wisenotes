@@ -1,6 +1,7 @@
 {% set block_type = chapter.type %}
 {% set is_code = block_type == 'code' %}
 {% set is_math = block_type == 'math' %}
+{% set is_media = block_type == 'media' %}
 {% set is_paragraph = block_type == 'paragraph' %}
 {% set lang = chapter.language or 'python' %}
 {% set mode_map = {
@@ -8,12 +9,14 @@
   'javascript': 'javascript',
   'typescript': 'javascript',
   'go': 'go',
-  'rust': 'rust'
+  'rust': 'rust',
+  'java': 'clike'
 } %}
 
 <div class="chapter-edit-mode"
      data-editor="{{ 'codemirror' if is_code else 'textarea' }}"
      data-chapter-type="{{ block_type }}"
+     data-note-id="{{ note.id }}"
      {% if is_code %}data-codemirror-mode="{{ mode_map.get(lang, 'javascript') }}" data-language="{{ lang }}"{% endif %}>
   <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
         hx-target="body" 
@@ -43,6 +46,7 @@
           <option value="python" {{ 'selected' if lang == 'python' else '' }}>Python</option>
           <option value="javascript" {{ 'selected' if lang == 'javascript' else '' }}>JavaScript</option>
           <option value="typescript" {{ 'selected' if lang == 'typescript' else '' }}>TypeScript</option>
+          <option value="java" {{ 'selected' if lang == 'java' else '' }}>Java</option>
           <option value="go" {{ 'selected' if lang == 'go' else '' }}>Go</option>
           <option value="rust" {{ 'selected' if lang == 'rust' else '' }}>Rust</option>
         </select>
@@ -52,18 +56,52 @@
           <option value="latex" {{ 'selected' if lang == 'latex' else '' }}>LaTeX</option>
           <option value="asciimath" {{ 'selected' if lang == 'asciimath' else '' }}>AsciiMath</option>
         </select>
+      {% elif is_media %}
+        <input type="hidden" name="language" value="">
+        <div class="muted">URL-based media</div>
       {% else %}
         <input type="hidden" name="language" value="{{ chapter.language or '' }}">
         <div class="muted">Plain text block</div>
       {% endif %}
     </div>
+    {% endif %}
 
+    {% if is_media %}
+    <div class="field">
+      <label for="title-{{ chapter.id }}">Title / Caption</label>
+      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" placeholder="Image caption (optional)">
+    </div>
+
+    <div class="field">
+      <label for="source-media-{{ chapter.id }}">Source / Credit</label>
+      <input type="text" id="source-media-{{ chapter.id }}" name="source" value="{{ chapter.source or '' }}" placeholder="Image source or credit">
+    </div>
+
+    <div class="field">
+      {% if chapter.content %}
+        <label>Image Preview</label>
+        <div id="media-preview-{{ chapter.id }}" style="width: fit-content; background: transparent; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: visible; margin-bottom: 8px;">
+          <img src="{{ chapter.content }}" alt="preview" style="width: auto; height: auto; max-width: 100%; max-height: 400px; object-fit: contain;">
+        </div>
+      {% endif %}
+      <input type="hidden" id="content-{{ chapter.id }}" name="content_text" value="{{ chapter.content or '' }}">
+      <div id="media-picker-container-{{ chapter.id }}"
+           hx-get="/notes/{{ note.id }}/chapters/{{ chapter.id }}/media/picker"
+           hx-trigger="load"
+           hx-target="#media-picker-container-{{ chapter.id }}"
+           hx-swap="innerHTML"
+           style="margin-top: 8px;">
+        <div style="padding: 12px; background: #f0f0f0; border-radius: 4px; text-align: center; color: #666;">Loading media gallery...</div>
+      </div>
+    </div>
+    {% else %}
     <div class="field">
       <textarea id="content-{{ chapter.id }}"
                 name="content_text"
                 rows="14"
                 data-editor-target
                 class="chapter-content-input"
+                style="{% if is_code %}display: none;{% endif %}"
                 autofocus
                 placeholder="{% if is_code %}add code{% elif is_math %}add formula{% else %}add text{% endif %}">{{ chapter.content }}</textarea>
     </div>
@@ -77,6 +115,15 @@
               hx-target="body" 
               hx-swap="none">
         Cancel
+      </button>
+      <button type="button"
+          class="btn danger"
+          hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/delete"
+          hx-target="body"
+          hx-swap="none"
+          style="margin-left: auto;"
+          onclick="if(!confirm('Delete this block and all its child blocks?')){event.stopImmediatePropagation(); event.preventDefault(); return false;}">
+        Delete
       </button>
     </div>
   </form>

@@ -94,6 +94,19 @@ export class CodeMirrorEditor extends Editor {
   }
 
   _handleEnter(cm) {
+    // If this Enter came with Shift, treat it as a plain newline (do not submit)
+    const evt = cm?.state?.keyEvent;
+    if (evt && evt.shiftKey) {
+      try {
+        evt.preventDefault();
+        evt.stopPropagation();
+      } catch (err) {
+        // ignore
+      }
+      cm.execCommand('newlineAndIndent');
+      return;
+    }
+
     // Sync textarea with editor content
     const textarea = this.container.querySelector('textarea');
     if (textarea) {
@@ -232,6 +245,7 @@ export class CodeMirrorEditor extends Editor {
       'javascript': '/static/vendor/codemirror/javascript.js',
       'go': '/static/vendor/codemirror/go.js',
       'rust': '/static/vendor/codemirror/rust.js',
+      'clike': '/static/vendor/codemirror/clike.js',
     };
 
     const modeFile = modeFiles[mode];
@@ -257,6 +271,7 @@ export class CodeMirrorEditor extends Editor {
       'javascript': language === 'typescript' ? 'text/typescript' : 'text/javascript',
       'go': 'text/x-go',
       'rust': 'text/x-rustsrc',
+      'clike': 'text/x-java',
       'application/json': 'application/json',
     };
     return mimeMap[mode] || mode;

@@ -1,6 +1,171 @@
 /**
  * Dynamically load and instantiate editor class
  */
+console.log('[app.js] loaded');
+
+// Import media picker initialization (use absolute paths from /static/js/)
+import { initMediaPickersOnPage } from '/static/js/media-picker.js';
+import { initDragAndDrop } from '/static/js/drag-drop.js';
+
+console.log('[app.js] imports completed, initDragAndDrop=', typeof initDragAndDrop);
+
+// Top-level capturing key logger (runs even before DOMContentLoaded handlers)
+window.addEventListener('keydown', (e) => {
+  try {
+    console.log('[keylog-top] key pressed', {
+      key: e.key,
+      code: e.code,
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      shift: e.shiftKey,
+      meta: e.metaKey,
+    });
+  } catch (err) {
+    // ignore errors
+  }
+}, true);
+// Create a small visible indicator in the bottom-right corner to show last key
+try {
+  const _keyIndicator = document.createElement('div');
+  _keyIndicator.id = 'wisenotes-key-indicator';
+  _keyIndicator.style.position = 'fixed';
+  _keyIndicator.style.right = '12px';
+  _keyIndicator.style.bottom = '12px';
+  _keyIndicator.style.zIndex = '9999';
+  _keyIndicator.style.background = 'rgba(0,0,0,0.6)';
+  _keyIndicator.style.color = 'white';
+  _keyIndicator.style.padding = '6px 10px';
+  _keyIndicator.style.borderRadius = '6px';
+  _keyIndicator.style.fontFamily = 'monospace';
+  _keyIndicator.style.fontSize = '12px';
+  _keyIndicator.style.pointerEvents = 'none';
+  _keyIndicator.textContent = '';
+  document.addEventListener('DOMContentLoaded', () => {
+    document.body.appendChild(_keyIndicator);
+  });
+  window.addEventListener('keydown', (e) => {
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Meta');
+    parts.push(e.key);
+    _keyIndicator.textContent = parts.join('+');
+  }, true);
+} catch (err) {
+  // ignore failures
+}
+
+// Focus helper: moves focus to the first note in the list
+function focusFirstNoteItem() {
+  try {
+    const marker = document.querySelector('[data-focus-first]');
+    const firstNote = marker || document.querySelector('.note-list .item');
+    if (firstNote && firstNote.focus) {
+      firstNote.focus({ preventScroll: true });
+    }
+  } catch (err) {
+    console.warn('focusFirstNoteItem error', err);
+  }
+}
+
+// Shift-only navigation: press Shift to move focus to next chapter-section
+function _isTypingElement(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+
+function _focusNextChapter() {
+  const chapters = Array.from(document.querySelectorAll('.chapter-section'));
+  if (!chapters.length) return;
+  const active = document.activeElement;
+  let idx = chapters.indexOf(active);
+  if (idx === -1) {
+    chapters[0].focus();
+    return;
+  }
+  const next = chapters[(idx + 1) % chapters.length];
+  next.focus();
+}
+
+window.addEventListener('keydown', (e) => {
+  try {
+    // Only act when the bare Shift key is pressed (no other modifiers)
+    if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+      // Ignore if typing in an input-like element
+      const active = document.activeElement;
+      if (_isTypingElement(active)) return;
+        e.preventDefault();
+        // If focus is already inside a chapter-section, continue chapter cycling
+        if (active && active.closest && active.closest('.chapter-section')) {
+          _focusNextChapter();
+          return;
+        }
+        // Otherwise, always try to focus the first note; if none, fallback to chapters
+        if (focusFirstNoteItem) {
+          focusFirstNoteItem();
+          return;
+        }
+        _focusNextChapter();
+    }
+  } catch (err) {
+    console.warn('Shift navigation error', err);
+  }
+}, true);
+
+// After HTMX swaps that touch the note list, restore focus to the first note
+document.body.addEventListener('htmx:afterSwap', (e) => {
+  try {
+    const target = (e.detail && e.detail.target) || e.target;
+    const isNoteListSwap = target && (target.id === 'note-list' || (target.closest && target.closest('#note-list')));
+    if (isNoteListSwap) {
+      setTimeout(() => focusFirstNoteItem(), 0);
+    }
+  } catch (err) {
+    console.warn('afterSwap focus error', err);
+  }
+});
+
+// When Enter is pressed on a focused note item, trigger its click (hx-get)
+window.addEventListener('keydown', (e) => {
+  try {
+    if (e.key === 'Enter' && !e.repeat) {
+      const active = document.activeElement;
+      if (!active) return;
+      // If in an input-like element, ignore
+      if (_isTypingElement(active)) return;
+      // Ignore if inside a form (editor form)
+      if (active.closest && active.closest('form')) return;
+      const item = active.closest && active.closest('.item');
+      if (item) {
+        e.preventDefault();
+        // If item has an hx-get attribute, navigate there as a full page
+        const notePath = item.getAttribute && item.getAttribute('data-note-path');
+        if (notePath) {
+          const targetUrl = notePath.startsWith('http') ? notePath : (window.location.origin + notePath);
+          console.log('[nav] navigating to notePath', targetUrl);
+          window.location.assign(targetUrl);
+        } else {
+          const hxGet = item.getAttribute && item.getAttribute('hx-get');
+          if (hxGet) {
+            const targetUrl = hxGet.startsWith('http') ? hxGet : (window.location.origin + hxGet);
+            console.log('[nav] navigating to hx-get', targetUrl);
+            window.location.assign(targetUrl);
+          } else {
+            // Fallback to click which lets HTMX handle it when available
+            console.log('[nav] fallback: clicking item');
+            item.click();
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Enter key handler error', err);
+  }
+}, true);
 async function loadEditorClass(editorType) {
   switch (editorType) {
     case 'codemirror': {
@@ -135,6 +300,24 @@ function synchronizeAllTokenInputs(scope = document) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Delay a tick to ensure HTMX-rendered lists are present
+  setTimeout(() => focusFirstNoteItem(), 0);
+  // Global capturing key logger: logs every keypress (key, code, modifiers)
+  document.addEventListener('keydown', (e) => {
+    try {
+      console.log('[keylog] key pressed', {
+        key: e.key,
+        code: e.code,
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+        meta: e.metaKey,
+      });
+    } catch (err) {
+      // swallow errors to avoid breaking other handlers
+      console.warn('Keylog error', err);
+    }
+  }, true); // use capture to run before other handlers that may stop propagation
   const root = document.documentElement;
 
   // Editor mode switching
@@ -191,7 +374,8 @@ document.addEventListener('DOMContentLoaded', () => {
             'javascript': 'text/javascript',
             'typescript': 'text/typescript',
             'go': 'text/x-go',
-            'rust': 'text/x-rustsrc'
+            'rust': 'text/x-rustsrc',
+            'java': 'text/x-java'
           };
 
           const modeMap = {
@@ -199,7 +383,8 @@ document.addEventListener('DOMContentLoaded', () => {
             'javascript': 'javascript',
             'typescript': 'javascript',
             'go': 'go',
-            'rust': 'rust'
+            'rust': 'rust',
+            'java': 'clike'
           };
 
           const mode = modeMap[language] || 'javascript';
@@ -211,6 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
             'javascript': '/static/vendor/codemirror/javascript.js',
             'go': '/static/vendor/codemirror/go.js',
             'rust': '/static/vendor/codemirror/rust.js',
+            'java': '/static/vendor/codemirror/java.js',
           };
 
           const scriptId = `cm-mode-${mode}`;
@@ -584,6 +770,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => initializeMathBlocks(), 100);
   // Initialize token inputs on initial load
   initializeTokenInputs();
+  // Initialize drag and drop
+  initDragAndDrop();
 
   document.body.addEventListener('click', (e) => {
     const target = e.target.closest('[data-toggle-pane]');
@@ -606,7 +794,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Handle Enter key in chapter edit forms
   document.body.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
       const form = e.target.closest('.chapter-edit-form');
       if (form) {
         e.preventDefault();
@@ -705,14 +893,16 @@ document.addEventListener('DOMContentLoaded', () => {
               'javascript': 'javascript',
               'typescript': 'javascript',
               'go': 'go',
-              'rust': 'rust'
+              'rust': 'rust',
+              'java': 'clike'
             };
             const mimeMap = {
               'python': 'text/x-python',
               'javascript': 'text/javascript',
               'typescript': 'text/typescript',
               'go': 'text/x-go',
-              'rust': 'text/x-rustsrc'
+              'rust': 'text/x-rustsrc',
+              'java': 'text/x-java'
             };
             
             const mode = modeMap[newLang] || 'javascript';
@@ -724,6 +914,7 @@ document.addEventListener('DOMContentLoaded', () => {
               'javascript': '/static/vendor/codemirror/javascript.js',
               'go': '/static/vendor/codemirror/go.js',
               'rust': '/static/vendor/codemirror/rust.js',
+              'java': '/static/vendor/codemirror/java.js',
             };
             
             const scriptId = `cm-mode-${mode}`;
@@ -766,6 +957,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => initializeMathBlocks(), 100);
     // Initialize token inputs for newly inserted forms
     initializeTokenInputs();
+    // Re-initialize drag and drop after HTMX swap
+    initDragAndDrop();
 
     // Initialize settings pane controls if present
     const settingsOverlay = document.getElementById('note-settings');
@@ -997,50 +1190,218 @@ document.addEventListener('DOMContentLoaded', () => {
   // Ensure all add zones start hidden on initial load
   document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
 
-  document.body.addEventListener('dragstart', (e) => {
-    const item = e.target.closest('.chapter-item');
-    if (!item) return;
-    if (!e.dataTransfer) return;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('chapter-id', item.dataset.chapterId);
+  // NOTE: Drag-and-drop for chapters is now handled by drag-drop.js module
+  // The old handlers here have been removed to avoid conflicts.
+
+  // Accessibility: simple keyboard shortcut capture and logging
+  function _normalizeKeyEvent(e) {
+    // Handle modifier combos first
+    if (e.key === 'Enter' && e.shiftKey) return 'shift enter';
+    // Map common keys to human-friendly strings used in accessibility.cfg
+    const map = {
+      'ArrowDown': 'down arrow',
+      'ArrowUp': 'up arrow',
+      'ArrowRight': 'right arrow',
+      'ArrowLeft': 'left arrow',
+      'Escape': 'esc',
+      'Enter': 'enter',
+      'Backspace': 'back space',
+    };
+    if (map[e.key]) return map[e.key];
+    // Single character keys (letters, digits)
+    if (e.key && e.key.length === 1) return e.key.toLowerCase();
+    // Fallback to key value
+    return e.key || String(e.which || 'unknown');
+  }
+
+  const _accessibilityMap = (window.WISENOTES_ACCESSIBILITY && typeof window.WISENOTES_ACCESSIBILITY === 'object') ? window.WISENOTES_ACCESSIBILITY : {};
+  // Invert mapping for quick lookup: keyString -> actionName
+  const _keyToAction = {};
+  Object.keys(_accessibilityMap).forEach((action) => {
+    const v = String(_accessibilityMap[action]).trim().toLowerCase();
+    if (v) _keyToAction[v] = action;
   });
 
-  document.body.addEventListener('dragover', (e) => {
-    const item = e.target.closest('.chapter-item');
-    if (!item) return;
-    if (!e.dataTransfer) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    item.classList.add('drag-over');
-  });
-
-  document.body.addEventListener('dragleave', (e) => {
-    const item = e.target.closest('.chapter-item');
-    if (!item) return;
-    item.classList.remove('drag-over');
-  });
-
-  document.body.addEventListener('drop', (e) => {
-    const item = e.target.closest('.chapter-item');
-    if (!item) return;
-    if (!e.dataTransfer) return;
-    e.preventDefault();
-
-    const chapterId = e.dataTransfer.getData('chapter-id');
-    const parentId = item.dataset.chapterId;
-    const noteId = document.querySelector('[data-note-id]')?.dataset.noteId;
-    item.classList.remove('drag-over');
-
-    if (!noteId || !chapterId || chapterId === parentId) return;
-
-    fetch(`/notes/${noteId}/chapters/${chapterId}/move`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `parent_id=${encodeURIComponent(parentId)}`
-    }).then(() => {
-      if (window.htmx) {
-        window.htmx.ajax('GET', `/notes/${noteId}`, 'body');
+  document.addEventListener('keydown', (e) => {
+    try {
+      const keyStr = _normalizeKeyEvent(e);
+      const action = _keyToAction[keyStr];
+      if (action) {
+        console.log('[accessibility] key pressed', { key: keyStr, action });
+      } else {
+        console.log('[accessibility] key pressed (unmapped)', { key: keyStr });
       }
-    });
+    } catch (err) {
+      console.warn('Accessibility key handler error', err);
+    }
   });
 });
+
+// Media upload and gallery handling
+document.addEventListener('DOMContentLoaded', () => {
+  initMediaHandlers();
+});
+
+document.body.addEventListener('htmx:afterSwap', () => {
+  initMediaHandlers();
+});
+
+function initMediaHandlers() {
+  // No longer init inline handlers - all media handling is via HTMX panel
+}
+
+
+function loadMediaBrowserGallery() {
+  if (!currentMediaBrowserNote) return;
+
+  const gallery = document.getElementById('media-browser-gallery');
+  if (!gallery) return;
+
+  gallery.innerHTML = '<p style="grid-column: 1 / -1; color: #999; text-align: center;">Loading...</p>';
+
+  fetch(`/api/notes/${currentMediaBrowserNote}/media/list`)
+    .then(r => r.json())
+    .then(data => {
+      gallery.innerHTML = '';
+      if (data.media.length === 0) {
+        gallery.innerHTML = '<p style="grid-column: 1 / -1; color: #999; text-align: center;">No media uploaded yet. Upload some images above.</p>';
+        return;
+      }
+
+      data.media.forEach(filename => {
+        const imgUrl = `/api/notes/${currentMediaBrowserNote}/media/${filename}`;
+        const item = document.createElement('div');
+        item.style.position = 'relative';
+        item.style.cursor = 'pointer';
+        item.style.borderRadius = '4px';
+        item.style.overflow = 'hidden';
+        item.style.border = '2px solid #e0e0e0';
+        item.style.transition = 'all 0.2s';
+        
+        item.innerHTML = `
+          <img src="${imgUrl}" 
+               style="width: 100%; aspect-ratio: 1; object-fit: cover;"
+               title="${filename}"
+               alt="${filename}"
+               data-filename="${filename}">
+          <button type="button" class="media-delete" 
+                  style="position: absolute; top: 4px; right: 4px; background: #e53e3e; color: white; border: none; width: 24px; height: 24px; border-radius: 50%; cursor: pointer; font-size: 16px; font-weight: bold; display: none;">
+            ×
+          </button>
+        `;
+
+        // Show delete button on hover
+        item.addEventListener('mouseenter', () => {
+          item.querySelector('.media-delete').style.display = 'block';
+          item.style.opacity = '0.8';
+        });
+        item.addEventListener('mouseleave', () => {
+          item.querySelector('.media-delete').style.display = 'none';
+          item.style.opacity = '1';
+        });
+
+        // Click image to select
+        item.querySelector('img').addEventListener('click', () => {
+          selectMedia(imgUrl);
+        });
+
+        // Delete button
+        item.querySelector('.media-delete').addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (confirm(`Delete ${filename}?`)) {
+            fetch(`/api/notes/${currentMediaBrowserNote}/media/${filename}`, { method: 'DELETE' })
+              .then(r => r.json())
+              .then(() => {
+                item.remove();
+                loadMediaBrowserGallery();
+              })
+              .catch(err => alert('Delete failed: ' + err.message));
+          }
+        });
+
+        gallery.appendChild(item);
+      });
+    })
+    .catch(err => {
+      gallery.innerHTML = `<p style="grid-column: 1 / -1; color: #e53e3e; text-align: center;">Failed to load media: ${err.message}</p>`;
+      console.error('Failed to load media gallery', err);
+    });
+}
+
+function setupMediaBrowserUpload() {
+  const dropZone = document.getElementById('media-upload-drop-zone');
+  const fileInput = document.getElementById('media-upload-input');
+  
+  if (!dropZone || !fileInput) return;
+
+  // Click to upload
+  dropZone.addEventListener('click', () => fileInput.click());
+
+  // Drag and drop
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '#f0f0f0';
+    dropZone.style.borderColor = '#999';
+  });
+
+  dropZone.addEventListener('dragleave', () => {
+    dropZone.style.background = '';
+    dropZone.style.borderColor = '#ccc';
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '';
+    dropZone.style.borderColor = '#ccc';
+    const files = e.dataTransfer.files;
+    uploadMediaFiles(Array.from(files));
+  });
+
+  // File input change
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+      uploadMediaFiles(Array.from(e.target.files));
+    }
+  });
+}
+
+function uploadMediaFiles(files) {
+  if (!currentMediaBrowserNote) return;
+
+  const uploadProgress = document.getElementById('upload-progress');
+  const progressBar = document.getElementById('progress-bar');
+
+  uploadProgress.style.display = 'block';
+  progressBar.style.width = '0%';
+
+  let uploaded = 0;
+  let total = files.length;
+
+  files.forEach((file, index) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch(`/api/notes/${currentMediaBrowserNote}/media/upload`, {
+      method: 'POST',
+      body: formData
+    })
+      .then(r => r.json())
+      .then(data => {
+        uploaded++;
+        progressBar.style.width = ((uploaded / total) * 100) + '%';
+        if (uploaded === total) {
+          setTimeout(() => {
+            uploadProgress.style.display = 'none';
+            loadMediaBrowserGallery();
+          }, 500);
+        }
+      })
+      .catch(err => {
+        alert(`Upload failed for ${file.name}: ${err.message}`);
+        console.error('Upload error', err);
+      });
+  });
+}
+
+

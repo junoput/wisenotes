@@ -14,7 +14,7 @@ def split_mixed_content(value: Any) -> tuple[str, list[dict[str, Any]]]:
                 text_parts.append(item)
             elif isinstance(item, dict):
                 children.append(item)
-        content_text = "\n\n".join([t.strip() for t in text_parts if t and t.strip()])
+        content_text = "\n\n".join([t for t in text_parts if t])
         return content_text, children
 
     if isinstance(value, str):

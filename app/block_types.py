@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-BlockTypeValue = Literal["chapter", "paragraph", "code", "math"]
+BlockTypeValue = Literal["chapter", "paragraph", "code", "math", "media"]
 
 
 @dataclass
@@ -51,6 +51,12 @@ BLOCK_TYPES: dict[str, BlockTypeConfig] = {
         can_nest=False,
         default_language="latex",
         language_options=["latex", "asciimath"],
+    ),
+    "media": BlockTypeConfig(
+        name="media",
+        emoji="🖼️",
+        color="#ec4899",
+        can_nest=False,
     ),
 }
 

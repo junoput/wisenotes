@@ -1,3 +1,40 @@
+# Copilot / Agent Instructions — Wisenotes (concise)
+
+Wisenotes is a FastAPI + Jinja2 app that favors server-rendered HTML and HTMX partials over heavy frontend frameworks. Agents should focus on the backend service layer, HTMX endpoint patterns, simple file-backed persistence, and plugin hooks.
+
+- **Big picture**: HTTP routes in `app/routes/` render templates in `app/templates/`. Business rules live in `app/services/notes.py`. Storage is file-based under `data/` and accessed via `app/services/storage.py`.
+
+- **HTMX pattern (must follow)**: HTMX endpoints return HTML fragments (not JSON). Use `response_class=HTMLResponse` and `templates.TemplateResponse()` for partial responses — see [app/routes/pages.py](app/routes/pages.py) and `app/templates/partials/hx_refresh.html`.
+
+- **Service boundary**: All domain logic belongs in `app/services/notes.py`. Routes must use DI: `service: NoteService = Depends(get_note_service())` from [app/web/dependencies.py](app/web/dependencies.py). Do not instantiate services inside routes.
+
+- **Persistence details**: Data is stored as JSON files under `data/`. The repository implementation in `app/services/storage.py` uses file locking — preserve `FileLock` usage on writes to avoid corruption.
+
+- **Plugin system**: Lifecycle hooks live in `app/plugins/` (see `base.py`, `registry.py`, `word_count.py`). Hooks include `on_note_saved`, `on_export`, `on_import`. New plugins must be registered via the `PluginRegistry` used by `get_note_service()`.
+
+- **Editor assets**: CodeMirror and editor glue are under `app/static/vendor/codemirror` and `app/static/js/editors/`. When changing editors, update templates and CSP in `app/main.py`.
+
+- **Security / CSP**: `app/main.py` applies CSP and security headers. Adding external CDN scripts/styles requires updating that middleware or requests will be blocked.
+
+- **Testing & running**:
+  - Run tests: `pytest` (see `tests/test_health.py` for TestClient usage).
+  - Local dev: `uvicorn app.main:app --reload --port 8000` (Python 3.12+).
+  - Docker: `docker compose up --build` (recommended for parity with CI).
+
+- **Formatting & typing**: Project uses `ruff` and `mypy` configured in `pyproject.toml`. Import style prefers single-line imports (see `pyproject.toml` rules).
+
+- **Templates & partials**: Prefer small partial templates in `app/templates/partials/` for HTMX swaps. Full page shells reside in `app/templates/` (e.g., `index.html`).
+
+- **When editing chapters**: Use `NoteService` methods (e.g., `add_chapter`, `delete_chapter`) which maintain parent/child integrity and timestamps; see `app/editor/mixed_content.py` for editor serialization.
+
+- **Quick references**:
+  - Routes & HTMX: [app/routes/pages.py](app/routes/pages.py), [app/routes/api.py](app/routes/api.py)
+  - Services: [app/services/notes.py](app/services/notes.py), storage: [app/services/storage.py](app/services/storage.py)
+  - DI & settings: [app/web/dependencies.py](app/web/dependencies.py)
+  - Plugins: [app/plugins/registry.py](app/plugins/registry.py)
+  - CSP & middleware: [app/main.py](app/main.py)
+
+If any part of this summary is unclear or you want a longer, example-driven version (including common change patterns or a sample PR checklist), tell me which area to expand and I will iterate.
 # Wisenotes AI Development Guide
 
 ## Architecture Overview

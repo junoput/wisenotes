@@ -1,0 +1,17 @@
+<div class="media-picker-inline" style="padding: 12px; border: 1px solid #3a3a3a; border-radius: 6px; background: #1e1e1e; display: grid; gap: 12px;" data-media-chapter-id="{{ chapter_id }}" data-media-note-id="{{ active.id }}">
+  <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+    <div style="font-weight: 600; color: #ccc;">Media Library</div>
+    <form hx-post="/notes/{{ active.id }}/media/upload"
+          hx-target="#media-gallery-{{ chapter_id }}"
+          enctype="multipart/form-data"
+          id="media-upload-form-{{ chapter_id }}">
+      <input type="file" name="file" accept="image/*" multiple required style="display: none;" id="file-input-{{ chapter_id }}">
+      <button type="button" class="btn" id="import-btn-{{ chapter_id }}">Import</button>
+    </form>
+  </div>
+
+  <div id="media-gallery-{{ chapter_id }}" 
+       style="display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; min-height: 120px;">
+    {% include "partials/media_gallery.html" %}
+  </div>
+</div>

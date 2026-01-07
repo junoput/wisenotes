@@ -1,37 +1,48 @@
-<div class="pane-header">
-  <h2>Edit: {{ chapter.title }}</h2>
-  <div class="pane-actions">
-    <button type="button" 
-            class="btn" 
-            hx-get="/notes/{{ active.id }}" 
-            hx-target="#editor" 
-            hx-swap="innerHTML">
-      ← Back
+<form hx-post="/notes/{{ active.id }}/chapters/{{ chapter.id }}/edit" 
+      hx-target="body" 
+      hx-swap="none"
+      class="chapter-inline-editor">
+  {% if chapter.type == 'code' %}
+    <div class="field">
+      <label for="language-{{ chapter.id }}">Language</label>
+      <select id="language-{{ chapter.id }}" name="language" class="field-input">
+        <option value="python" {% if chapter.language == 'python' %}selected{% endif %}>Python</option>
+        <option value="javascript" {% if chapter.language == 'javascript' %}selected{% endif %}>JavaScript</option>
+        <option value="go" {% if chapter.language == 'go' %}selected{% endif %}>Go</option>
+        <option value="rust" {% if chapter.language == 'rust' %}selected{% endif %}>Rust</option>
+      </select>
+    </div>
+  {% endif %}
+  
+  {% if chapter.type != 'chapter' or chapter.title %}
+    <div class="field">
+      <label for="title-{{ chapter.id }}">Title</label>
+      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" {% if chapter.type == 'chapter' %}required{% endif %}>
+    </div>
+  {% endif %}
+  
+  <div class="field">
+    <label for="content-{{ chapter.id }}">{% if chapter.type == 'code' %}Code{% elif chapter.type == 'math' %}Formula{% elif chapter.type == 'media' %}Image URL{% else %}Content{% endif %}</label>
+    <textarea id="content-{{ chapter.id }}" name="content" rows="{% if chapter.type == 'code' %}12{% else %}6{% endif %}" style="resize: vertical; font-family: {% if chapter.type == 'code' %}monospace{% else %}inherit{% endif %};" placeholder="{% if chapter.type == 'media' %}https://example.com/image.jpg{% endif %}">{{ chapter.content }}</textarea>
+  </div>
+  
+  <div style="display: flex; gap: 8px;">
+    <button type="submit" class="btn">Save</button>
+    <button type="button"
+            class="btn ghost"
+            hx-get="/notes/{{ active.id }}"
+            hx-target="body"
+            hx-swap="none">
+      Cancel
+    </button>
+    <button type="button"
+        class="btn danger"
+        hx-post="/notes/{{ active.id }}/chapters/{{ chapter.id }}/delete"
+        hx-target="body"
+        hx-swap="none"
+        style="margin-left: auto;"
+        onclick="if(!confirm('Delete this block and all its child blocks?')){event.stopImmediatePropagation(); event.preventDefault(); return false;}">
+      Delete
     </button>
   </div>
-</div>
-<div class="editor-body">
-  <form hx-post="/notes/{{ active.id }}/chapters/{{ chapter.id }}/edit" 
-        hx-target="body" 
-        hx-swap="none"
-        class="stack">
-    <div class="field">
-      <label for="title">Title</label>
-      <input type="text" id="title" name="title" value="{{ chapter.title }}" {% if not chapter.parent_id %}required{% endif %}>
-    </div>
-    <div class="field">
-      <label for="content">Content</label>
-      <textarea id="content" name="content" rows="15" style="resize: vertical;">{{ chapter.content }}</textarea>
-    </div>
-    <div style="display: flex; gap: 8px;">
-      <button type="submit" class="btn">Save</button>
-      <button type="button" 
-              class="btn ghost" 
-              hx-get="/notes/{{ active.id }}" 
-              hx-target="#editor" 
-              hx-swap="innerHTML">
-        Cancel
-      </button>
-    </div>
-  </form>
-</div>
+</form>

@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from filelock import FileLock
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.schemas import Note, NoteDocument
 
@@ -31,6 +34,16 @@ class JsonNoteRepository:
 
     def _note_file(self, name: str) -> Path:
         return self._note_dir(name) / f"{name}.json"
+
+    def _media_dir(self, name: str) -> Path:
+        """Get media folder for a note."""
+        return self._note_dir(name) / "media"
+
+    def _ensure_media_dir(self, name: str) -> Path:
+        """Create media folder if it doesn't exist."""
+        media_dir = self._media_dir(name)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        return media_dir
 
     def _maybe_migrate_from_legacy(self) -> None:
         # If no legacy file, nothing to do
@@ -121,31 +134,82 @@ class JsonNoteRepository:
                         json_files = list(entry.glob("*.json"))
                         if json_files:
                             nfile = json_files[0]
-                except Exception:
+                        else:
+                            logger.warning(
+                                "list_notes: folder %s exists but contains no JSON files",
+                                entry.name,
+                            )
+                            continue
+                except Exception as e:
+                    logger.error(
+                        "list_notes: error scanning folder %s: %s",
+                        entry.name,
+                        str(e),
+                        exc_info=True,
+                    )
                     nfile = None
-                if not nfile.exists():
+                if nfile is None or not nfile.exists():
+                    logger.warning("list_notes: no valid JSON file found in folder %s", entry.name)
                     continue
+                
                 try:
+                    logger.debug("list_notes: reading note from %s", nfile)
                     with nfile.open("r", encoding="utf-8") as f:
                         raw = json.load(f)
+                    
                     # Backward compatibility: map slug->name if needed
                     if "name" not in raw and "slug" in raw:
                         raw["name"] = raw["slug"]
+                    
                     # Ensure title is the display form (spaces)
                     if raw.get("name"):
                         raw["title"] = self._name_to_title(raw["name"])  # type: ignore[arg-type]
+                    
                     note = Note.model_validate(raw)
                     notes.append(note)
-                except Exception:
+                    logger.debug("list_notes: successfully loaded note %s (%s)", note.id, note.title)
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        "list_notes: INVALID JSON in file %s: %s (line %d col %d)",
+                        nfile,
+                        str(e.msg),
+                        e.lineno,
+                        e.colno,
+                        exc_info=True,
+                    )
                     continue
+                except Exception as e:
+                    logger.error(
+                        "list_notes: FAILED to read note from %s: %s",
+                        nfile,
+                        str(e),
+                        exc_info=True,
+                    )
+                    # Try to read file content for debugging
+                    try:
+                        with nfile.open("r", encoding="utf-8") as f:
+                            content_preview = f.read(500)
+                        logger.error(
+                            "list_notes: file content preview (first 500 chars): %s",
+                            content_preview,
+                        )
+                    except Exception:
+                        logger.error("list_notes: unable to read file content for debugging")
+                    continue
+        
         # Sort by created_at ascending
         notes.sort(key=lambda n: n.created_at)
+        logger.info("list_notes: successfully loaded %d notes", len(notes))
         return notes
 
     def get_note(self, note_id: str) -> Optional[Note]:
+        logger.debug("get_note: searching for note_id=%s", note_id)
         for note in self.list_notes():
             if note.id == note_id:
+                logger.debug("get_note: found note %s (%s)", note_id, note.title)
                 return note
+        logger.warning("get_note: note_id=%s not found in %d available notes", note_id, len(self.list_notes()))
         return None
 
     def upsert_note(self, note: Note, old_name: Optional[str] = None) -> Note:
@@ -166,8 +230,44 @@ class JsonNoteRepository:
             ndir = self._note_dir(note.name)
             ndir.mkdir(parents=True, exist_ok=True)
             nfile = self._note_file(note.name)
-            with nfile.open("w", encoding="utf-8") as f:
-                json.dump(json.loads(note.model_dump_json()), f, ensure_ascii=False, indent=2)
+            logger.info("upsert_note: writing note %s to %s (chapters=%d)", note.id, nfile, len(note.chapters))
+            
+            try:
+                # Validate note structure before writing
+                note_data = json.loads(note.model_dump_json())
+                
+                # Check for duplicate chapter IDs
+                chapter_ids = [ch["id"] for ch in note_data.get("chapters", [])]
+                if len(chapter_ids) != len(set(chapter_ids)):
+                    logger.error(
+                        "upsert_note: CORRUPTION DETECTED - duplicate chapter IDs in note %s! IDs: %s",
+                        note.id,
+                        chapter_ids,
+                    )
+                    raise ValueError(f"Duplicate chapter IDs detected in note {note.id}")
+                
+                # Write to temp file first, then rename (atomic operation)
+                temp_file = nfile.with_suffix(".tmp")
+                with temp_file.open("w", encoding="utf-8") as f:
+                    json.dump(note_data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    # Force sync to disk
+                    import os
+                    os.fsync(f.fileno())
+                
+                # Atomic rename
+                temp_file.replace(nfile)
+                logger.debug("upsert_note: successfully wrote note %s", note.id)
+                
+            except Exception as e:
+                logger.error(
+                    "upsert_note: FAILED to write note %s to %s: %s",
+                    note.id,
+                    nfile,
+                    str(e),
+                    exc_info=True,
+                )
+                raise
         return note
 
     def delete_note(self, note_id: str) -> None:
@@ -247,3 +347,41 @@ class JsonNoteRepository:
         # Collapse multiple spaces
         title = ' '.join(title.split())
         return title
+
+    def save_media(self, note_name: str, filename: str, content: bytes) -> str:
+        """Save media file to note's media folder. Returns relative path."""
+        media_dir = self._ensure_media_dir(note_name)
+        # Sanitize filename to prevent path traversal
+        filename = Path(filename).name
+        filepath = media_dir / filename
+        with open(filepath, "wb") as f:
+            f.write(content)
+        # Return relative path for storage in chapter content
+        return f"media/{filename}"
+
+    def list_media(self, note_name: str) -> List[str]:
+        """List all media filenames in a note's media folder."""
+        media_dir = self._media_dir(note_name)
+        if not media_dir.exists():
+            return []
+        return [f.name for f in sorted(media_dir.iterdir()) if f.is_file()]
+
+    def delete_media(self, note_name: str, filename: str) -> bool:
+        """Delete a media file. Returns True if deleted, False if not found."""
+        # Sanitize filename
+        filename = Path(filename).name
+        filepath = self._media_dir(note_name) / filename
+        if filepath.exists():
+            filepath.unlink()
+            return True
+        return False
+
+    def get_media_path(self, note_name: str, filename: str) -> Optional[Path]:
+        """Get full path to a media file if it exists."""
+        # Sanitize filename
+        filename = Path(filename).name
+        filepath = self._media_dir(note_name) / filename
+        if filepath.exists():
+            return filepath
+        return None
+

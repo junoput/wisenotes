@@ -153,6 +153,197 @@ a { color: var(--accent); }
   border-left-color: var(--color-math) !important;
 }
 
+.chapter-item-container[data-chapter-type="media"] {
+  border-left-color: #ec4899 !important;
+}
+
+/* Drag and drop styles */
+.chapter-section {
+  position: relative;
+  transition: opacity 0.2s ease, transform 0.2s ease, margin 0.2s ease;
+}
+
+/* Drag handle - left colored bar overlay */
+.drag-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: grab;
+  z-index: 5;
+  border-radius: 10px 0 0 10px;
+}
+
+.drag-handle:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Dragging state */
+.chapter-section.dragging {
+  opacity: 0.4;
+  transform: scale(0.98);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+/* Drop placeholder */
+.drag-placeholder {
+  height: 60px;
+  margin: 6px 0;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.15) 0%, rgba(34, 211, 238, 0.05) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  animation: placeholderPulse 1.2s ease-in-out infinite, placeholderSlideIn 0.2s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.drag-placeholder::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.2), transparent);
+  animation: placeholderShimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes placeholderSlideIn {
+  from {
+    opacity: 0;
+    height: 0;
+    margin: 0;
+  }
+  to {
+    opacity: 1;
+    height: 60px;
+    margin: 6px 0;
+  }
+}
+
+@keyframes placeholderPulse {
+  0%, 100% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.4);
+  }
+  50% {
+    border-color: rgba(34, 211, 238, 0.7);
+    box-shadow: 0 0 12px 2px rgba(34, 211, 238, 0.3);
+  }
+}
+
+@keyframes placeholderShimmer {
+  0% {
+    left: -100%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* Chapters making space animation */
+.chapter-section.drag-over {
+  transform: translateY(4px);
+  transition: transform 0.2s ease;
+}
+
+/* Ghost block during drag */
+.chapter-section.dragging {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Drop zone at end of list */
+.drop-zone-end {
+  height: 30px;
+  margin-top: 8px;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.drop-zone-end.drag-over {
+  border-color: var(--accent);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+/* Persistent append-child drop area inside chapters (hidden) */
+.chapter-append-drop {
+  display: none;
+}
+
+/* Move buttons (HTMX-based) */
+.chapter-move-buttons {
+  position: absolute;
+  left: -36px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+}
+
+.chapter-section:hover .chapter-move-buttons,
+.chapter-section:focus-within .chapter-move-buttons {
+  opacity: 1;
+}
+
+.move-btn {
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.move-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+}
+
+.move-btn:active {
+  transform: scale(0.95);
+}
+
+.chapter-section::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: grab;
+  z-index: 1;
+}
+
+.chapter-section:active::before {
+  cursor: grabbing;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -345,20 +536,26 @@ a { color: var(--accent); }
 .chapter .item-body { color: var(--muted); white-space: pre-wrap; }
 .block .item-body { color: var(--text); white-space: pre-wrap; }
 
-.chapters-display { display: flex; flex-direction: column; gap: 0; }
-.chapter-section { padding: 12px 12px 12px 8px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; margin-bottom: 1px; }
+.chapters-display { display: flex; flex-direction: column; gap: 0; margin-left: 40px; }
+.chapter-section { padding: 12px 12px 12px 8px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; margin-bottom: 1px; position: relative; }
+.chapter-children {
+  padding-left: 5px;
+  padding-right: 5px;
+  margin-top: 8px;
+}
 .chapter-header { 
-
-  .chapter-children {
-    padding-left: 5px;
-    padding-right: 5px;
-  }
   margin: 0 0 12px 0; 
   font-size: 18px; 
   font-weight: 700;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Ensure placeholder animation works in nested contexts */
+.chapter-children .drag-placeholder {
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .block-type-badge {
@@ -418,7 +615,7 @@ a { color: var(--accent); }
   gap: 8px;
 }
 .chapter-content { transition: all 0.3s ease; }
-.block-content { color: var(--text); white-space: normal; line-height: 1.6; margin-bottom: 8px; }
+.block-content { color: var(--text); white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; margin-bottom: 8px; }
 
 .chapter-view:has(> .chapter-header) .block-content {
   margin-top: 12px;
