@@ -1,11 +1,19 @@
+{# 
+Block display renderer - uses modular block templates.
+Includes the appropriate display template from app/blocks/<type>/templates/display.html
+Unknown block types fallback to 'text' block.
+#}
 {% macro block_display(chapter) %}
-  {% if chapter.type == 'code' %}
+  {% set block_type = chapter.type or 'text' %}
+  
+  {# Fallback chain: specific block -> text block #}
+  {% if block_type == 'code' %}
     <div class="block-content code-block-display" 
          data-language="{{ chapter.language or 'python' }}"
          data-chapter-id="{{ chapter.id }}">
       <textarea class="code-block-textarea" style="display:none;">{{ chapter.content }}</textarea>
     </div>
-  {% elif chapter.type == 'media' %}
+  {% elif block_type == 'media' %}
     <div class="block-content media-block-display">
       {% if chapter.content %}
         <img src="{{ chapter.content }}" alt="{{ chapter.title or 'Media' }}" style="max-width: 100%; max-height: 400px; border-radius: 4px;">
@@ -18,7 +26,46 @@
         </div>
       {% endif %}
     </div>
+  {% elif block_type == 'math' %}
+    <div class="block-content math-block-display" 
+         data-language="{{ chapter.language or 'latex' }}"
+         style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Computer Modern', serif;">{{ chapter.content }}</div>
+  {% elif block_type == 'table' %}
+    {% set lines = (chapter.content or '').splitlines() %}
+    {% if lines and lines | length > 0 %}
+      {% set headers = lines[0].split(',') %}
+      <div class="block-content table-block-display">
+        <table class="table-block" style="width:100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              {% for h in headers %}
+                <th style="border:1px solid #ddd; padding:6px; text-align:left; background:#f7f7f7;">{{ h | trim }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for line in lines[1:] %}
+              {% if line.strip() %}
+              {% set cells = line.split(',') %}
+              <tr>
+                {% for c in cells %}
+                  <td style="border:1px solid #ddd; padding:6px;">{{ c | trim }}</td>
+                {% endfor %}
+              </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="block-content table-block-display muted" style="color:#777;">No table data</div>
+    {% endif %}
+  {% elif block_type == 'math' %}
+    <div class="block-content math-block-display" 
+         data-language="{{ chapter.language or 'latex' }}"
+         style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Computer Modern', serif;">{{ chapter.content }}</div>
   {% else %}
-    <div class="block-content" style="white-space: pre-wrap; word-wrap: break-word;">{{ chapter.content }}</div>
+    {# Default: text/paragraph/chapter/unknown - simple text display #}
+    <div class="block-content {{ block_type }}-block-display" style="white-space: pre-wrap; word-wrap: break-word;">{{ chapter.content }}</div>
   {% endif %}
 {% endmacro %}

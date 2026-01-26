@@ -9,10 +9,12 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from typing import Optional
 
-from app.block_types import BLOCK_TYPES
+from app.block_types import get_block_types
+from app.blocks import get_block
 from app.editor.mixed_content import build_editor_json
 from app.editor.mixed_content import split_mixed_content
 from app.schemas import Chapter
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _template_context(request: Request, **kwargs) -> dict:
     """Build template context with block types configuration."""
-    ctx = {"request": request, "block_types": BLOCK_TYPES, **kwargs}
+    ctx = {"request": request, "block_types": get_block_types(), "get_block": get_block, **kwargs}
     # Include accessibility keybindings for templates and client JS
     try:
         ctx["accessibility"] = get_accessibility_bindings()
@@ -96,13 +98,26 @@ async def fetch_note(
     request: Request,
     service: NoteService = Depends(get_note_service),
 ):
+    # Some clients/extensions can accidentally include a trailing ';' in copied URLs.
+    # Canonicalize and redirect so the browser address bar doesn't keep the malformed URL.
+    raw_note_id = note_id
+    note_id = note_id.strip().rstrip(";")
+    is_htmx = (request.headers.get("HX-Request") or "").lower() == "true"
+
+    if note_id != raw_note_id:
+        logger.info("Canonicalizing note_id from %r to %r", raw_note_id, note_id)
+        if is_htmx:
+            # Tell htmx to navigate to the canonical URL.
+            return HTMLResponse("", status_code=204, headers={"HX-Redirect": f"/notes/{note_id}"})
+        return RedirectResponse(url=f"/notes/{note_id}", status_code=307)
+
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
-    )
+    # HTMX should receive fragments; full-page navigation should receive the full shell.
+    template = "partials/hx_refresh.html" if is_htmx else "index.html"
+    return templates.TemplateResponse(template, _template_context(request, active=note, notes=notes))
 
 
 @router.post("/notes/{note_id}/chapters", response_class=HTMLResponse)

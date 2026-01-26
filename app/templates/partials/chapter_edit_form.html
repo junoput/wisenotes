@@ -2,6 +2,7 @@
 {% set is_code = block_type == 'code' %}
 {% set is_math = block_type == 'math' %}
 {% set is_media = block_type == 'media' %}
+{% set is_table = block_type == 'table' %}
 {% set is_paragraph = block_type == 'paragraph' %}
 {% set lang = chapter.language or 'python' %}
 {% set mode_map = {
@@ -59,6 +60,9 @@
       {% elif is_media %}
         <input type="hidden" name="language" value="">
         <div class="muted">URL-based media</div>
+      {% elif is_table %}
+        <input type="hidden" name="language" value="">
+        <div class="muted">CSV-like table. First row is headers.</div>
       {% else %}
         <input type="hidden" name="language" value="{{ chapter.language or '' }}">
         <div class="muted">Plain text block</div>
@@ -103,7 +107,7 @@
                 class="chapter-content-input"
                 style="{% if is_code %}display: none;{% endif %}"
                 autofocus
-                placeholder="{% if is_code %}add code{% elif is_math %}add formula{% else %}add text{% endif %}">{{ chapter.content }}</textarea>
+                placeholder="{% if is_code %}add code{% elif is_math %}add formula{% elif is_table %}add CSV-like rows (first row headers){% else %}add text{% endif %}">{{ chapter.content }}</textarea>
     </div>
     {% endif %}
 

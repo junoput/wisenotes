@@ -12,6 +12,12 @@ templates = Jinja2Templates(directory="app/templates")
 router = APIRouter(prefix="/api")
 
 
+@router.get("/health")
+async def health_check():
+    """Health check endpoint for container orchestration"""
+    return {"status": "ok"}
+
+
 @router.get("/notes")
 async def list_notes(service: NoteService = Depends(get_note_service)):
     return service.list_notes()

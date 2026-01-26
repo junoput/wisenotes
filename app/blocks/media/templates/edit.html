@@ -1,0 +1,30 @@
+{# Edit template for media blocks #}
+<input type="hidden" name="language" value="">
+
+<div class="field">
+  <label for="title-{{ chapter.id }}">Title / Caption</label>
+  <input type="text" id="title-media-{{ chapter.id }}" name="title" value="{{ chapter.title }}" placeholder="Image caption (optional)">
+</div>
+
+<div class="field">
+  <label for="source-media-{{ chapter.id }}">Source / Credit</label>
+  <input type="text" id="source-media-{{ chapter.id }}" name="source" value="{{ chapter.source or '' }}" placeholder="Image source or credit">
+</div>
+
+<div class="field">
+  {% if chapter.content %}
+    <label>Image Preview</label>
+    <div id="media-preview-{{ chapter.id }}" style="width: fit-content; background: transparent; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: visible; margin-bottom: 8px;">
+      <img src="{{ chapter.content }}" alt="preview" style="width: auto; height: auto; max-width: 100%; max-height: 400px; object-fit: contain;">
+    </div>
+  {% endif %}
+  <input type="hidden" id="content-{{ chapter.id }}" name="content_text" value="{{ chapter.content or '' }}">
+  <div id="media-picker-container-{{ chapter.id }}"
+       hx-get="/notes/{{ note_id }}/chapters/{{ chapter.id }}/media/picker"
+       hx-trigger="load"
+       hx-target="#media-picker-container-{{ chapter.id }}"
+       hx-swap="innerHTML"
+       style="margin-top: 8px;">
+    <div style="padding: 12px; background: #f0f0f0; border-radius: 4px; text-align: center; color: #666;">Loading media gallery...</div>
+  </div>
+</div>

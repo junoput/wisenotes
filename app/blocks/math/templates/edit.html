@@ -1,0 +1,19 @@
+{# Edit template for math blocks #}
+{% set lang = chapter.language or 'latex' %}
+
+<div class="field">
+  <select id="language-{{ chapter.id }}" name="language">
+    <option value="latex" {{ 'selected' if lang == 'latex' else '' }}>LaTeX</option>
+    <option value="asciimath" {{ 'selected' if lang == 'asciimath' else '' }}>AsciiMath</option>
+  </select>
+</div>
+
+<div class="field">
+  <textarea id="content-{{ chapter.id }}"
+            name="content_text"
+            rows="14"
+            data-editor-target
+            class="chapter-content-input"
+            autofocus
+            placeholder="add formula">{{ chapter.content }}</textarea>
+</div>

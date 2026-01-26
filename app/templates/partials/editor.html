@@ -23,7 +23,7 @@
     <div class="chapters-display">
       {% if active.chapters %}
         {% import "components/editor_chapters.html" as editor_chapters %}
-        {{ editor_chapters.render_editor_chapters(active.chapters, active, parent_id=None, depth=0) }}
+        {{ editor_chapters.render_editor_chapters(active.chapters, active, block_types, parent_id=None, depth=0) }}
       {% else %}
         <div class="empty">No chapters yet. Click "+ Chapter" above to add one.</div>
       {% endif %}

@@ -1,0 +1,6 @@
+{# Display template for code blocks #}
+<div class="block-content code-block-display" 
+     data-language="{{ chapter.language or 'python' }}"
+     data-chapter-id="{{ chapter.id }}">
+  <textarea class="code-block-textarea" style="display:none;">{{ chapter.content }}</textarea>
+</div>

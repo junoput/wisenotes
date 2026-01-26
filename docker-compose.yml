@@ -6,4 +6,16 @@ services:
     environment:
       - WISENOTES_DATA_DIR=/data
     volumes:
-      - ./data:/data
+      - wisenotes_data:/data
+    restart: unless-stopped
+    healthcheck:
+      # python:3.12-slim doesn't include curl; use urllib to keep healthchecks working.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  wisenotes_data:
+    driver: local

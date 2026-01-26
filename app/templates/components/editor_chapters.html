@@ -1,5 +1,5 @@
 {% from 'components/add_block_button.html' import add_block_button %}
-{% macro render_editor_chapters(chapters, active_note, parent_id=none, depth=0) %}
+{% macro render_editor_chapters(chapters, active_note, block_types, parent_id=none, depth=0) %}
   {% set level_chapters = chapters|selectattr('parent_id', 'equalto', parent_id)|list %}
   {% set siblings = level_chapters|sort(attribute='order') %}
   {% if siblings|length > 0 %}
@@ -52,12 +52,12 @@
          data-order="{{ chapter.order }}"
          data-note-id="{{ active_note.id }}">
       <!-- Floating plus icon for adding blocks below (on section bottom edge) -->
-      {{ add_block_button(active_note.id, chapter.id, 'after', False, 'Add block below') }}
+      {{ add_block_button(active_note.id, chapter.id, 'after', False, 'Add block below', block_types) }}
       <div class="drag-handle" title="Drag to reorder"></div>
       <div class="chapter-content-wrapper">
         {# For chapter-type blocks only: add child button on wrapper bottom edge #}
         {% if chapter.type == 'chapter' %}
-          {{ add_block_button(active_note.id, chapter.id, 'child', True, 'Add child block') }}
+          {{ add_block_button(active_note.id, chapter.id, 'child', True, 'Add child block', block_types) }}
         {% endif %}
         <div class="chapter-view chapter-click" 
              data-note-id="{{ active_note.id }}"
@@ -115,7 +115,7 @@
       {% endif %}
       {% if depth < 3 and chapters|selectattr('parent_id', 'equalto', chapter.id)|list %}
         <div class="chapter-children">
-          {{ render_editor_chapters(chapters, active_note, chapter.id, depth + 1) }}
+          {{ render_editor_chapters(chapters, active_note, block_types, chapter.id, depth + 1) }}
         </div>
       {% endif %}
     </section>

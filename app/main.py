@@ -6,6 +6,7 @@ import os
 import base64
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -22,7 +23,12 @@ async def set_security_headers(request: Request, call_next):  # type: ignore[ove
     raw = os.urandom(16)
     nonce = base64.b64encode(raw).decode('ascii')
     request.state.csp_nonce = nonce
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        # Ensure exceptions are visible in logs (some browsers report only a generic 500)
+        logging.exception("Unhandled error handling %s %s", request.method, request.url.path)
+        return PlainTextResponse("Internal Server Error", status_code=500)
     
     # Ensure JavaScript files have correct Content-Type (critical for ES modules)
     if request.url.path.endswith('.js'):
@@ -61,10 +67,11 @@ app.add_middleware(
 static_path = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 
-app.include_router(pages.router)
-app.include_router(api.router)
-
 
 @app.get("/health", response_class=HTMLResponse)
 async def health():
     return "ok"
+
+
+app.include_router(pages.router)
+app.include_router(api.router)

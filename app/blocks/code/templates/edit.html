@@ -1,0 +1,31 @@
+{# Edit template for code blocks #}
+{% set lang = chapter.language or 'python' %}
+{% set mode_map = {
+  'python': 'python',
+  'javascript': 'javascript',
+  'typescript': 'javascript',
+  'go': 'go',
+  'rust': 'rust',
+  'java': 'clike'
+} %}
+
+<div class="field">
+  <select id="language-{{ chapter.id }}" name="language" aria-label="Language">
+    <option value="python" {{ 'selected' if lang == 'python' else '' }}>Python</option>
+    <option value="javascript" {{ 'selected' if lang == 'javascript' else '' }}>JavaScript</option>
+    <option value="typescript" {{ 'selected' if lang == 'typescript' else '' }}>TypeScript</option>
+    <option value="java" {{ 'selected' if lang == 'java' else '' }}>Java</option>
+    <option value="go" {{ 'selected' if lang == 'go' else '' }}>Go</option>
+    <option value="rust" {{ 'selected' if lang == 'rust' else '' }}>Rust</option>
+  </select>
+</div>
+
+<div class="field">
+  <textarea id="content-{{ chapter.id }}"
+            name="content_text"
+            rows="14"
+            data-editor-target
+            class="chapter-content-input"
+            style="display: none;"
+            placeholder="add code">{{ chapter.content }}</textarea>
+</div>

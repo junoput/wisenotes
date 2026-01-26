@@ -1,0 +1,12 @@
+{# Edit template for paragraph blocks #}
+<input type="hidden" name="language" value="{{ chapter.language or '' }}">
+
+<div class="field">
+  <textarea id="content-{{ chapter.id }}"
+            name="content_text"
+            rows="14"
+            data-editor-target
+            class="chapter-content-input"
+            autofocus
+            placeholder="add text">{{ chapter.content }}</textarea>
+</div>

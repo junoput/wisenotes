@@ -1,59 +1,18 @@
-{% macro add_block_button(note_id, chapter_id, mode='after', header=False, title='Add') -%}
+{% macro add_block_button(note_id, chapter_id, mode='after', header=False, title='Add', block_types={}) -%}
 <div class="add-button-wrap" data-add-mode="{{ mode }}">
 	<div class="add-block-menu css-only" aria-hidden="true">
-		{% if mode == 'child' %}
-			<form hx-post="/notes/{{ note_id }}/chapters/child" hx-target="body" hx-swap="none">
-				<input type="hidden" name="parent_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="chapter">
-				<button type="submit" title="Add chapter" data-type="chapter">📄</button>
+		{% set endpoint = "/notes/" ~ note_id ~ ("/chapters/child" if mode == 'child' else "/chapters/after") %}
+		{% set hidden_field = "parent_id" if mode == 'child' else "prev_id" %}
+		{% set hidden_value = chapter_id %}
+		{% for name, config in block_types.items() %}
+			{% if config.show_in_picker %}
+			<form hx-post="{{ endpoint }}" hx-target="body" hx-swap="none">
+				<input type="hidden" name="{{ hidden_field }}" value="{{ hidden_value }}">
+				<input type="hidden" name="block_type" value="{{ name }}">
+				<button type="submit" title="Add {{ config.name }}" data-type="{{ name }}" style="background-color: {{ config.color }};">{{ config.emoji }}</button>
 			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/child" hx-target="body" hx-swap="none">
-				<input type="hidden" name="parent_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="paragraph">
-				<button type="submit" title="Add paragraph" data-type="paragraph">¶</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/child" hx-target="body" hx-swap="none">
-				<input type="hidden" name="parent_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="code">
-				<button type="submit" title="Add code" data-type="code">{}</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/child" hx-target="body" hx-swap="none">
-				<input type="hidden" name="parent_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="math">
-				<button type="submit" title="Add math" data-type="math">∑</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/child" hx-target="body" hx-swap="none">
-				<input type="hidden" name="parent_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="media">
-				<button type="submit" title="Add media" data-type="media">🖼</button>
-			</form>
-		{% else %}
-			<form hx-post="/notes/{{ note_id }}/chapters/after" hx-target="body" hx-swap="none">
-				<input type="hidden" name="prev_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="chapter">
-				<button type="submit" title="Add chapter" data-type="chapter">📄</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/after" hx-target="body" hx-swap="none">
-				<input type="hidden" name="prev_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="paragraph">
-				<button type="submit" title="Add paragraph" data-type="paragraph">¶</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/after" hx-target="body" hx-swap="none">
-				<input type="hidden" name="prev_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="code">
-				<button type="submit" title="Add code" data-type="code">{}</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/after" hx-target="body" hx-swap="none">
-				<input type="hidden" name="prev_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="math">
-				<button type="submit" title="Add math" data-type="math">∑</button>
-			</form>
-			<form hx-post="/notes/{{ note_id }}/chapters/after" hx-target="body" hx-swap="none">
-				<input type="hidden" name="prev_id" value="{{ chapter_id }}">
-				<input type="hidden" name="block_type" value="media">
-				<button type="submit" title="Add media" data-type="media">🖼</button>
-			</form>
-		{% endif %}
+			{% endif %}
+		{% endfor %}
 	</div>
 	<button class="add-block-icon{% if header %} header{% endif %}" title="{{ title }}" aria-haspopup="true" aria-expanded="false">+</button>
 </div>
