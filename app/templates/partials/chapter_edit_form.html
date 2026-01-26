@@ -15,7 +15,7 @@
 } %}
 
 <div class="chapter-edit-mode"
-     data-editor="{{ 'codemirror' if is_code else 'textarea' }}"
+     data-editor="{{ 'code-block' if is_code else 'textarea' }}"
      data-chapter-type="{{ block_type }}"
      data-note-id="{{ note.id }}"
      {% if is_code %}data-codemirror-mode="{{ mode_map.get(lang, 'javascript') }}" data-language="{{ lang }}"{% endif %}>

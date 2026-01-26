@@ -169,8 +169,19 @@ window.addEventListener('keydown', (e) => {
 async function loadEditorClass(editorType) {
   switch (editorType) {
     case 'codemirror': {
+      // Legacy fallback - JSON editor still uses generic CodeMirror
       const { CodeMirrorEditor } = await import('./editors/codemirror-editor.js');
       return CodeMirrorEditor;
+    }
+    case 'code-block': {
+      // Code blocks use their own self-contained editor
+      // The module is already loaded via block's js_modules, check registry
+      if (window.editorRegistry && window.editorRegistry['code-block']) {
+        return window.editorRegistry['code-block'];
+      }
+      // Fallback: dynamically import if not registered
+      const { CodeBlockEditor } = await import('/static/blocks/code/code-block-editor.js');
+      return CodeBlockEditor;
     }
     case 'textarea':
     default: {
@@ -843,25 +854,34 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.body.addEventListener('htmx:afterSwap', async () => {
+    console.log('[htmx:afterSwap] Event fired');
     document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
     applyCollapsedStateFromStorage();
 
     // Initialize editor for chapter edit form
     const editForm = document.querySelector('.chapter-edit-mode');
+    console.log('[htmx:afterSwap] editForm found:', editForm);
     const hasTextarea = editForm?.querySelector('textarea');
+    console.log('[htmx:afterSwap] hasTextarea:', hasTextarea);
     const editorType = editForm?.dataset.editor || 'textarea';
+    console.log('[htmx:afterSwap] editorType:', editorType);
     
     // Skip editor initialization if no textarea (e.g., for chapter blocks)
     if (editForm && hasTextarea) {
+      console.log('[htmx:afterSwap] Starting editor initialization...');
       const editorOptions = {
         mode: editForm.dataset.codemirrorMode,
       };
+      console.log('[htmx:afterSwap] editorOptions:', editorOptions);
       
       try {
-
+        console.log('[editor] Initializing editor:', { editorType, hasTextarea, editForm });
         const EditorClass = await loadEditorClass(editorType);
+        console.log('[editor] EditorClass loaded:', EditorClass);
         const editor = new EditorClass(editForm, editorOptions);
+        console.log('[editor] Editor instance created, mounting...');
         await editor.mount();
+        console.log('[editor] Editor mounted successfully');
         // Attach editor instance to the container so it's tied to that element's lifecycle
         editForm._editorInstance = editor;
 
@@ -887,7 +907,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Listen for language changes in code editors
         const languageSelect = editForm.querySelector('select[name="language"]');
-        if (languageSelect && editorType === 'codemirror') {
+        if (languageSelect && (editorType === 'codemirror' || editorType === 'code-block')) {
           languageSelect.addEventListener('change', async (e) => {
             const newLang = e.target.value;
             const modeMap = {
@@ -941,7 +961,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Click-outside auto-save removed per request; rely on explicit Save/Cancel.
       } catch (err) {
-        console.error('Failed to initialize editor:', err);
+        console.error('[editor] Failed to initialize editor:', err);
+        console.error('[editor] Stack trace:', err.stack);
       }
     }
 

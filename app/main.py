@@ -64,6 +64,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# These must be mounted BEFORE the main /static mount to take precedence
+# Mount each block's static directory
+code_static_path = Path(__file__).parent / "blocks" / "code" / "static"
+if code_static_path.exists():
+    app.mount("/static/blocks/code", StaticFiles(directory=code_static_path), name="code-block-static")
+# Mount main static directory (must be last to avoid shadowing block mounts)
 static_path = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 

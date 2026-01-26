@@ -18,7 +18,7 @@ class CodeBlock(BaseBlock):
     can_nest: bool = False
     is_container: bool = False
 
-    editor: str = "codemirror"
+    editor: str = "code-block"  # Use custom code-block editor
     default_language: str | None = "python"
     language_options: list[str] = field(default_factory=lambda: [
         "python",
@@ -32,13 +32,11 @@ class CodeBlock(BaseBlock):
     display_template: str = "display.html"
     edit_template: str = "edit.html"
 
+    # Load the code block's self-contained CodeMirror editor
     js_modules: list[str] = field(default_factory=lambda: [
-        "/static/vendor/codemirror/codemirror.js",
+        "/static/blocks/code/code-block-editor.js",
     ])
-    css_modules: list[str] = field(default_factory=lambda: [
-        "/static/vendor/codemirror/codemirror.css",
-        "/static/vendor/codemirror/dracula.css",
-    ])
+    css_modules: list[str] = field(default_factory=list)
 
     # CodeMirror mode mapping
     mode_map: dict[str, str] = field(default_factory=lambda: {
