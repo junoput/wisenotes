@@ -8,6 +8,46 @@
     cursor: pointer;
   }
   
+  .media-delete-btn {
+    --media-delete-bg: rgba(220, 38, 38, 0.9);
+    --media-delete-bg-hover: rgba(220, 38, 38, 1);
+    --media-delete-color: #fff;
+    --media-delete-border: 1px solid rgba(255, 255, 255, 0.12);
+    --media-delete-size: 22px;
+    --media-delete-radius: 4px;
+    --media-delete-icon: "\00d7";
+
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: var(--media-delete-size);
+    height: var(--media-delete-size);
+    background: var(--media-delete-bg);
+    border: var(--media-delete-border);
+    border-radius: var(--media-delete-radius);
+    color: var(--media-delete-color);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+    z-index: 10;
+    padding: 0;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  }
+  
+  .media-gallery-thumb:hover .media-delete-btn {
+    opacity: 1;
+  }
+  
+  .media-delete-btn:hover {
+    background: var(--media-delete-bg-hover);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  
   .media-gallery-thumb img {
     width: 100%;
     aspect-ratio: 1;
@@ -62,6 +102,12 @@
 {% if media_files %}
   {% for filename in media_files %}
     <div class="media-gallery-thumb">
+      <button 
+        class="media-delete-btn"
+        onclick="deleteMedia(event, '{{ note_id }}', '{{ filename }}', '{{ chapter_id }}')"
+        title="Delete {{ filename }}">
+        ×
+      </button>
       <img src="/api/notes/{{ note_id }}/media/{{ filename }}" 
            alt="{{ filename }}"
            title="{{ filename }}"
@@ -79,3 +125,5 @@
 {% else %}
   <p style="grid-column: 1 / -1; color: #999; text-align: center;">No media uploaded yet</p>
 {% endif %}
+
+<script type="module" src="/static/js/media-delete.js"></script>

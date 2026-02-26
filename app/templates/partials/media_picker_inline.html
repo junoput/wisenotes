@@ -10,8 +10,8 @@
     </form>
   </div>
 
-  <div id="media-gallery-{{ chapter_id }}" 
-       style="display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; min-height: 120px;">
+    <div id="media-gallery-{{ chapter_id }}" 
+      style="display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; min-height: 120px; max-height: 260px; overflow-y: auto; overflow-x: hidden; width: 100%; box-sizing: border-box;">
     {% include "partials/media_gallery.html" %}
   </div>
 </div>
