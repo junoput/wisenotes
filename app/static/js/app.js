@@ -129,6 +129,30 @@ document.body.addEventListener('htmx:afterSwap', (e) => {
   }
 });
 
+// Update layout class based on whether a note is open
+function updateLayoutNoNoteClass() {
+  try {
+    const layout = document.querySelector('.layout');
+    const editor = document.getElementById('editor');
+    if (layout && editor) {
+      const hasActiveNote = editor.hasAttribute('data-note-id');
+      if (hasActiveNote) {
+        layout.classList.remove('no-note-open');
+      } else {
+        layout.classList.add('no-note-open');
+      }
+    }
+  } catch (err) {
+    console.warn('updateLayoutNoNoteClass error', err);
+  }
+}
+
+// Update on page load
+document.addEventListener('DOMContentLoaded', updateLayoutNoNoteClass);
+
+// Update after any HTMX swap
+document.body.addEventListener('htmx:afterSwap', updateLayoutNoNoteClass);
+
 // When Enter is pressed on a focused note item, trigger its click (hx-get)
 window.addEventListener('keydown', (e) => {
   try {
@@ -760,15 +784,19 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   function applyCollapsedStateFromStorage() {
+    const isNarrow = window.matchMedia('(max-width: 960px)').matches;
     Object.keys(paneKeys).forEach((paneId) => {
-      const collapsed = localStorage.getItem(`pane:${paneId}:collapsed`) === '1';
+      // In narrow mode, notes list starts collapsed
+      const collapsed = isNarrow && paneId === 'note-list'
+        ? true
+        : localStorage.getItem(`pane:${paneId}:collapsed`) === '1';
       const el = document.getElementById(paneId);
       if (!el) return;
       el.classList.toggle('collapsed', collapsed);
       const content = el.querySelector('.pane-content');
       if (content) content.style.display = collapsed ? 'none' : '';
       const colVar = paneKeys[paneId];
-      if (colVar) {
+      if (colVar && !isNarrow) {
         root.style.setProperty(colVar, collapsed ? '48px' : '260px');
       }
     });
@@ -786,6 +814,94 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize add block handlers
     // CSS-only add button module active; no JS initialization required
 
+  // Dropdown positioning for narrow mode
+  function updateDropdownPosition() {
+    const noteList = document.getElementById('note-list');
+    const header = document.querySelector('.pane.editor .pane-header');
+    const layout = document.querySelector('.layout');
+    
+    if (!noteList || !header) return;
+    
+    // Don't position dropdown when no note is open (centered card mode)
+    if (layout && layout.classList.contains('no-note-open')) {
+      noteList.style.top = '';
+      return;
+    }
+    
+    const isNarrow = window.matchMedia('(max-width: 960px)').matches;
+    if (!isNarrow) {
+      noteList.style.top = '';
+      return;
+    }
+    
+    // Position dropdown below the sticky header
+    const headerRect = header.getBoundingClientRect();
+    noteList.style.top = `${headerRect.bottom}px`;
+  }
+
+  // Sticky header detection for editor pane
+  function initStickyHeader() {
+    const editorPane = document.querySelector('.pane.editor');
+    if (!editorPane) return;
+    
+    const header = editorPane.querySelector('.pane-header');
+    if (!header) return;
+
+    // Create a sentinel element just above the header
+    const sentinel = document.createElement('div');
+    sentinel.style.position = 'absolute';
+    sentinel.style.top = '0';
+    sentinel.style.height = '1px';
+    sentinel.style.width = '1px';
+    sentinel.style.pointerEvents = 'none';
+    editorPane.style.position = 'relative';
+    editorPane.insertBefore(sentinel, header);
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        header.classList.toggle('stuck', !entry.isIntersecting);
+        updateDropdownPosition();
+      },
+      { threshold: [0], rootMargin: '0px' }
+    );
+
+    observer.observe(sentinel);
+  }
+
+  // Update dropdown position on scroll
+  let scrollTicking = false;
+  window.addEventListener('scroll', () => {
+    if (!scrollTicking) {
+      requestAnimationFrame(() => {
+        updateDropdownPosition();
+        scrollTicking = false;
+      });
+      scrollTicking = true;
+    }
+  }, { passive: true });
+  
+  window.addEventListener('resize', updateDropdownPosition);
+  window.addEventListener('load', updateDropdownPosition);
+
+  initStickyHeader();
+  // Initial dropdown position (wait for DOM to settle)
+  setTimeout(updateDropdownPosition, 200);
+
+  // Re-initialize sticky header after HTMX swaps
+  document.body.addEventListener('htmx:afterSwap', (e) => {
+    if (e.detail.target.id === 'editor' || e.detail.target.closest('#editor')) {
+      setTimeout(() => {
+        initStickyHeader();
+        updateDropdownPosition();
+      }, 50);
+    }
+  });
+
+  // Update position after any HTMX request completes
+  document.body.addEventListener('htmx:afterOnLoad', () => {
+    setTimeout(updateDropdownPosition, 50);
+  });
+
   document.body.addEventListener('click', (e) => {
     const target = e.target.closest('[data-toggle-pane]');
     if (!target) return;
@@ -795,14 +911,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const content = el.querySelector('.pane-content');
     const colVar = el.getAttribute('data-col-var');
+    const isNarrow = window.matchMedia('(max-width: 960px)').matches;
 
     const collapsed = el.classList.toggle('collapsed');
     if (content) content.style.display = collapsed ? 'none' : '';
-    if (colVar) {
+    if (colVar && !isNarrow) {
       root.style.setProperty(colVar, collapsed ? '48px' : '260px');
     }
-    // Save state
-    localStorage.setItem(`pane:${paneId}:collapsed`, collapsed ? '1' : '0');
+    // Update toggle button state (for narrow mode dropdown indicator)
+    if (isNarrow && paneId === 'note-list') {
+      target.classList.toggle('pane-open', !collapsed);
+      // Toggle body class to show/hide add note button
+      document.body.classList.toggle('notes-dropdown-open', !collapsed);
+      // Update dropdown position after toggle
+      setTimeout(updateDropdownPosition, 10);
+    }
+    // Only persist in wide mode — narrow always starts collapsed
+    if (!isNarrow) {
+      localStorage.setItem(`pane:${paneId}:collapsed`, collapsed ? '1' : '0');
+    }
+  });
+
+  // In narrow mode, auto-collapse note list when a note is selected
+  document.body.addEventListener('click', (e) => {
+    const isNarrow = window.matchMedia('(max-width: 960px)').matches;
+    if (!isNarrow) return;
+    const item = e.target.closest('#note-list .item');
+    if (!item) return;
+    // Small delay to let HTMX fire first
+    setTimeout(() => {
+      const noteList = document.getElementById('note-list');
+      if (noteList && !noteList.classList.contains('collapsed')) {
+        noteList.classList.add('collapsed');
+        const content = noteList.querySelector('.pane-content');
+        if (content) content.style.display = 'none';
+        // Reset toggle button arrow direction and body class
+        const toggleBtn = document.querySelector('.narrow-notes-toggle');
+        if (toggleBtn) toggleBtn.classList.remove('pane-open');
+        document.body.classList.remove('notes-dropdown-open');
+      }
+    }, 150);
   });
 
   // Handle Enter key in chapter edit forms

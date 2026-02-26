@@ -90,19 +90,31 @@ async def upload_media(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     
-    settings = get_settings()
     content = await file.read()
     
     # Max 10MB per file
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
     
-    # Save to media folder
-    relative_path = service.repo.save_media(note.name, file.filename, content)
+    # Process image (resize, reformat, rename)
+    from app.services.image_processing import process_uploaded_image
+    new_filename, processed_content, metadata = process_uploaded_image(
+        file.filename, content
+    )
+    
+    # Save processed media
+    relative_path = service.save_media_file(note_id, new_filename, processed_content)
+    if relative_path is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    # Persist media metadata in note JSON
+    service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
     
     return JSONResponse({
-        "filename": file.filename,
-        "path": relative_path
+        "filename": new_filename,
+        "original_filename": file.filename,
+        "path": relative_path,
+        "metadata": metadata.to_dict(),
     })
 
 

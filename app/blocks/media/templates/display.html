@@ -6,8 +6,12 @@
       <p style="margin-top: 8px; font-size: 0.9em; color: #666;">{{ chapter.title }}</p>
     {% endif %}
   {% else %}
-    <div style="padding: 20px; text-align: center; background: #f0f0f0; border-radius: 4px; color: #999;">
-      No image added
+    <div class="media-drop-zone"
+         data-note-id="{{ note_id }}"
+         data-chapter-id="{{ chapter.id }}">
+      <div class="media-drop-zone-icon">&#128247;</div>
+      <div class="media-drop-zone-text">Drop an image here</div>
+      <div class="media-drop-zone-hint">or click to edit and upload</div>
     </div>
   {% endif %}
 </div>

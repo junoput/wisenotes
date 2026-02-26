@@ -57,6 +57,7 @@
   --color-paragraph: #64748b;
   --color-code: #f59e0b;
   --color-math: #a78bfa;
+  --topbar-height: 52px;
 }
 
 * { box-sizing: border-box; }
@@ -373,7 +374,8 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 8px 14px;
+  min-height: var(--topbar-height);
   border-bottom: 1px solid var(--border);
   background: #0b1220;
 }
@@ -392,16 +394,97 @@ a { color: var(--accent); }
 }
 .toolbar-select:disabled { opacity: 0.6; cursor: not-allowed; }
 
+/* ==========================================================================
+   LAYOUT: Two-pane grid (default — note is open, wide screen)
+   ========================================================================== */
+
 .layout {
   display: grid;
   grid-template-columns: var(--notes-col, 260px) 1fr;
-  min-height: calc(100vh - 60px);
+  min-height: calc(100vh - var(--topbar-height));
+  align-items: start;
 }
+
+/* ==========================================================================
+   LAYOUT: No note open — centered card (all screen sizes)
+   ========================================================================== */
+
+.layout.no-note-open {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: calc(100vh - var(--topbar-height));
+  padding: 40px 20px;
+}
+
+.layout.no-note-open #note-list {
+  position: static;
+  height: auto;
+  max-height: calc(100vh - var(--topbar-height) - 80px);
+  max-width: 600px;
+  width: 100%;
+  border-right: none;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: block;
+  overflow-y: visible;
+  /* Reset any narrow-mode dropdown styles */
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  box-shadow: none;
+}
+
+.layout.no-note-open #note-list .pane-content {
+  overflow-y: auto;
+  max-height: calc(100vh - var(--topbar-height) - 140px);
+  display: block !important;  /* Override inline display:none from collapsed JS */
+}
+
+.layout.no-note-open #note-list .pane-header {
+  margin-bottom: 12px;
+}
+
+.layout.no-note-open #note-list .pane-actions {
+  display: flex !important;  /* Always show + button */
+}
+
+.layout.no-note-open #note-list .pane-title,
+.layout.no-note-open #note-list .note-list,
+.layout.no-note-open #note-list .chapter-list,
+.layout.no-note-open #note-list form.add-note-form {
+  display: block !important;  /* Override collapsed hiding */
+}
+
+.layout.no-note-open #note-list.collapsed {
+  padding: 16px;
+  overflow: visible;
+}
+
+.layout.no-note-open #editor {
+  display: none;
+}
+
+.layout.no-note-open .sidebar-toggle-btn {
+  display: none;
+}
+
+/* ==========================================================================
+   PANES: Base styles
+   ========================================================================== */
 
 .pane {
   padding: 16px;
   border-right: 1px solid var(--border);
   background: var(--panel);
+}
+
+/* Keep the lateral notes sidebar fixed while the note content scrolls */
+#note-list {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .pane.collapsed {
@@ -416,9 +499,46 @@ a { color: var(--accent); }
 .pane.collapsed .pane-actions { gap: 0; }
 .pane.collapsed .icon-btn { width: 32px; height: 32px; }
 
+/* Sidebar toggle button rotation animation */
+.sidebar-toggle-btn {
+  transition: transform 0.2s ease;
+}
+
+#note-list.collapsed .sidebar-toggle-btn {
+  transform: rotate(180deg);
+}
+
 .pane.editor { border-right: none; }
 
 .pane-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+
+/* Sticky header for editor pane */
+.pane.editor .pane-header {
+  position: sticky;
+  top: 0;
+  z-index: 500;
+  background: var(--panel);
+  padding: 12px 0;
+  margin: -16px -16px 12px -16px;
+  padding: 12px 16px;
+  transition: padding 0.2s ease, min-height 0.2s ease;
+}
+
+/* Shrink the editor header when it sticks to match toolbar height */
+.pane.editor .pane-header.stuck {
+  min-height: var(--topbar-height);
+  padding: 8px 16px;
+}
+
+.pane.editor .pane-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  transition: font-size 0.2s ease;
+}
+
+.pane.editor .pane-header.stuck h2 {
+  font-size: 1rem;
+}
 .pane-title { font-weight: 700; letter-spacing: 0.01em; }
 .pane-actions { display: flex; gap: 6px; align-items: center; }
 .icon-btn {
@@ -438,7 +558,259 @@ a { color: var(--accent); }
 .icon-btn:hover { border-color: var(--accent); }
 
 .note-list { display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; }
-.item { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; cursor: pointer; transition: border-color 0.2s, transform 0.1s; }
+
+/* Note folder grouping */
+.note-folder-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.note-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.note-folder-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.note-folder-icon {
+  font-size: 8px;
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+.note-folder-group.folder-collapsed .note-folder-icon {
+  transform: rotate(-90deg);
+}
+.note-folder-count {
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.note-folder-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-left: 8px;
+  transition: max-height 0.25s ease;
+}
+.note-folder-group.folder-collapsed .note-folder-items {
+  display: none;
+}
+
+/* Media drop zone for empty media blocks */
+.media-drop-zone {
+  padding: 32px 20px;
+  text-align: center;
+  background: #0d1526;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.media-drop-zone:hover,
+.media-drop-zone.drag-over {
+  border-color: var(--accent);
+  background: #111d33;
+}
+.media-drop-zone-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+.media-drop-zone-text {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.media-drop-zone-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Media edit button (top-right of preview) */
+.media-edit-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(30, 41, 59, 0.9);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease;
+  z-index: 10;
+  padding: 0;
+}
+#media-preview-container:hover .media-edit-btn,
+div[id^="media-preview-"]:hover .media-edit-btn {
+  opacity: 1;
+}
+.media-edit-btn:hover {
+  background: rgba(34, 211, 238, 0.3);
+  border-color: var(--accent);
+}
+
+/* Image editor overlay */
+.image-editor-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.image-editor-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2001;
+}
+.image-editor-close:hover {
+  border-color: var(--accent);
+}
+.image-editor-canvas-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px 20px;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+.image-editor-canvas-area canvas {
+  max-width: 90vw;
+  max-height: calc(100vh - 200px);
+  border-radius: 4px;
+  background: repeating-conic-gradient(#333 0% 25%, #222 0% 50%) 50% / 20px 20px;
+}
+.image-editor-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
+  background: #111827;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.image-editor-tool {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.image-editor-tool:hover {
+  border-color: var(--accent);
+}
+.image-editor-tool.active {
+  border-color: var(--accent);
+  background: rgba(34, 211, 238, 0.15);
+}
+.image-editor-tool-icon {
+  font-size: 16px;
+}
+/* Crop handles */
+.crop-overlay {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  cursor: move;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+}
+.crop-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+/* Color correction panel */
+.image-editor-panel {
+  display: flex;
+  gap: 16px;
+  padding: 8px 20px;
+  background: #0f172a;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.image-editor-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  min-width: 100px;
+}
+.image-editor-slider label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.image-editor-slider input[type="range"] {
+  width: 120px;
+  accent-color: var(--accent);
+}
+.image-editor-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 20px;
+  justify-content: center;
+}
+.item { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; cursor: pointer; transition: border-color 0.2s, transform 0.1s; margin: 6px 0; }
 .item:hover { border-color: var(--accent); transform: translateY(-1px); }
 .item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .item-title { font-weight: 600; }
@@ -1375,7 +1747,76 @@ body.add-expanded .add-block-icon {
   color: var(--danger);
 }
 
+/* Dropdown toggle button in pane header (hidden on wide, shown on narrow) */
+.narrow-notes-toggle {
+  display: none;
+  transition: transform 0.2s ease;
+}
+
+/* Rotate chevron up when dropdown is open */
+.narrow-notes-toggle.pane-open {
+  transform: rotate(180deg);
+}
+
+/* Add note button next to toggle (hidden by default) */
+.narrow-add-note-form {
+  display: none;
+  margin: 0;
+}
+
+.narrow-add-note-btn {
+  font-size: 20px;
+  line-height: 1;
+}
+
+/* ==========================================================================
+   LAYOUT: Narrow mode (≤960px)
+   ========================================================================== */
+
 @media (max-width: 960px) {
-  .layout { grid-template-columns: 1fr; }
-  .pane { border-right: none; border-bottom: 1px solid var(--border); }
+  .layout {
+    grid-template-columns: 1fr;
+    position: relative;
+  }
+
+  /* --- Narrow + note open: dropdown overlay with slide animation --- */
+  .layout:not(.no-note-open) #note-list {
+    position: fixed;
+    top: var(--topbar-height);
+    left: 0;
+    right: 0;
+    height: auto;
+    max-height: 60vh;
+    z-index: 499;
+    background: var(--panel);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-y: auto;
+    transform: translateY(0);
+    transition: transform 0.25s ease, opacity 0.25s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Collapsed = hidden above viewport */
+  .layout:not(.no-note-open) #note-list.collapsed {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Show the dropdown toggle + add button in narrow mode */
+  .narrow-notes-toggle {
+    display: inline-flex !important;
+  }
+
+  body.notes-dropdown-open .narrow-add-note-form {
+    display: inline-block;
+  }
+
+  /* Hide sidebar header buttons when dropdown is expanded */
+  .layout:not(.no-note-open) #note-list:not(.collapsed) .pane-header .pane-actions {
+    display: none;
+  }
+
+  .pane { border-right: none; }
 }

@@ -1,16 +1,58 @@
 <div class="pane-header">
   <div class="pane-title">Notes</div>
   <div class="pane-actions">
-    <button type="button" class="icon-btn" aria-label="Collapse notes" data-toggle-pane="note-list">&lt;</button>
-    <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none">
+    <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none" class="add-note-form">
       <input type="hidden" name="title" value="Untitled note">
-      <button type="submit" class="icon-btn" aria-label="Add note">+</button>
+      <button type="submit" class="icon-btn add-note-btn" aria-label="Add note">+</button>
     </form>
+    <button type="button" class="icon-btn sidebar-toggle-btn" aria-label="Collapse notes" data-toggle-pane="note-list">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    </button>
   </div>
 </div>
 <div class="pane-content">
   <div class="note-list">
+    {# Group notes by folder #}
+    {% set ns = namespace(folders={}, ungrouped=[]) %}
     {% for note in notes %}
+      {% if note.folder %}
+        {% if note.folder not in ns.folders %}
+          {% set _ = ns.folders.update({note.folder: []}) %}
+        {% endif %}
+        {% set _ = ns.folders[note.folder].append(note) %}
+      {% else %}
+        {% set _ = ns.ungrouped.append(note) %}
+      {% endif %}
+    {% endfor %}
+
+    {# Render folder groups #}
+    {% for folder_name in ns.folders|sort %}
+      <div class="note-folder-group">
+        <button class="note-folder-header" type="button" onclick="this.closest('.note-folder-group').classList.toggle('folder-collapsed')">
+          <span class="note-folder-icon">&#9660;</span>
+          <span class="note-folder-name">{{ folder_name }}</span>
+          <span class="note-folder-count">{{ ns.folders[folder_name]|length }}</span>
+        </button>
+        <div class="note-folder-items">
+          {% for note in ns.folders[folder_name] %}
+            {% set title = note.title %}
+            {% set meta = note.chapters|length ~ ' chapters' %}
+            {% set body = None %}
+            {% set hx_get = '/notes/' ~ note.id %}
+            {% set hx_target = 'body' %}
+            {% set hx_swap = 'none' %}
+            {% set extra_classes = 'active' if active and note.id == active.id else '' %}
+            {% set focus_first = loop.first and loop.parent is not defined %}
+            {% include "components/item.html" %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+
+    {# Render ungrouped notes #}
+    {% for note in ns.ungrouped %}
       {% set title = note.title %}
       {% set meta = note.chapters|length ~ ' chapters' %}
       {% set body = None %}
@@ -18,10 +60,12 @@
       {% set hx_target = 'body' %}
       {% set hx_swap = 'none' %}
       {% set extra_classes = 'active' if active and note.id == active.id else '' %}
-      {% set focus_first = loop.first %}
+      {% set focus_first = loop.first and not ns.folders %}
       {% include "components/item.html" %}
     {% else %}
-      <div class="empty">No notes yet. Create one.</div>
+      {% if not ns.folders %}
+        <div class="empty">No notes yet. Create one.</div>
+      {% endif %}
     {% endfor %}
   </div>
 </div>

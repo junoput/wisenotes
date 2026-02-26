@@ -17,14 +17,15 @@
     console.log('[inline] WISENOTES_ACCESSIBILITY', window.WISENOTES_ACCESSIBILITY);
   </script>
   <script type="module" src="/static/js/app.js?v=16" defer></script>
+  <script src="/static/js/media-drop.js" defer></script>
+  <script src="/static/js/image-editor.js" defer></script>
 </head>
 <body class="page">
   <header class="topbar">
     <div class="brand">Wisenotes</div>
     <nav class="actions">
       <div class="toolbar-control">
-        <label for="editor-mode-select">Editor Mode</label>
-        <select id="editor-mode-select" class="toolbar-select">
+        <select id="editor-mode-select" class="toolbar-select" aria-label="Editor mode">
           <option value="graphical">JSON Editor</option>
           <option value="json">Raw Code</option>
           <option value="graphical-2">Graphical Editor</option>
@@ -45,7 +46,7 @@
       </button>
     </nav>
   </header>
-  <main class="layout">
+  <main class="layout {% if not active %}no-note-open{% endif %}">
     {% block content %}{% endblock %}
   </main>
   <div id="htmx-dummy" style="display:none;"></div>

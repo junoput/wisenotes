@@ -2,6 +2,20 @@
 <div class="pane-header">
   <h2>{{ active.title }}</h2>
   <div class="pane-actions">
+    <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none" class="narrow-add-note-form">
+      <input type="hidden" name="title" value="Untitled note">
+      <button type="submit" class="icon-btn narrow-add-note-btn" aria-label="Add note">+</button>
+    </form>
+    <button
+      class="icon-btn narrow-notes-toggle"
+      aria-label="Open notes list"
+      data-toggle-pane="note-list"
+      title="Notes"
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </button>
     <button
       class="icon-btn settings-btn"
       title="Settings"

@@ -21,6 +21,22 @@
       </div>
 
       <div class="note-settings-section">
+        <strong>Folder</strong>
+        <div class="field" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+          <form hx-post="/notes/{{ note.id }}/folder" hx-target="body" hx-swap="none" style="display:flex; gap:8px; width:100%;">
+            <input name="folder" value="{{ note.folder or '' }}" placeholder="No folder (ungrouped)" style="flex:1; padding:8px; border-radius:6px; border:1px solid var(--border); background:#0b1220; color:var(--text);" list="existing-folders" />
+            <datalist id="existing-folders">
+              {% for f in existing_folders %}
+                <option value="{{ f }}">
+              {% endfor %}
+            </datalist>
+            <button type="submit" class="btn">Save</button>
+          </form>
+        </div>
+        <p class="muted" style="margin-top:4px; font-size:12px;">Group notes by assigning them to a folder. Leave empty to ungroup.</p>
+      </div>
+
+      <div class="note-settings-section">
         <strong>Language</strong>
         <div class="field" style="margin-top:8px;">
           <label for="text-language">Text language for paragraphs</label>

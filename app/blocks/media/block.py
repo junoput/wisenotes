@@ -28,6 +28,10 @@ class MediaBlock(BaseBlock):
     js_modules: list[str] = field(default_factory=list)
     css_modules: list[str] = field(default_factory=list)
 
+    # The media block owns the "media" folder inside each note directory.
+    # Created lazily when a file is first uploaded — never pre-created.
+    data_folder: str | None = "media"
+
 
 # Export singleton instance for registry discovery
 block = MediaBlock()

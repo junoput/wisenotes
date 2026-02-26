@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import uuid4
 
 from app.plugins.registry import PluginRegistry
@@ -20,6 +20,32 @@ class NoteService:
 
     def get_note(self, note_id: str) -> Optional[Note]:
         return self.repo.get_note(note_id)
+
+    def ensure_module_profile_dir(self, module_name: str):
+        """Ensure hidden root-level profile dir for a module (lazy)."""
+        return self.repo.ensure_block_profile_dir(module_name)
+
+    def ensure_note_module_data_dir(self, note_id: str, module_name: str):
+        """Ensure per-note module data dir for a module (lazy)."""
+        note = self.get_note(note_id)
+        if not note:
+            return None
+        return self.repo.ensure_block_note_data_dir(note.name, module_name)
+
+    def save_media_file(self, note_id: str, filename: str, content: bytes) -> Optional[str]:
+        """Save media file into the media block-managed folder. Returns relative path."""
+        note = self.get_note(note_id)
+        if not note:
+            return None
+        return self.repo.save_media(note.name, filename, content)
+
+    def save_module_metadata(self, note_id: str, module_name: str, key: str, payload: dict[str, Any]) -> bool:
+        """Persist module metadata in note JSON."""
+        note = self.get_note(note_id)
+        if not note:
+            return False
+        self.repo.upsert_module_metadata(note.name, module_name, key, payload)
+        return True
 
     def create_note(self, payload: NoteCreate) -> Note:
         now = datetime.utcnow()
@@ -54,6 +80,7 @@ class NoteService:
         updated = existing.model_copy(update={
             "name": new_name,
             "title": self.repo._name_to_title(new_name),  # type: ignore[attr-defined]
+            "folder": payload.folder if payload.folder is not None else existing.folder,
             "tags": payload.tags if payload.tags is not None else existing.tags,
             "chapters": payload.chapters if payload.chapters is not None else existing.chapters,
             "updated_at": datetime.utcnow(),

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from filelock import FileLock
 import logging
@@ -36,14 +36,56 @@ class JsonNoteRepository:
         return self._note_dir(name) / f"{name}.json"
 
     def _media_dir(self, name: str) -> Path:
-        """Get media folder for a note."""
-        return self._note_dir(name) / "media"
+        """Get media folder for a note.
+
+        Uses the media block's ``data_folder`` declaration so the folder
+        name is owned by the block, not hard-coded here.
+        """
+        from app.blocks import get_block
+        media_block = get_block("media")
+        return self._block_note_data_dir(name, media_block.name)
 
     def _ensure_media_dir(self, name: str) -> Path:
-        """Create media folder if it doesn't exist."""
-        media_dir = self._media_dir(name)
-        media_dir.mkdir(parents=True, exist_ok=True)
-        return media_dir
+        """Lazily create media folder via the media block's data management."""
+        from app.blocks import get_block
+        media_block = get_block("media")
+        return self.ensure_block_note_data_dir(name, media_block.name)
+
+    def _block_note_data_dir(self, note_name: str, block_name: str) -> Path:
+        """Return a block-owned per-note data directory without creating it."""
+        from app.blocks import get_block
+
+        block = get_block(block_name)
+        if not block.data_folder:
+            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
+        return block.get_note_data_dir(self._root_dir, note_name)
+
+    def ensure_block_note_data_dir(self, note_name: str, block_name: str) -> Path:
+        """Create and return a block-owned per-note data directory on demand."""
+        from app.blocks import get_block
+
+        block = get_block(block_name)
+        if not block.data_folder:
+            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
+        return block.ensure_note_data_dir(self._root_dir, note_name)
+
+    def get_block_profile_dir(self, block_name: str) -> Path:
+        """Return a block-owned hidden profile directory at the data root."""
+        from app.blocks import get_block
+
+        block = get_block(block_name)
+        if not block.profile_folder:
+            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
+        return block.get_profile_dir(self._root_dir)
+
+    def ensure_block_profile_dir(self, block_name: str) -> Path:
+        """Create and return a block-owned hidden profile directory on demand."""
+        from app.blocks import get_block
+
+        block = get_block(block_name)
+        if not block.profile_folder:
+            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
+        return block.ensure_profile_dir(self._root_dir)
 
     def _maybe_migrate_from_legacy(self) -> None:
         # If no legacy file, nothing to do
@@ -122,6 +164,9 @@ class JsonNoteRepository:
         with self._lock:
             for entry in sorted(self._root_dir.iterdir()):
                 if not entry.is_dir():
+                    continue
+                # Skip hidden profile/dependency folders (e.g. .spice)
+                if entry.name.startswith("."):
                     continue
                 # Look for <name>.json inside folder named <name>
                 nfile = None
@@ -219,11 +264,33 @@ class JsonNoteRepository:
             if old_name and old_name != note.name:
                 old_dir = self._note_dir(old_name)
                 new_dir = self._note_dir(note.name)
+                # Attempt to preserve any existing payload from the old note file
+                existing_payload_from_old: dict[str, Any] = {}
+                try:
+                    old_file = old_dir / f"{old_name}.json"
+                    if old_file.exists():
+                        with old_file.open("r", encoding="utf-8") as f:
+                            existing_payload_from_old = json.load(f)
+                except Exception:
+                    existing_payload_from_old = {}
+
                 if old_dir.exists():
                     if not new_dir.exists():
+                        # Move the whole folder atomically
                         old_dir.rename(new_dir)
+                        # If the moved folder still contains the JSON named with the old name,
+                        # rename it to match the new note name so we don't create duplicate files.
+                        moved_old_file = new_dir / f"{old_name}.json"
+                        moved_new_file = new_dir / f"{note.name}.json"
+                        try:
+                            if moved_old_file.exists() and not moved_new_file.exists():
+                                moved_old_file.replace(moved_new_file)
+                        except Exception:
+                            # Best-effort; if this fails, we'll still write the new file below.
+                            pass
                     else:
-                        # If target exists, fallback to writing into new_dir
+                        # Target exists: attempt to merge media/meta if possible by no-op here.
+                        # We avoid deleting the old folder automatically to be conservative.
                         pass
 
             # Ensure directory exists
@@ -235,6 +302,23 @@ class JsonNoteRepository:
             try:
                 # Validate note structure before writing
                 note_data = json.loads(note.model_dump_json())
+
+                # Preserve module/media metadata payloads stored outside the Note model.
+                # Prefer metadata from the existing target file, but fall back to payload
+                # captured from the old file during a rename operation so we don't lose it.
+                existing_payload: dict[str, Any] = {}
+                if nfile.exists():
+                    try:
+                        with nfile.open("r", encoding="utf-8") as ef:
+                            existing_payload = json.load(ef)
+                    except Exception:
+                        existing_payload = {}
+                elif 'existing_payload_from_old' in locals() and existing_payload_from_old:
+                    existing_payload = existing_payload_from_old
+
+                for key in ("_module_meta", "_media_meta"):
+                    if key in existing_payload and key not in note_data:
+                        note_data[key] = existing_payload[key]
                 
                 # Check for duplicate chapter IDs
                 chapter_ids = [ch["id"] for ch in note_data.get("chapters", [])]
@@ -278,13 +362,11 @@ class JsonNoteRepository:
                     target = self._note_dir(note.name)
                     break
             if target and target.exists():
-                # Remove note.json and folder
+                import shutil
                 try:
-                    nfile = target / f"{target.name}.json"
-                    if nfile.exists():
-                        nfile.unlink()
-                    # Remove folder (should be empty)
-                    target.rmdir()
+                    # Remove the entire note directory including all
+                    # module-owned sub-folders (media, etc.)
+                    shutil.rmtree(target)
                 except Exception:
                     # Best-effort delete: ignore failures
                     pass
@@ -384,4 +466,43 @@ class JsonNoteRepository:
         if filepath.exists():
             return filepath
         return None
+
+    def upsert_module_metadata(self, note_name: str, module_name: str, key: str, payload: dict[str, Any]) -> None:
+        """Persist module metadata in a note JSON under ``_module_meta``."""
+        with self._lock:
+            nfile = self._note_file(note_name)
+            if not nfile.exists():
+                return
+
+            with nfile.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+
+            raw.setdefault("_module_meta", {})
+            raw["_module_meta"].setdefault(module_name, {})
+            raw["_module_meta"][module_name][key] = payload
+
+            temp_file = nfile.with_suffix(".tmp")
+            with temp_file.open("w", encoding="utf-8") as f:
+                json.dump(raw, f, ensure_ascii=False, indent=2)
+                f.flush()
+                import os
+                os.fsync(f.fileno())
+            temp_file.replace(nfile)
+
+    def get_module_metadata(self, note_name: str, module_name: str) -> dict[str, Any]:
+        """Read module metadata map for a note (empty if missing)."""
+        nfile = self._note_file(note_name)
+        if not nfile.exists():
+            return {}
+
+        try:
+            with nfile.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            module_meta = raw.get("_module_meta", {})
+            if not isinstance(module_meta, dict):
+                return {}
+            scoped = module_meta.get(module_name, {})
+            return scoped if isinstance(scoped, dict) else {}
+        except Exception:
+            return {}
 

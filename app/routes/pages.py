@@ -280,9 +280,12 @@ async def note_settings(
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
+    # Collect existing folder names for autocomplete
+    all_notes = service.list_notes()
+    existing_folders = sorted({n.folder for n in all_notes if n.folder})
     return templates.TemplateResponse(
         "partials/note_settings.html",
-        _template_context(request, note=note),
+        _template_context(request, note=note, existing_folders=existing_folders),
     )
 
 
@@ -294,6 +297,24 @@ async def update_note_title(
     service: NoteService = Depends(get_note_service),
 ):
     note = service.update_note(note_id, NoteUpdate(title=title))
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    notes = service.list_notes()
+    return templates.TemplateResponse(
+        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
+    )
+
+
+@router.post("/notes/{note_id}/folder", response_class=HTMLResponse)
+async def update_note_folder(
+    note_id: str,
+    request: Request,
+    folder: str = Form(""),
+    service: NoteService = Depends(get_note_service),
+):
+    """Move a note into a folder (empty string = root / ungrouped)."""
+    folder_val = folder.strip() or None
+    note = service.update_note(note_id, NoteUpdate(folder=folder_val))
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
@@ -528,8 +549,19 @@ async def upload_media_form(
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
     
-    # Save media
-    service.repo.save_media(note.name, file.filename, content)
+    # Process image (resize, reformat, rename)
+    from app.services.image_processing import process_uploaded_image
+    new_filename, processed_content, metadata = process_uploaded_image(
+        file.filename, content
+    )
+    
+    # Save processed media
+    relative_path = service.save_media_file(note_id, new_filename, processed_content)
+    if relative_path is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    # Store metadata in note JSON
+    service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
     
     # Get updated media list
     media_files = service.repo.list_media(note.name)

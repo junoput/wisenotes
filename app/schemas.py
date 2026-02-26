@@ -23,6 +23,7 @@ class Note(BaseModel):
     id: str
     name: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=200)
+    folder: Optional[str] = Field(default=None, max_length=120)  # Group notes in folders
     tags: List[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -78,5 +79,6 @@ class NoteCreate(BaseModel):
 
 class NoteUpdate(BaseModel):
     title: Optional[str] = None
+    folder: Optional[str] = None
     tags: Optional[List[str]] = None
     chapters: Optional[List[Chapter]] = None
