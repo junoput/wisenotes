@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from typing import Optional
 
-from app.block_types import get_block_types
+from app.blocks import get_all_blocks
 from app.blocks import get_block
 from app.editor.mixed_content import build_editor_json
 from app.editor.mixed_content import split_mixed_content
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _template_context(request: Request, **kwargs) -> dict:
     """Build template context with block types configuration."""
-    ctx = {"request": request, "block_types": get_block_types(), "get_block": get_block, **kwargs}
+    ctx = {"request": request, "block_types": get_all_blocks(), "get_block": get_block, **kwargs}
     # Include accessibility keybindings for templates and client JS
     try:
         ctx["accessibility"] = get_accessibility_bindings()
@@ -197,51 +197,16 @@ async def move_chapter(
     parent_id: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    logger.info(
-        "HTTP move_chapter request START: note=%s chapter=%s target=%s parent=%s",
-        note_id, chapter_id, target_id or "(root)", parent_id or "(no parent)"
-    )
-    
     try:
-        # Validate inputs
-        if not note_id or not chapter_id:
-            logger.error("HTTP move_chapter: missing note_id or chapter_id")
-            raise ValueError("Missing note_id or chapter_id")
-        
-        logger.debug("HTTP move_chapter: calling service.move_chapter")
         note = service.move_chapter(note_id, chapter_id, target_id, parent_id or None)
-        
         if not note:
-            logger.error("HTTP move_chapter: service returned None (note not found)")
             raise HTTPException(status_code=404, detail="Note not found")
-        
-        logger.info("HTTP move_chapter: move succeeded, reloading note list")
-        # Re-read from storage to ensure we get the persisted state
         notes = service.list_notes()
-        
-        logger.info(
-            "HTTP move_chapter SUCCESS: note=%s chapter=%s moved before=%s",
-            note_id, chapter_id, target_id or "(root)"
-        )
-        
         return templates.TemplateResponse(
             "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
         )
-        
     except ValueError as e:
-        logger.error(
-            "HTTP move_chapter VALIDATION ERROR: note=%s chapter=%s error=%s",
-            note_id, chapter_id, str(e)
-        )
         raise HTTPException(status_code=400, detail=str(e))
-        
-    except Exception as e:
-        logger.error(
-            "HTTP move_chapter UNEXPECTED ERROR: note=%s chapter=%s target=%s parent=%s error=%s",
-            note_id, chapter_id, target_id or "(root)", parent_id or "(none)", str(e),
-            exc_info=True,
-        )
-        raise HTTPException(status_code=500, detail=f"Internal server error during move operation: {str(e)}")
 
 
 @router.get("/notes/{note_id}/chapters/{chapter_id}/edit", response_class=HTMLResponse)
@@ -320,16 +285,6 @@ async def update_note_folder(
     notes = service.list_notes()
     return templates.TemplateResponse(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
-
-
-@router.get("/settings", response_class=HTMLResponse)
-async def app_settings(
-    request: Request,
-):
-    return templates.TemplateResponse(
-        "partials/app_settings.html",
-        _template_context(request),
     )
 
 

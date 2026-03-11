@@ -134,18 +134,3 @@ choices = get_block_choices()  # [(name, display_name, emoji), ...]
 unknown = get_block("nonexistent")
 print(unknown.name)  # "text"
 ```
-
-## Backward Compatibility
-
-The old `app/block_types.py` module still works:
-
-```python
-from app.block_types import get_block_type_config, can_have_children
-
-config = get_block_type_config("code")
-print(config.can_nest)  # False
-
-# Unknown types also fallback
-config = get_block_type_config("unknown")
-print(config.name)  # "text"
-```

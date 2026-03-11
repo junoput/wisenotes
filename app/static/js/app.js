@@ -129,29 +129,29 @@ document.body.addEventListener('htmx:afterSwap', (e) => {
   }
 });
 
-// Update layout class based on whether a note is open
-function updateLayoutNoNoteClass() {
+// Update main-container class based on whether a note is open
+function updateMainContainerClass() {
   try {
-    const layout = document.querySelector('.layout');
+    const mainContainer = document.querySelector('.main-container');
     const editor = document.getElementById('editor');
-    if (layout && editor) {
+    if (mainContainer && editor) {
       const hasActiveNote = editor.hasAttribute('data-note-id');
       if (hasActiveNote) {
-        layout.classList.remove('no-note-open');
+        mainContainer.classList.remove('no-note-open');
       } else {
-        layout.classList.add('no-note-open');
+        mainContainer.classList.add('no-note-open');
       }
     }
   } catch (err) {
-    console.warn('updateLayoutNoNoteClass error', err);
+    console.warn('updateMainContainerClass error', err);
   }
 }
 
 // Update on page load
-document.addEventListener('DOMContentLoaded', updateLayoutNoNoteClass);
+document.addEventListener('DOMContentLoaded', updateMainContainerClass);
 
 // Update after any HTMX swap
-document.body.addEventListener('htmx:afterSwap', updateLayoutNoNoteClass);
+document.body.addEventListener('htmx:afterSwap', updateMainContainerClass);
 
 // When Enter is pressed on a focused note item, trigger its click (hx-get)
 window.addEventListener('keydown', (e) => {
@@ -818,12 +818,12 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateDropdownPosition() {
     const noteList = document.getElementById('note-list');
     const header = document.querySelector('.pane.editor .pane-header');
-    const layout = document.querySelector('.layout');
+    const mainContainer = document.querySelector('.main-container');
     
     if (!noteList || !header) return;
     
-    // Don't position dropdown when no note is open (centered card mode)
-    if (layout && layout.classList.contains('no-note-open')) {
+    // Don't position dropdown when no note is open
+    if (mainContainer && mainContainer.classList.contains('no-note-open')) {
       noteList.style.top = '';
       return;
     }

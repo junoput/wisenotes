@@ -1,14 +1,16 @@
 import json
+import logging
+import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Optional
 
 from filelock import FileLock
-import logging
-
-logger = logging.getLogger(__name__)
 
 from app.schemas import Note, NoteDocument
+
+logger = logging.getLogger(__name__)
 
 
 class JsonNoteRepository:
@@ -102,8 +104,8 @@ class JsonNoteRepository:
         # Write each note to its own folder using name-based storage
         with self._lock:
             for note in doc.notes:
-                base_name = getattr(note, "name", None) or self._derive_name(note.title)
-                name = self._ensure_unique_name(base_name)
+                base_name = getattr(note, "name", None) or self.derive_name(note.title)
+                name = self.ensure_unique_name(base_name)
                 # Update note object to include name
                 note = note.model_copy(update={"name": name})
                 ndir = self._note_dir(name)
@@ -130,8 +132,8 @@ class JsonNoteRepository:
 
                 # Determine target name from title or slug
                 title = raw.get("title") or "Untitled"
-                base_name = raw.get("name") or self._derive_name(title)
-                name = self._ensure_unique_name(base_name)
+                base_name = raw.get("name") or self.derive_name(title)
+                name = self.ensure_unique_name(base_name)
 
                 # Write new format file
                 target_dir = self._note_dir(name)
@@ -140,7 +142,7 @@ class JsonNoteRepository:
                 target_file = self._note_file(name)
                 # Update payload to include name
                 raw["name"] = name
-                raw["title"] = self._name_to_title(name)
+                raw["title"] = self.name_to_title(name)
                 try:
                     with target_file.open("w", encoding="utf-8") as f:
                         json.dump(raw, f, ensure_ascii=False, indent=2)
@@ -163,98 +165,39 @@ class JsonNoteRepository:
         notes: List[Note] = []
         with self._lock:
             for entry in sorted(self._root_dir.iterdir()):
-                if not entry.is_dir():
+                if not entry.is_dir() or entry.name.startswith("."):
                     continue
-                # Skip hidden profile/dependency folders (e.g. .spice)
-                if entry.name.startswith("."):
+
+                # Prefer <name>.json matching folder name, else any *.json
+                nfile = entry / f"{entry.name}.json"
+                if not nfile.exists():
+                    json_files = list(entry.glob("*.json"))
+                    nfile = json_files[0] if json_files else None
+                if not nfile or not nfile.exists():
                     continue
-                # Look for <name>.json inside folder named <name>
-                nfile = None
+
                 try:
-                    # Prefer file matching folder name
-                    candidate = entry / f"{entry.name}.json"
-                    nfile = candidate if candidate.exists() else None
-                    if nfile is None:
-                        # Fallback: any single *.json
-                        json_files = list(entry.glob("*.json"))
-                        if json_files:
-                            nfile = json_files[0]
-                        else:
-                            logger.warning(
-                                "list_notes: folder %s exists but contains no JSON files",
-                                entry.name,
-                            )
-                            continue
-                except Exception as e:
-                    logger.error(
-                        "list_notes: error scanning folder %s: %s",
-                        entry.name,
-                        str(e),
-                        exc_info=True,
-                    )
-                    nfile = None
-                if nfile is None or not nfile.exists():
-                    logger.warning("list_notes: no valid JSON file found in folder %s", entry.name)
-                    continue
-                
-                try:
-                    logger.debug("list_notes: reading note from %s", nfile)
                     with nfile.open("r", encoding="utf-8") as f:
                         raw = json.load(f)
-                    
-                    # Backward compatibility: map slug->name if needed
+
                     if "name" not in raw and "slug" in raw:
                         raw["name"] = raw["slug"]
-                    
-                    # Ensure title is the display form (spaces)
                     if raw.get("name"):
-                        raw["title"] = self._name_to_title(raw["name"])  # type: ignore[arg-type]
-                    
-                    note = Note.model_validate(raw)
-                    notes.append(note)
-                    logger.debug("list_notes: successfully loaded note %s (%s)", note.id, note.title)
-                    
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        "list_notes: INVALID JSON in file %s: %s (line %d col %d)",
-                        nfile,
-                        str(e.msg),
-                        e.lineno,
-                        e.colno,
-                        exc_info=True,
-                    )
+                        raw["title"] = self.name_to_title(raw["name"])
+
+                    notes.append(Note.model_validate(raw))
+
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.error("Failed to read note from %s: %s", nfile, e)
                     continue
-                except Exception as e:
-                    logger.error(
-                        "list_notes: FAILED to read note from %s: %s",
-                        nfile,
-                        str(e),
-                        exc_info=True,
-                    )
-                    # Try to read file content for debugging
-                    try:
-                        with nfile.open("r", encoding="utf-8") as f:
-                            content_preview = f.read(500)
-                        logger.error(
-                            "list_notes: file content preview (first 500 chars): %s",
-                            content_preview,
-                        )
-                    except Exception:
-                        logger.error("list_notes: unable to read file content for debugging")
-                    continue
-        
-        # Sort by created_at ascending
+
         notes.sort(key=lambda n: n.created_at)
-        logger.info("list_notes: successfully loaded %d notes", len(notes))
         return notes
 
     def get_note(self, note_id: str) -> Optional[Note]:
-        logger.debug("get_note: searching for note_id=%s", note_id)
         for note in self.list_notes():
             if note.id == note_id:
-                logger.debug("get_note: found note %s (%s)", note_id, note.title)
                 return note
-        logger.warning("get_note: note_id=%s not found in %d available notes", note_id, len(self.list_notes()))
         return None
 
     def upsert_note(self, note: Note, old_name: Optional[str] = None) -> Note:
@@ -293,19 +236,14 @@ class JsonNoteRepository:
                         # We avoid deleting the old folder automatically to be conservative.
                         pass
 
-            # Ensure directory exists
             ndir = self._note_dir(note.name)
             ndir.mkdir(parents=True, exist_ok=True)
             nfile = self._note_file(note.name)
-            logger.info("upsert_note: writing note %s to %s (chapters=%d)", note.id, nfile, len(note.chapters))
-            
+
             try:
-                # Validate note structure before writing
                 note_data = json.loads(note.model_dump_json())
 
-                # Preserve module/media metadata payloads stored outside the Note model.
-                # Prefer metadata from the existing target file, but fall back to payload
-                # captured from the old file during a rename operation so we don't lose it.
+                # Preserve module/media metadata stored outside the Note model
                 existing_payload: dict[str, Any] = {}
                 if nfile.exists():
                     try:
@@ -320,37 +258,20 @@ class JsonNoteRepository:
                     if key in existing_payload and key not in note_data:
                         note_data[key] = existing_payload[key]
                 
-                # Check for duplicate chapter IDs
                 chapter_ids = [ch["id"] for ch in note_data.get("chapters", [])]
                 if len(chapter_ids) != len(set(chapter_ids)):
-                    logger.error(
-                        "upsert_note: CORRUPTION DETECTED - duplicate chapter IDs in note %s! IDs: %s",
-                        note.id,
-                        chapter_ids,
-                    )
                     raise ValueError(f"Duplicate chapter IDs detected in note {note.id}")
-                
-                # Write to temp file first, then rename (atomic operation)
+
                 temp_file = nfile.with_suffix(".tmp")
                 with temp_file.open("w", encoding="utf-8") as f:
                     json.dump(note_data, f, ensure_ascii=False, indent=2)
                     f.flush()
-                    # Force sync to disk
-                    import os
                     os.fsync(f.fileno())
-                
-                # Atomic rename
+
                 temp_file.replace(nfile)
-                logger.debug("upsert_note: successfully wrote note %s", note.id)
-                
-            except Exception as e:
-                logger.error(
-                    "upsert_note: FAILED to write note %s to %s: %s",
-                    note.id,
-                    nfile,
-                    str(e),
-                    exc_info=True,
-                )
+
+            except Exception:
+                logger.error("Failed to write note %s", note.id, exc_info=True)
                 raise
         return note
 
@@ -362,13 +283,9 @@ class JsonNoteRepository:
                     target = self._note_dir(note.name)
                     break
             if target and target.exists():
-                import shutil
                 try:
-                    # Remove the entire note directory including all
-                    # module-owned sub-folders (media, etc.)
                     shutil.rmtree(target)
                 except Exception:
-                    # Best-effort delete: ignore failures
                     pass
 
     def export_document(self) -> NoteDocument:
@@ -378,9 +295,9 @@ class JsonNoteRepository:
         # Import each note; ensure name uniqueness
         with self._lock:
             for note in document.notes:
-                base_name = getattr(note, "name", None) or self._derive_name(note.title)
-                name = self._ensure_unique_name(base_name)
-                note = note.model_copy(update={"name": name, "title": self._name_to_title(name), "updated_at": datetime.utcnow()})
+                base_name = getattr(note, "name", None) or self.derive_name(note.title)
+                name = self.ensure_unique_name(base_name)
+                note = note.model_copy(update={"name": name, "title": self.name_to_title(name), "updated_at": datetime.utcnow()})
                 ndir = self._note_dir(name)
                 ndir.mkdir(parents=True, exist_ok=True)
                 with (self._note_file(name)).open("w", encoding="utf-8") as f:
@@ -388,9 +305,8 @@ class JsonNoteRepository:
         document.exported_at = datetime.utcnow()
         return document
 
-    # --- helpers for slug management ---
     @staticmethod
-    def _derive_name(title: str) -> str:
+    def derive_name(title: str) -> str:
         # Sanitize: keep letters, numbers, dashes, underscores; spaces -> '-'; drop specials; collapse dashes
         out = []
         prev_dash = False
@@ -414,7 +330,7 @@ class JsonNoteRepository:
         name = name.strip('-')
         return name or 'Untitled-note'
 
-    def _ensure_unique_name(self, base_name: str) -> str:
+    def ensure_unique_name(self, base_name: str) -> str:
         name = base_name
         i = 2
         while self._note_dir(name).exists() or self._note_file(name).exists():
@@ -423,7 +339,7 @@ class JsonNoteRepository:
         return name
 
     @staticmethod
-    def _name_to_title(name: str) -> str:
+    def name_to_title(name: str) -> str:
         # Convert dashes to single spaces and trim
         title = name.replace('-', ' ')
         # Collapse multiple spaces
@@ -485,7 +401,6 @@ class JsonNoteRepository:
             with temp_file.open("w", encoding="utf-8") as f:
                 json.dump(raw, f, ensure_ascii=False, indent=2)
                 f.flush()
-                import os
                 os.fsync(f.fileno())
             temp_file.replace(nfile)
 

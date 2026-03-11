@@ -394,9 +394,19 @@ a { color: var(--accent); }
 }
 .toolbar-select:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ==========================================================================
-   LAYOUT: Two-pane grid (default — note is open, wide screen)
-   ========================================================================== */
+.topbar-add-note-form {
+  display: flex;
+}
+
+.topbar-add-note-btn {
+  font-size: 20px;
+  width: 36px;
+  height: 36px;
+}
+
+.main-container {
+  display: contents;
+}
 
 .layout {
   display: grid;
@@ -405,11 +415,8 @@ a { color: var(--accent); }
   align-items: start;
 }
 
-/* ==========================================================================
-   LAYOUT: No note open — centered card (all screen sizes)
-   ========================================================================== */
-
-.layout.no-note-open {
+/* Centered layout when no note is open */
+.no-note-open {
   display: flex;
   justify-content: center;
   align-items: center;
@@ -417,7 +424,7 @@ a { color: var(--accent); }
   padding: 40px 20px;
 }
 
-.layout.no-note-open #note-list {
+.no-note-open #note-list {
   position: static;
   height: auto;
   max-height: calc(100vh - var(--topbar-height) - 80px);
@@ -427,51 +434,39 @@ a { color: var(--accent); }
   border-radius: 12px;
   border: 1px solid var(--border);
   display: block;
-  overflow-y: visible;
-  /* Reset any narrow-mode dropdown styles */
-  transform: none;
-  opacity: 1;
-  pointer-events: auto;
-  box-shadow: none;
 }
 
-.layout.no-note-open #note-list .pane-content {
+.no-note-open #note-list .pane-content {
   overflow-y: auto;
   max-height: calc(100vh - var(--topbar-height) - 140px);
-  display: block !important;  /* Override inline display:none from collapsed JS */
 }
 
-.layout.no-note-open #note-list .pane-header {
-  margin-bottom: 12px;
+.no-note-open #note-list .pane-actions {
+  display: flex;
 }
 
-.layout.no-note-open #note-list .pane-actions {
-  display: flex !important;  /* Always show + button */
-}
-
-.layout.no-note-open #note-list .pane-title,
-.layout.no-note-open #note-list .note-list,
-.layout.no-note-open #note-list .chapter-list,
-.layout.no-note-open #note-list form.add-note-form {
-  display: block !important;  /* Override collapsed hiding */
-}
-
-.layout.no-note-open #note-list.collapsed {
+.no-note-open #note-list.collapsed {
   padding: 16px;
-  overflow: visible;
 }
 
-.layout.no-note-open #editor {
+.no-note-open #note-list.collapsed .pane-title,
+.no-note-open #note-list.collapsed .note-list,
+.no-note-open #note-list.collapsed .chapter-list,
+.no-note-open #note-list.collapsed form {
+  display: block;
+}
+
+.no-note-open #note-list.collapsed .pane-actions {
+  gap: 6px;
+}
+
+.no-note-open #editor {
   display: none;
 }
 
-.layout.no-note-open .sidebar-toggle-btn {
+.no-note-open .sidebar-toggle-btn {
   display: none;
 }
-
-/* ==========================================================================
-   PANES: Base styles
-   ========================================================================== */
 
 .pane {
   padding: 16px;
@@ -810,7 +805,7 @@ div[id^="media-preview-"]:hover .media-edit-btn {
   padding: 8px 20px;
   justify-content: center;
 }
-.item { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; cursor: pointer; transition: border-color 0.2s, transform 0.1s; margin: 6px 0; }
+.item { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #0d1526; cursor: pointer; transition: border-color 0.2s, transform 0.1s; }
 .item:hover { border-color: var(--accent); transform: translateY(-1px); }
 .item.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .item-title { font-weight: 600; }
@@ -1769,23 +1764,18 @@ body.add-expanded .add-block-icon {
   line-height: 1;
 }
 
-/* ==========================================================================
-   LAYOUT: Narrow mode (≤960px)
-   ========================================================================== */
-
 @media (max-width: 960px) {
   .layout {
     grid-template-columns: 1fr;
     position: relative;
   }
 
-  /* --- Narrow + note open: dropdown overlay with slide animation --- */
-  .layout:not(.no-note-open) #note-list {
+  /* Notes pane becomes a dropdown below the editor header */
+  #note-list {
     position: fixed;
     top: var(--topbar-height);
     left: 0;
     right: 0;
-    height: auto;
     max-height: 60vh;
     z-index: 499;
     background: var(--panel);
@@ -1797,25 +1787,47 @@ body.add-expanded .add-block-icon {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   }
 
-  /* Collapsed = hidden above viewport */
-  .layout:not(.no-note-open) #note-list.collapsed {
+  /* When no note is open, show note list centered like in wide mode */
+  .no-note-open #note-list {
+    position: static;
+    transform: none;
+    max-height: none;
+    box-shadow: none;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  /* When collapsed in narrow mode, hide above visible area */
+  #note-list.collapsed {
     transform: translateY(-100%);
     opacity: 0;
     pointer-events: none;
   }
 
-  /* Show the dropdown toggle + add button in narrow mode */
+  /* Don't hide when no note is open */
+  .no-note-open #note-list.collapsed {
+    transform: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Show the toggle button in narrow mode */
   .narrow-notes-toggle {
     display: inline-flex !important;
   }
 
+  /* Show add note button when dropdown is open */
   body.notes-dropdown-open .narrow-add-note-form {
     display: inline-block;
   }
 
-  /* Hide sidebar header buttons when dropdown is expanded */
-  .layout:not(.no-note-open) #note-list:not(.collapsed) .pane-header .pane-actions {
+  /* Hide note-list pane-header buttons when dropdown is open */
+  #note-list:not(.collapsed) .pane-header .pane-actions {
     display: none;
+  }
+
+  .no-note-open #note-list .pane-header .pane-actions {
+    display: flex;
   }
 
   .pane { border-right: none; }
