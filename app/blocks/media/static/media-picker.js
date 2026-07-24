@@ -6,8 +6,13 @@ export function initMediaPicker(chapterId, noteId) {
   const importBtn = document.getElementById(`import-btn-${chapterId}`);
   
   if (!fileInput) {
-    console.warn(`File input not found: file-input-${chapterId}`);
     return;
+  }
+
+  // Mark form as JS-enhanced to swap file input for Import button
+  const form = fileInput.closest('form');
+  if (form) {
+    form.classList.add('js-media-enhanced');
   }
 
   // Attach click handler to Import button
@@ -26,8 +31,6 @@ export function initMediaPicker(chapterId, noteId) {
     const uploadUrl = `/api/notes/${noteId}/media/upload`;
     const pickerUrl = `/notes/${noteId}/chapters/${chapterId}/media/picker`;
     const selectUrl = `/notes/${noteId}/chapters/${chapterId}/media/select`;
-
-    console.log(`Uploading ${files.length} files...`);
 
     let lastUploadedFilename = null;
 
@@ -48,7 +51,6 @@ export function initMediaPicker(chapterId, noteId) {
             // Ignore parse errors
           }
         }
-        console.log(`Uploaded ${file.name}:`, response.status);
       } catch (err) {
         console.error('Error uploading file:', err);
       }

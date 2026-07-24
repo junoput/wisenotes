@@ -2,8 +2,8 @@
  * Dynamically load and instantiate editor class
  */
 
-// Import media picker initialization (use absolute paths from /static/js/)
-import { initMediaPickersOnPage } from '/static/js/media-picker.js';
+// Import media picker initialization
+import { initMediaPickersOnPage } from '/static/blocks/media/media-picker.js';
 import { initDragAndDrop } from '/static/js/drag-drop.js';
 
 
