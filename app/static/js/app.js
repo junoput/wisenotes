@@ -1,60 +1,11 @@
 /**
  * Dynamically load and instantiate editor class
  */
-console.log('[app.js] loaded');
 
 // Import media picker initialization (use absolute paths from /static/js/)
 import { initMediaPickersOnPage } from '/static/js/media-picker.js';
 import { initDragAndDrop } from '/static/js/drag-drop.js';
 
-console.log('[app.js] imports completed, initDragAndDrop=', typeof initDragAndDrop);
-
-// Top-level capturing key logger (runs even before DOMContentLoaded handlers)
-window.addEventListener('keydown', (e) => {
-  try {
-    console.log('[keylog-top] key pressed', {
-      key: e.key,
-      code: e.code,
-      ctrl: e.ctrlKey,
-      alt: e.altKey,
-      shift: e.shiftKey,
-      meta: e.metaKey,
-    });
-  } catch (err) {
-    // ignore errors
-  }
-}, true);
-// Create a small visible indicator in the bottom-right corner to show last key
-try {
-  const _keyIndicator = document.createElement('div');
-  _keyIndicator.id = 'wisenotes-key-indicator';
-  _keyIndicator.style.position = 'fixed';
-  _keyIndicator.style.right = '12px';
-  _keyIndicator.style.bottom = '12px';
-  _keyIndicator.style.zIndex = '9999';
-  _keyIndicator.style.background = 'rgba(0,0,0,0.6)';
-  _keyIndicator.style.color = 'white';
-  _keyIndicator.style.padding = '6px 10px';
-  _keyIndicator.style.borderRadius = '6px';
-  _keyIndicator.style.fontFamily = 'monospace';
-  _keyIndicator.style.fontSize = '12px';
-  _keyIndicator.style.pointerEvents = 'none';
-  _keyIndicator.textContent = '';
-  document.addEventListener('DOMContentLoaded', () => {
-    document.body.appendChild(_keyIndicator);
-  });
-  window.addEventListener('keydown', (e) => {
-    const parts = [];
-    if (e.ctrlKey) parts.push('Ctrl');
-    if (e.altKey) parts.push('Alt');
-    if (e.shiftKey) parts.push('Shift');
-    if (e.metaKey) parts.push('Meta');
-    parts.push(e.key);
-    _keyIndicator.textContent = parts.join('+');
-  }, true);
-} catch (err) {
-  // ignore failures
-}
 
 // Focus helper: moves focus to the first note in the list
 function focusFirstNoteItem() {
@@ -170,17 +121,13 @@ window.addEventListener('keydown', (e) => {
         const notePath = item.getAttribute && item.getAttribute('data-note-path');
         if (notePath) {
           const targetUrl = notePath.startsWith('http') ? notePath : (window.location.origin + notePath);
-          console.log('[nav] navigating to notePath', targetUrl);
           window.location.assign(targetUrl);
         } else {
           const hxGet = item.getAttribute && item.getAttribute('hx-get');
           if (hxGet) {
             const targetUrl = hxGet.startsWith('http') ? hxGet : (window.location.origin + hxGet);
-            console.log('[nav] navigating to hx-get', targetUrl);
             window.location.assign(targetUrl);
           } else {
-            // Fallback to click which lets HTMX handle it when available
-            console.log('[nav] fallback: clicking item');
             item.click();
           }
         }
@@ -337,22 +284,6 @@ function synchronizeAllTokenInputs(scope = document) {
 document.addEventListener('DOMContentLoaded', () => {
   // Delay a tick to ensure HTMX-rendered lists are present
   setTimeout(() => focusFirstNoteItem(), 0);
-  // Global capturing key logger: logs every keypress (key, code, modifiers)
-  document.addEventListener('keydown', (e) => {
-    try {
-      console.log('[keylog] key pressed', {
-        key: e.key,
-        code: e.code,
-        ctrl: e.ctrlKey,
-        alt: e.altKey,
-        shift: e.shiftKey,
-        meta: e.metaKey,
-      });
-    } catch (err) {
-      // swallow errors to avoid breaking other handlers
-      console.warn('Keylog error', err);
-    }
-  }, true); // use capture to run before other handlers that may stop propagation
   const root = document.documentElement;
 
   // Editor mode switching
@@ -615,23 +546,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    console.log('[sources] build payload', {
-      title,
-      sourceValue,
-      hiddenValue: sourceHidden?.value,
-      textValue: sourceText?.value,
-    });
     const contentField = editForm.querySelector('[data-editor-target]');
     const languageField = editForm.querySelector('select[name="language"], input[name="language"]');
     const language = languageField ? languageField.value || '' : '';
     const text = contentField ? contentField.value || '' : '';
-
-    console.log('[sources] build payload fields', {
-      hasContentField: Boolean(contentField),
-      hasLanguageField: Boolean(languageField),
-      hasHidden: Boolean(sourceHidden),
-      hasText: Boolean(sourceText),
-    });
 
     // Get original chapter JSON to preserve children
     const originalJsonInput = editForm.querySelector('.original-chapter-json');
@@ -1002,34 +920,24 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.body.addEventListener('htmx:afterSwap', async () => {
-    console.log('[htmx:afterSwap] Event fired');
     document.querySelectorAll('.add-zone').forEach((el) => el.classList.remove('show'));
     applyCollapsedStateFromStorage();
 
     // Initialize editor for chapter edit form
     const editForm = document.querySelector('.chapter-edit-mode');
-    console.log('[htmx:afterSwap] editForm found:', editForm);
     const hasTextarea = editForm?.querySelector('textarea');
-    console.log('[htmx:afterSwap] hasTextarea:', hasTextarea);
     const editorType = editForm?.dataset.editor || 'textarea';
-    console.log('[htmx:afterSwap] editorType:', editorType);
     
     // Skip editor initialization if no textarea (e.g., for chapter blocks)
     if (editForm && hasTextarea) {
-      console.log('[htmx:afterSwap] Starting editor initialization...');
       const editorOptions = {
         mode: editForm.dataset.codemirrorMode,
       };
-      console.log('[htmx:afterSwap] editorOptions:', editorOptions);
       
       try {
-        console.log('[editor] Initializing editor:', { editorType, hasTextarea, editForm });
         const EditorClass = await loadEditorClass(editorType);
-        console.log('[editor] EditorClass loaded:', EditorClass);
         const editor = new EditorClass(editForm, editorOptions);
-        console.log('[editor] Editor instance created, mounting...');
         await editor.mount();
-        console.log('[editor] Editor mounted successfully');
         // Attach editor instance to the container so it's tied to that element's lifecycle
         editForm._editorInstance = editor;
 
@@ -1397,11 +1305,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const keyStr = _normalizeKeyEvent(e);
       const action = _keyToAction[keyStr];
-      if (action) {
-        console.log('[accessibility] key pressed', { key: keyStr, action });
-      } else {
-        console.log('[accessibility] key pressed (unmapped)', { key: keyStr });
-      }
+      if (!action) return;
     } catch (err) {
       console.warn('Accessibility key handler error', err);
     }

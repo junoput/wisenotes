@@ -12,9 +12,7 @@
   <script src="/static/js/init-layout.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
   <script nonce="{{ request.state.csp_nonce }}">
-    // Accessibility keybindings exposed to client JS
     window.WISENOTES_ACCESSIBILITY = {{ accessibility|tojson | safe }};
-    console.log('[inline] WISENOTES_ACCESSIBILITY', window.WISENOTES_ACCESSIBILITY);
   </script>
   <script type="module" src="/static/js/app.js?v=16" defer></script>
   <script src="/static/js/media-drop.js" defer></script>

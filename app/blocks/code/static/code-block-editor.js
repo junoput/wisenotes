@@ -42,22 +42,13 @@ export class CodeBlockEditor extends Editor {
   }
 
   async mount() {
-    console.log('[CodeBlockEditor] mount() called');
-    console.log('[CodeBlockEditor] container:', this.container);
-    
     // Dynamically load CodeMirror if not already loaded
     if (!window.CodeMirror) {
-      console.log('[CodeBlockEditor] CodeMirror not loaded, loading...');
       await this._loadCodeMirror();
-      console.log('[CodeBlockEditor] CodeMirror loaded successfully');
-    } else {
-      console.log('[CodeBlockEditor] CodeMirror already loaded');
     }
 
     const textarea = this.container.querySelector('textarea');
-    console.log('[CodeBlockEditor] textarea found:', textarea);
     if (!textarea) {
-      console.error('[CodeBlockEditor] No textarea found in container');
       throw new Error('No textarea found in container');
     }
 
@@ -78,10 +69,8 @@ export class CodeBlockEditor extends Editor {
       },
     };
 
-    console.log('[CodeBlockEditor] Creating CodeMirror with config:', config);
     // Create CodeMirror instance
     this.editor = window.CodeMirror.fromTextArea(textarea, config);
-    console.log('[CodeBlockEditor] CodeMirror instance created:', this.editor);
 
     // Ensure the CodeMirror wrapper stays above the button row
     const wrapper = this.editor.getWrapperElement();
