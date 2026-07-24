@@ -482,6 +482,29 @@ a { color: var(--accent); }
   overflow-y: auto;
 }
 
+/* CSS-only collapsed state via HTML5 <details> element */
+details.pane:not([open]) {
+  padding: 12px 8px;
+  overflow: hidden;
+}
+details.pane:not([open]) .pane-header { margin-bottom: 0; }
+details.pane:not([open]) .pane-title,
+details.pane:not([open]) .note-list,
+details.pane:not([open]) .chapter-list,
+details.pane:not([open]) form { display: none; }
+details.pane:not([open]) .pane-actions { gap: 0; }
+details.pane:not([open]) .icon-btn { width: 32px; height: 32px; }
+
+/* Sidebar toggle button rotation animation */
+.sidebar-toggle-btn {
+  transition: transform 0.2s ease;
+}
+
+details.pane:not([open]) .sidebar-toggle-btn {
+  transform: rotate(180deg);
+}
+
+/* Support both old .collapsed class (for JS mode) and new details element */
 .pane.collapsed {
   padding: 12px 8px;
   overflow: hidden;
@@ -493,11 +516,6 @@ a { color: var(--accent); }
 .pane.collapsed form { display: none; }
 .pane.collapsed .pane-actions { gap: 0; }
 .pane.collapsed .icon-btn { width: 32px; height: 32px; }
-
-/* Sidebar toggle button rotation animation */
-.sidebar-toggle-btn {
-  transition: transform 0.2s ease;
-}
 
 #note-list.collapsed .sidebar-toggle-btn {
   transform: rotate(180deg);

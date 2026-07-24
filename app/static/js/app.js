@@ -710,9 +710,17 @@ document.addEventListener('DOMContentLoaded', () => {
         : localStorage.getItem(`pane:${paneId}:collapsed`) === '1';
       const el = document.getElementById(paneId);
       if (!el) return;
-      el.classList.toggle('collapsed', collapsed);
-      const content = el.querySelector('.pane-content');
-      if (content) content.style.display = collapsed ? 'none' : '';
+
+      // Handle native details element (CSS-only no-JS mode)
+      if (el.tagName === 'DETAILS') {
+        el.open = !collapsed;
+      } else {
+        // Handle old .collapsed class pattern (JS mode)
+        el.classList.toggle('collapsed', collapsed);
+        const content = el.querySelector('.pane-content');
+        if (content) content.style.display = collapsed ? 'none' : '';
+      }
+
       const colVar = paneKeys[paneId];
       if (colVar && !isNarrow) {
         root.style.setProperty(colVar, collapsed ? '48px' : '260px');
@@ -721,6 +729,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   applyCollapsedStateFromStorage();
+
+  // Listen for native details toggle events to persist state
+  document.addEventListener('toggle', (e) => {
+    if (e.target.tagName !== 'DETAILS') return;
+    const paneId = e.target.id;
+    if (!paneKeys.hasOwnProperty(paneId)) return;
+
+    const collapsed = !e.target.open;
+    localStorage.setItem(`pane:${paneId}:collapsed`, collapsed ? '1' : '0');
+
+    // Update CSS variable if applicable
+    const colVar = paneKeys[paneId];
+    const isNarrow = window.matchMedia('(max-width: 960px)').matches;
+    if (colVar && !isNarrow) {
+      root.style.setProperty(colVar, collapsed ? '48px' : '260px');
+    }
+  }, true);
 
   // Initialize read-only displays on initial page load
   initializeCodeBlockDisplays();
