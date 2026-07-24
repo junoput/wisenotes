@@ -85,6 +85,17 @@
       </div>
 
       <div class="note-settings-section">
+        <strong>JavaScript</strong>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center; justify-content:space-between;">
+          <p class="muted">Disable all JavaScript to test no-JS fallbacks.</p>
+          <form action="/settings/toggle-js" method="post">
+            <button type="submit" class="btn">Disable JS</button>
+          </form>
+        </div>
+        <p class="muted" style="margin-top:4px; font-size:12px;">Page will reload. Use the bar at the top to re-enable.</p>
+      </div>
+
+      <div class="note-settings-section">
         <strong class="danger-text">Delete</strong>
         <div style="margin-top:8px; display:flex; gap:8px; align-items:center; justify-content:space-between;">
           <p class="muted">Permanently delete this note and its chapters.</p>

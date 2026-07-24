@@ -198,6 +198,25 @@ noscript .js-required-warning {
   text-align: center;
 }
 
+/* No-JS testing mode bar */
+.nojs-testing-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: color-mix(in srgb, var(--warning, #f59e0b) 20%, transparent);
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: 8px;
+  margin: 8px 0;
+  font-size: 0.85em;
+  color: var(--text);
+}
+.nojs-bar-btn {
+  font-size: 0.8em;
+  padding: 4px 12px;
+}
+
 /* Chapter type border colors */
 .chapter-item-container[data-chapter-type="chapter"] {
   border-left-color: var(--color-chapter) !important;

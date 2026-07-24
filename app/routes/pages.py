@@ -236,6 +236,27 @@ async def edit_chapter(
     )
 
 
+@router.get("/settings", response_class=HTMLResponse)
+async def global_settings(request: Request):
+    """Global settings panel (not note-specific)."""
+    return templates.TemplateResponse(
+        "partials/settings.html", _template_context(request)
+    )
+
+
+@router.post("/settings/toggle-js")
+async def toggle_js(request: Request):
+    """Toggle the no-JS testing cookie and redirect back."""
+    referer = request.headers.get("referer", "/")
+    nojs_active = request.cookies.get("wisenotes-nojs") == "1"
+    response = RedirectResponse(url=referer, status_code=303)
+    if nojs_active:
+        response.delete_cookie("wisenotes-nojs", path="/")
+    else:
+        response.set_cookie("wisenotes-nojs", "1", path="/", httponly=True, samesite="lax")
+    return response
+
+
 @router.get("/notes/{note_id}/settings", response_class=HTMLResponse)
 async def note_settings(
     note_id: str,

@@ -1,0 +1,29 @@
+<div class="note-settings-overlay" id="global-settings">
+  <div class="note-settings-panel">
+    <div class="note-settings-header">
+      <h3>Settings</h3>
+      <button class="btn icon-btn" aria-label="Close settings" data-close-settings>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+    <div class="note-settings-body">
+      <div class="note-settings-section">
+        <strong>JavaScript</strong>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center; justify-content:space-between;">
+          <p class="muted">Disable all JavaScript to test no-JS fallbacks.</p>
+          <form action="/settings/toggle-js" method="post">
+            <button type="submit" class="btn">Disable JS</button>
+          </form>
+        </div>
+        <p class="muted" style="margin-top:4px; font-size:12px;">Page will reload. Use the bar at the top to re-enable.</p>
+      </div>
+    </div>
+    <div class="note-settings-actions">
+      <div class="muted">Settings are saved locally and apply immediately.</div>
+      <button class="btn" data-close-settings>Close</button>
+    </div>
+  </div>
+</div>
