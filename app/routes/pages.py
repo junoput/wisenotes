@@ -29,6 +29,10 @@ templates = Jinja2Templates(directory="app/templates")
 logger = logging.getLogger(__name__)
 
 
+def _render(name: str, context: dict, **kwargs):
+    return templates.TemplateResponse(context["request"], name, context, **kwargs)
+
+
 def _template_context(request: Request, **kwargs) -> dict:
     """Build template context with block types configuration."""
     ctx = {"request": request, "block_types": get_all_blocks(), "get_block": get_block, **kwargs}
@@ -69,7 +73,7 @@ def _normalize_source_multi(value) -> Optional[str]:
 async def home(request: Request, service: NoteService = Depends(get_note_service)):
     notes = service.list_notes()
     # Render shell with no active note; main pane stays empty until user picks a note
-    return templates.TemplateResponse(
+    return _render(
         "index.html", _template_context(request, notes=notes, active=None)
     )
 
@@ -87,7 +91,7 @@ async def create_note(
         )
     )
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -117,7 +121,7 @@ async def fetch_note(
     notes = service.list_notes()
     # HTMX should receive fragments; full-page navigation should receive the full shell.
     template = "partials/hx_refresh.html" if is_htmx else "index.html"
-    return templates.TemplateResponse(template, _template_context(request, active=note, notes=notes))
+    return _render(template, _template_context(request, active=note, notes=notes))
 
 
 @router.post("/notes/{note_id}/chapters", response_class=HTMLResponse)
@@ -132,7 +136,7 @@ async def add_chapter(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -149,7 +153,7 @@ async def add_chapter_after(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -166,7 +170,7 @@ async def add_chapter_before(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -183,7 +187,7 @@ async def add_chapter_child(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -202,7 +206,7 @@ async def move_chapter(
         if not note:
             raise HTTPException(status_code=404, detail="Note not found")
         notes = service.list_notes()
-        return templates.TemplateResponse(
+        return _render(
             "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
         )
     except ValueError as e:
@@ -230,7 +234,7 @@ async def edit_chapter(
     # Use JSON editor template for "JSON Editor" mode, graphical template for "Graphical Editor" mode
     template = "partials/chapter_edit_json.html" if mode == "json" else "partials/chapter_edit_form.html"
     
-    return templates.TemplateResponse(
+    return _render(
         template, 
         _template_context(request, note=note, chapter=chapter, chapter_json=chapter_json)
     )
@@ -239,7 +243,7 @@ async def edit_chapter(
 @router.get("/settings", response_class=HTMLResponse)
 async def global_settings(request: Request):
     """Global settings panel (not note-specific)."""
-    return templates.TemplateResponse(
+    return _render(
         "partials/settings.html", _template_context(request)
     )
 
@@ -269,7 +273,7 @@ async def note_settings(
     # Collect existing folder names for autocomplete
     all_notes = service.list_notes()
     existing_folders = sorted({n.folder for n in all_notes if n.folder})
-    return templates.TemplateResponse(
+    return _render(
         "partials/note_settings.html",
         _template_context(request, note=note, existing_folders=existing_folders),
     )
@@ -286,7 +290,7 @@ async def update_note_title(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -304,7 +308,7 @@ async def update_note_folder(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -421,7 +425,7 @@ async def update_chapter(
     # Final refresh
     note = service.get_note(note_id)
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
     )
 
@@ -438,7 +442,7 @@ async def delete_chapter_route(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     # Keep the current note active (deleted_note) if it still exists
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html", _template_context(request, notes=notes, active=deleted_note)
     )
 
@@ -454,7 +458,7 @@ async def delete_note(
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
     active = notes[0] if notes else None
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, notes=notes, active=active),
         headers={"HX-Trigger": "close-note-settings"},
@@ -474,10 +478,10 @@ async def fetch_note_by_name(
         raise HTTPException(status_code=404, detail="Note not found")
     # Serve full page for direct navigation, partial for HTMX swaps
     if request.headers.get("hx-request") == "true":
-        return templates.TemplateResponse(
+        return _render(
             "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
         )
-    return templates.TemplateResponse(
+    return _render(
         "index.html", _template_context(request, active=note, notes=notes)
     )
 
@@ -501,10 +505,10 @@ async def fetch_chapter_by_id(
     
     # Serve full page for direct navigation, partial for HTMX swaps
     if request.headers.get("hx-request") == "true":
-        return templates.TemplateResponse(
+        return _render(
             "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
         )
-    return templates.TemplateResponse(
+    return _render(
         "index.html", _template_context(request, active=note, notes=notes)
     )
 
@@ -547,7 +551,7 @@ async def upload_media_form(
     media_files = service.repo.list_media(note.name)
     
     # Return updated gallery
-    return templates.TemplateResponse(
+    return _render(
         "partials/media_gallery.html",
         _template_context(
             request,
@@ -576,7 +580,7 @@ async def media_browser(
     # Get list of media files
     media_files = service.repo.list_media(note.name)
     
-    return templates.TemplateResponse(
+    return _render(
         "partials/media_browser_panel.html",
         _template_context(
             request,
@@ -606,7 +610,7 @@ async def media_picker_inline(
 
     media_files = service.repo.list_media(note.name)
 
-    return templates.TemplateResponse(
+    return _render(
         "partials/media_picker_inline.html",
         _template_context(
             request,
@@ -647,7 +651,7 @@ async def select_media(
     
     # Return updated note
     note = service.get_note(note_id)
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, active=note, notes=service.list_notes())
     )
@@ -665,7 +669,7 @@ async def move_chapter_up(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, active=note, notes=notes)
     )
@@ -683,7 +687,7 @@ async def move_chapter_down(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, active=note, notes=notes)
     )
@@ -701,7 +705,7 @@ async def indent_chapter(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, active=note, notes=notes)
     )
@@ -719,7 +723,7 @@ async def outdent_chapter(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
+    return _render(
         "partials/hx_refresh.html",
         _template_context(request, active=note, notes=notes)
     )
