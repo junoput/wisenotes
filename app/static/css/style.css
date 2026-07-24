@@ -1217,9 +1217,28 @@ div[id^="media-preview-"]:hover .media-edit-btn {
 }
 
 /* removed chapter insert affordance */
-/* Hide add zones - replaced with hover plus icon */
+/* Add zones: hidden by default, revealed on hover or when empty */
 .add-zone {
-  display: none !important;
+  display: none;
+}
+
+/* Always show the "add first block" zone when note has no chapters */
+.add-zone.add-empty {
+  display: block;
+  padding: 24px;
+  text-align: center;
+}
+
+/* Show "before first" zone on hover of the editor area */
+.editor-chapters:hover > .add-zone.add-between {
+  display: block;
+  padding: 4px 0;
+  text-align: center;
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+.editor-chapters:hover > .add-zone.add-between:hover {
+  opacity: 1;
 }
 
 /* Floating plus icon for adding blocks */
