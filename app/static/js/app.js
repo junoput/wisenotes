@@ -282,6 +282,9 @@ function synchronizeAllTokenInputs(scope = document) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Mark body as JS-active for CSS progressive enhancement
+  document.body.classList.add('js-active');
+
   // Delay a tick to ensure HTMX-rendered lists are present
   setTimeout(() => focusFirstNoteItem(), 0);
   const root = document.documentElement;
@@ -377,12 +380,15 @@ document.addEventListener('DOMContentLoaded', () => {
             });
           }
 
-          // Clear container
-          container.innerHTML = '';
+          // Hide the plain-text fallback and prepare for CodeMirror
+          const codeValue = textarea.value;
+          container.classList.add('js-enhanced');
+          // Remove fallback <pre> and hidden textarea; CodeMirror replaces them
+          container.querySelectorAll('.code-fallback, .code-block-textarea').forEach(el => el.remove());
 
           // Create read-only CodeMirror instance
           const cm = window.CodeMirror(container, {
-            value: textarea.value,
+            value: codeValue,
             mode: mime,
             lineNumbers: true,
             readOnly: true,
@@ -449,6 +455,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           block._mathInitialized = true;
+          block.classList.add('js-enhanced');
         } catch (err) {
           console.warn('Failed to render math formula:', err);
           content.textContent = formula; // Fallback to plain text

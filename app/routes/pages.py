@@ -517,7 +517,11 @@ async def upload_media_form(
 
     # Store metadata in note JSON
     service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
-    
+
+    # Non-HTMX form submit: redirect back to note page
+    if not request.headers.get("HX-Request"):
+        return RedirectResponse(url=f"/{note.name}", status_code=303)
+
     # Get updated media list
     media_files = service.repo.list_media(note.name)
     

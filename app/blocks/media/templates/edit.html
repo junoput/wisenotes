@@ -17,7 +17,7 @@
     <div id="media-preview-{{ chapter.id }}" style="position: relative; width: fit-content; background: transparent; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: visible; margin-bottom: 8px;">
       <img src="{{ chapter.content }}" alt="preview" style="width: auto; height: auto; max-width: 100%; max-height: 400px; object-fit: contain;">
       <button type="button"
-              class="media-edit-btn"
+              class="media-edit-btn js-only-btn"
               onclick="openImageEditor('{{ chapter.content }}', '{{ note_id }}', '{{ chapter.id }}')"
               title="Edit image"
               style="position: absolute; top: 4px; right: 4px;">
@@ -33,10 +33,23 @@
          data-chapter-id="{{ chapter.id }}">
       <div class="media-drop-zone-icon">&#128247;</div>
       <div class="media-drop-zone-text">Drop an image here</div>
-      <div class="media-drop-zone-hint">or use the gallery below</div>
+      <div class="media-drop-zone-hint">or use the file picker / gallery below</div>
     </div>
   {% endif %}
   <input type="hidden" id="content-{{ chapter.id }}" name="content_text" value="{{ chapter.content or '' }}">
+
+  {# Plain file upload form — works without JS #}
+  <div class="media-upload-fallback" style="margin-top: 8px;">
+    <form action="/notes/{{ note_id }}/media/upload"
+          method="post"
+          enctype="multipart/form-data"
+          class="media-upload-fallback-form">
+      <label for="media-file-{{ chapter.id }}" style="font-size: 0.85em; color: #aaa;">Upload image:</label>
+      <input type="file" id="media-file-{{ chapter.id }}" name="file" accept="image/*" class="media-file-input">
+      <button type="submit" class="btn media-upload-submit" style="margin-top: 4px;">Upload</button>
+    </form>
+  </div>
+
   <div id="media-picker-container-{{ chapter.id }}"
        hx-get="/notes/{{ note_id }}/chapters/{{ chapter.id }}/media/picker"
        hx-trigger="load"

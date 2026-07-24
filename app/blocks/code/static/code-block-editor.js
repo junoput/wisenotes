@@ -72,6 +72,9 @@ export class CodeBlockEditor extends Editor {
     // Create CodeMirror instance
     this.editor = window.CodeMirror.fromTextArea(textarea, config);
 
+    // Mark container so CSS hides the plain textarea fallback
+    this.container.classList.add('js-enhanced');
+
     // Ensure the CodeMirror wrapper stays above the button row
     const wrapper = this.editor.getWrapperElement();
     const buttonRow = this.container.querySelector('.chapter-edit-form > div:last-of-type');

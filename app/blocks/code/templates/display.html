@@ -2,5 +2,6 @@
 <div class="block-content code-block-display" 
      data-language="{{ chapter.language or 'python' }}"
      data-chapter-id="{{ chapter.id }}">
+  <pre class="code-fallback"><code>{{ chapter.content }}</code></pre>
   <textarea class="code-block-textarea" style="display:none;">{{ chapter.content }}</textarea>
 </div>

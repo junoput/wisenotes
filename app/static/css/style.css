@@ -135,6 +135,69 @@ a { color: var(--accent); }
   padding: 8px 0;
 }
 
+/* ── No-JS fallbacks ──────────────────────────────────────── */
+/* Code: <pre> fallback visible by default; hidden when JS creates CodeMirror */
+.code-fallback {
+  margin: 0;
+  padding: 12px 16px;
+  background: #0b1220;
+  color: #e2e8f0;
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.9em;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  border-radius: 8px;
+}
+.code-fallback code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+/* JS hides the <pre> fallback once CodeMirror renders */
+.code-block-display.js-enhanced .code-fallback { display: none; }
+
+/* Code edit textarea: visible by default, JS hides when CodeMirror active */
+.code-fallback-textarea { font-family: 'Fira Code', 'Consolas', monospace; font-size: 0.9em; }
+.js-enhanced .code-fallback-textarea { display: none; }
+
+/* Math: raw source visible by default; hidden when JS renders KaTeX */
+.math-formula-content { white-space: pre-wrap; }
+.math-source-label { font-size: 0.75em; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+.math-block-display.js-enhanced .math-formula-content { white-space: normal; }
+.math-block-display.js-enhanced .math-source-label { display: none; }
+
+/* ── No-JS warnings for JS-only features ──────────────────── */
+/* Media: file input visible by default; JS hides it and shows Import button */
+.media-file-input { font-size: 0.85em; }
+.media-import-btn { display: none; }
+.media-upload-submit { }
+.js-media-enhanced .media-file-input { display: none; }
+.js-media-enhanced .media-import-btn { display: inline-block; }
+.js-media-enhanced .media-upload-submit { display: none; }
+
+/* Media upload fallback hidden when picker JS loads */
+.media-picker-inline ~ .media-upload-fallback { display: none; }
+
+/* Image editor button: JS-only (uses canvas) */
+.js-only-btn { display: none; }
+body.js-active .js-only-btn { display: inline-flex; }
+
+/* Media drop zone: noscript fallback text */
+.media-drop-zone-hint-noscript { display: none; }
+
+noscript .js-required-warning {
+  display: block;
+  padding: 12px 16px;
+  margin: 8px 0;
+  background: color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent);
+  border: 1px solid var(--warning, #f59e0b);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.85em;
+  text-align: center;
+}
+
 /* Chapter type border colors */
 .chapter-item-container[data-chapter-type="chapter"] {
   border-left-color: var(--color-chapter) !important;

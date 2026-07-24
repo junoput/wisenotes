@@ -77,12 +77,14 @@
             <div class="block-content code-block-display" 
                  data-language="{{ chapter.language or 'python' }}"
                  data-chapter-id="{{ chapter.id }}">
+              <pre class="code-fallback"><code>{{ chapter.content }}</code></pre>
               <textarea class="code-block-textarea" style="display:none;">{{ chapter.content }}</textarea>
             </div>
           {% elif chapter.type == 'math' %}
             <div class="block-content math-block-display" 
                  data-language="{{ chapter.language or 'latex' }}"
                  data-chapter-id="{{ chapter.id }}">
+              <div class="math-source-label">{{ chapter.language or 'latex' }} formula:</div>
               <div class="math-formula-content">{{ chapter.content }}</div>
             </div>
           {% elif chapter.type == 'media' %}

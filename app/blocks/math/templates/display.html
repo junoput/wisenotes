@@ -1,4 +1,7 @@
 {# Display template for math blocks #}
 <div class="block-content math-block-display" 
      data-language="{{ chapter.language or 'latex' }}"
-     style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Computer Modern', serif;">{{ chapter.content }}</div>
+     style="white-space: pre-wrap; word-wrap: break-word; font-family: 'Computer Modern', serif;">
+  <div class="math-source-label">{{ chapter.language or 'latex' }} formula:</div>
+  <div class="math-formula-content">{{ chapter.content }}</div>
+</div>
