@@ -6,7 +6,6 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 
 - **Notes & chapters** — create, edit, delete, reorder; drag-and-drop chapter ordering
 - **Block types** — paragraph, code (syntax-highlighted), math (LaTeX/AsciiMath), media (images), nested chapters
-- **Modular block system** — add new block types by dropping a folder into `app/blocks/` (auto-discovered)
 - **Export / import** — full JSON export and import of all notes
 - **Keyboard-friendly** — configurable accessibility keybindings
 - **Light / dark theme** — toggle via UI
@@ -45,7 +44,7 @@ pytest tests/
 |------|---------|
 | `app/routes/` | FastAPI route handlers (pages + API) |
 | `app/services/` | Business logic (`NoteService`) and file storage |
-| `app/blocks/` | Modular block type definitions (auto-discovered) |
+| `app/blocks.py` | Block type catalogue |
 | `app/templates/` | Jinja2 templates and HTMX partials |
 | `app/plugins/` | Server-side plugin hooks |
 | `app/web/` | Dependency injection wiring |
@@ -61,4 +60,3 @@ pytest tests/
 
 ## Documentation
 
-- [Block System](docs/BLOCKS_SYSTEM.md) — how blocks work and how to add new types

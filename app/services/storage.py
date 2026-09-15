@@ -38,56 +38,12 @@ class JsonNoteRepository:
         return self._note_dir(name) / f"{name}.json"
 
     def _media_dir(self, name: str) -> Path:
-        """Get media folder for a note.
-
-        Uses the media block's ``data_folder`` declaration so the folder
-        name is owned by the block, not hard-coded here.
-        """
-        from app.blocks import get_block
-        media_block = get_block("media")
-        return self._block_note_data_dir(name, media_block.name)
+        return self._note_dir(name) / "media"
 
     def _ensure_media_dir(self, name: str) -> Path:
-        """Lazily create media folder via the media block's data management."""
-        from app.blocks import get_block
-        media_block = get_block("media")
-        return self.ensure_block_note_data_dir(name, media_block.name)
-
-    def _block_note_data_dir(self, note_name: str, block_name: str) -> Path:
-        """Return a block-owned per-note data directory without creating it."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.data_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
-        return block.get_note_data_dir(self._root_dir, note_name)
-
-    def ensure_block_note_data_dir(self, note_name: str, block_name: str) -> Path:
-        """Create and return a block-owned per-note data directory on demand."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.data_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
-        return block.ensure_note_data_dir(self._root_dir, note_name)
-
-    def get_block_profile_dir(self, block_name: str) -> Path:
-        """Return a block-owned hidden profile directory at the data root."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.profile_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
-        return block.get_profile_dir(self._root_dir)
-
-    def ensure_block_profile_dir(self, block_name: str) -> Path:
-        """Create and return a block-owned hidden profile directory on demand."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.profile_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
-        return block.ensure_profile_dir(self._root_dir)
+        d = self._media_dir(name)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     def _maybe_migrate_from_legacy(self) -> None:
         # If no legacy file, nothing to do

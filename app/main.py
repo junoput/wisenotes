@@ -47,11 +47,6 @@ async def set_security_headers(request: Request, call_next):
     return response
 
 
-# Mount block-specific static dirs before the main /static mount
-code_static_path = Path(__file__).parent / "blocks" / "code" / "static"
-if code_static_path.exists():
-    app.mount("/static/blocks/code", StaticFiles(directory=code_static_path), name="code-block-static")
-
 static_path = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 

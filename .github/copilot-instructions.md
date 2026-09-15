@@ -18,10 +18,7 @@ app/
 │   ├── notes.py             # NoteService — all business logic
 │   ├── storage.py           # JsonNoteRepository — file-based persistence
 │   └── image_processing.py  # Pillow-based media processing
-├── blocks/                  # Modular block system (auto-discovered)
-│   ├── base.py              # BaseBlock dataclass
-│   ├── registry.py          # Auto-discovery + registry
-│   └── <type>/block.py      # chapter, code, math, media, paragraph, text
+├── blocks.py                # Block type catalogue (chapter, paragraph, code, math, media, text)
 ├── editor/
 │   └── mixed_content.py     # Mixed-content editor helpers
 ├── plugins/
@@ -94,34 +91,14 @@ service: NoteService = Depends(get_note_service)
 
 ## Block System
 
-Blocks live in `app/blocks/<name>/` and are auto-discovered at startup.
+Block types are a catalogue in `app/blocks.py` (`BLOCKS`, `get_block`,
+`get_all_blocks`). A chapter's `type` names one entry; unknown types fall back
+to `text`. Rendering and editing branch on the type inside two templates:
+`components/editor_chapters.html` (display) and `partials/chapter_edit_form.html`
+(edit form). To add a type: add a `Block` entry, then a branch in each template.
 
-### Adding a New Block
-
-1. Create `app/blocks/myblock/block.py`:
-   ```python
-   from dataclasses import dataclass
-   from app.blocks.base import BaseBlock
-
-   @dataclass
-   class MyBlock(BaseBlock):
-       name: str = "myblock"
-       display_name: str = "My Block"
-       emoji: str = "🎯"
-       color: str = "#10b981"
-       can_nest: bool = False
-       editor: str = "textarea"
-
-   block = MyBlock()  # Required — registry looks for this
-   ```
-2. Create `app/blocks/myblock/templates/display.html` and `edit.html`
-3. Restart — auto-discovered, no registration code needed
-
-### Block Rules
-
-- `chapter` is the only block allowed at root level and the only container (`can_nest=True`)
-- `text` is the fallback for unknown types — `get_block("nonexistent")` returns text
-- Block API: `get_block(name)`, `get_all_blocks()`, `get_block_choices()`
+- `chapter` is the only block allowed at root level and the only container
+- `text` is hidden from the picker (`show_in_picker=False`) and is the fallback
 
 ---
 
@@ -208,7 +185,7 @@ pytest tests/
 | Service | `app/services/notes.py` |
 | Storage | `app/services/storage.py` |
 | Schemas | `app/schemas.py` |
-| Blocks | `app/blocks/` (see `docs/BLOCKS_SYSTEM.md`) |
+| Blocks | `app/blocks.py` |
 | DI | `app/web/dependencies.py` |
 | Config | `app/config.py` |
 | Plugins | `app/plugins/base.py`, `app/plugins/registry.py` |

@@ -204,7 +204,7 @@ async function loadEditorClass(editorType) {
         return window.editorRegistry['code-block'];
       }
       // Fallback: dynamically import if not registered
-      const { CodeBlockEditor } = await import('/static/blocks/code/code-block-editor.js');
+      const { CodeBlockEditor } = await import('./editors/code-block-editor.js');
       return CodeBlockEditor;
     }
     case 'textarea':
