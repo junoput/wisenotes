@@ -1,8 +1,7 @@
 """Tests for NoteService business logic."""
 
-import pytest
-
-from app.schemas import NoteCreate, NoteUpdate
+from app.schemas import NoteCreate
+from app.schemas import NoteUpdate
 
 
 class TestNoteServiceCRUD:

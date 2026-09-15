@@ -43,7 +43,7 @@ def test_htmx_request_gets_fragment(client):
     resp = client.get(f"/notes/{note['id']}", headers={"HX-Request": "true"})
     assert resp.status_code == 200
     assert "<!doctype" not in resp.text.lower()
-    assert 'hx-swap-oob' in resp.text
+    assert "hx-swap-oob" in resp.text
 
 
 def test_chapter_edit_form_renders(client):

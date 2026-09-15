@@ -1,11 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import UploadFile
+from fastapi.responses import FileResponse
+from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from app.schemas import NoteCreate, NoteDocument, NoteUpdate
+from app.config import get_settings
+from app.schemas import NoteCreate
+from app.schemas import NoteDocument
+from app.schemas import NoteUpdate
+from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
-from app.config import get_settings
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -71,13 +79,13 @@ async def import_notes(
         raise HTTPException(status_code=413, detail="Import too large")
     try:
         doc = NoteDocument.model_validate_json(raw)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON document") from exc
-    imported = service.import_document(doc)
+    service.import_document(doc)
     notes = service.list_notes()
     active = notes[0] if notes else None
-    return templates.TemplateResponse(request, 
-        "partials/note_list.html", {"request": request, "notes": notes, "active": active}
+    return templates.TemplateResponse(
+        request, "partials/note_list.html", {"request": request, "notes": notes, "active": active}
     )
 
 
@@ -89,19 +97,16 @@ async def upload_media(
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
+
     content = await file.read()
-    
+
     # Max 10MB per file
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
-    
+
     # Process image (resize, reformat, rename)
-    from app.services.image_processing import process_uploaded_image
-    new_filename, processed_content, metadata = process_uploaded_image(
-        file.filename, content
-    )
-    
+    new_filename, processed_content, metadata = process_uploaded_image(file.filename, content)
+
     # Save processed media
     relative_path = service.save_media_file(note_id, new_filename, processed_content)
     if relative_path is None:
@@ -109,13 +114,15 @@ async def upload_media(
 
     # Persist media metadata in note JSON
     service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
-    
-    return JSONResponse({
-        "filename": new_filename,
-        "original_filename": file.filename,
-        "path": relative_path,
-        "metadata": metadata.to_dict(),
-    })
+
+    return JSONResponse(
+        {
+            "filename": new_filename,
+            "original_filename": file.filename,
+            "path": relative_path,
+            "metadata": metadata.to_dict(),
+        }
+    )
 
 
 @router.get("/notes/{note_id}/media/list")
@@ -124,7 +131,7 @@ async def list_media(note_id: str, service: NoteService = Depends(get_note_servi
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
+
     files = service.repo.list_media(note.name)
     return JSONResponse({"media": files})
 
@@ -137,26 +144,23 @@ async def delete_media(
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
+
     ok = service.repo.delete_media(note.name, filename)
     if not ok:
         raise HTTPException(status_code=404, detail="Media file not found")
-    
+
     return JSONResponse({"status": "deleted"})
 
 
 @router.get("/notes/{note_id}/media/{filename}")
-async def get_media(
-    note_id: str, filename: str, service: NoteService = Depends(get_note_service)
-):
+async def get_media(note_id: str, filename: str, service: NoteService = Depends(get_note_service)):
     """Serve a media file."""
     note = service.get_note(note_id)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
+
     filepath = service.repo.get_media_path(note.name, filename)
     if not filepath:
         raise HTTPException(status_code=404, detail="Media file not found")
-    
-    return FileResponse(filepath)
 
+    return FileResponse(filepath)

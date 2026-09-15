@@ -1,6 +1,8 @@
 """Tests for the block catalogue."""
 
-from app.blocks import BLOCKS, get_all_blocks, get_block
+from app.blocks import BLOCKS
+from app.blocks import get_all_blocks
+from app.blocks import get_block
 
 
 def test_known_block():

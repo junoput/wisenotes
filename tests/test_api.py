@@ -1,7 +1,5 @@
 """Tests for API routes."""
 
-import json
-
 
 class TestHealthEndpoint:
     def test_html_health(self, client):
