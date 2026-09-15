@@ -27,8 +27,8 @@ dev = [
   "anyio>=4.4.0",
 ]
 
-[tool.setuptools.package-dir]
-"" = "app"
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.ruff]
 line-length = 100
