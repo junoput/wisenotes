@@ -123,6 +123,14 @@ Settings are loaded via `app/config.py` using pydantic-settings with `lru_cache`
 
 ---
 
+## Git and review
+
+Branching, commit format, quality gates and the no-JavaScript rule are in
+[`CONTRIBUTING.md`](../CONTRIBUTING.md). CI runs `ruff check`, `ruff format --check`
+and `pytest` on every push and pull request.
+
+---
+
 ## Testing
 
 Tests live in `tests/` using pytest + FastAPI TestClient. Fixtures in `tests/conftest.py`:

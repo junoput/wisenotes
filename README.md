@@ -57,3 +57,6 @@ pytest tests/
 
 ## Documentation
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): branches, commits, the quality gates CI runs, and the no-JavaScript rule.
