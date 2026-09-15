@@ -11,11 +11,6 @@
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
   <script src="/static/js/init-layout.js"></script>
   <script src="/static/vendor/htmx/htmx.min.js" defer></script>
-  <script nonce="{{ request.state.csp_nonce }}">
-    // Accessibility keybindings exposed to client JS
-    window.WISENOTES_ACCESSIBILITY = {{ accessibility|tojson | safe }};
-    console.log('[inline] WISENOTES_ACCESSIBILITY', window.WISENOTES_ACCESSIBILITY);
-  </script>
   <script type="module" src="/static/js/app.js?v=16" defer></script>
   <script src="/static/js/media-drop.js" defer></script>
   <script src="/static/js/image-editor.js" defer></script>

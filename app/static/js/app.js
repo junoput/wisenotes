@@ -1363,49 +1363,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // NOTE: Drag-and-drop for chapters is now handled by drag-drop.js module
   // The old handlers here have been removed to avoid conflicts.
-
-  // Accessibility: simple keyboard shortcut capture and logging
-  function _normalizeKeyEvent(e) {
-    // Handle modifier combos first
-    if (e.key === 'Enter' && e.shiftKey) return 'shift enter';
-    // Map common keys to human-friendly strings used in accessibility.cfg
-    const map = {
-      'ArrowDown': 'down arrow',
-      'ArrowUp': 'up arrow',
-      'ArrowRight': 'right arrow',
-      'ArrowLeft': 'left arrow',
-      'Escape': 'esc',
-      'Enter': 'enter',
-      'Backspace': 'back space',
-    };
-    if (map[e.key]) return map[e.key];
-    // Single character keys (letters, digits)
-    if (e.key && e.key.length === 1) return e.key.toLowerCase();
-    // Fallback to key value
-    return e.key || String(e.which || 'unknown');
-  }
-
-  const _accessibilityMap = (window.WISENOTES_ACCESSIBILITY && typeof window.WISENOTES_ACCESSIBILITY === 'object') ? window.WISENOTES_ACCESSIBILITY : {};
-  // Invert mapping for quick lookup: keyString -> actionName
-  const _keyToAction = {};
-  Object.keys(_accessibilityMap).forEach((action) => {
-    const v = String(_accessibilityMap[action]).trim().toLowerCase();
-    if (v) _keyToAction[v] = action;
-  });
-
-  document.addEventListener('keydown', (e) => {
-    try {
-      const keyStr = _normalizeKeyEvent(e);
-      const action = _keyToAction[keyStr];
-      if (action) {
-        console.log('[accessibility] key pressed', { key: keyStr, action });
-      } else {
-        console.log('[accessibility] key pressed (unmapped)', { key: keyStr });
-      }
-    } catch (err) {
-      console.warn('Accessibility key handler error', err);
-    }
-  });
 });
 
 // Media upload and gallery handling

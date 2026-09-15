@@ -7,10 +7,9 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 - **Notes & chapters** — create, edit, delete, reorder; drag-and-drop chapter ordering
 - **Block types** — paragraph, code (syntax-highlighted), math (LaTeX/AsciiMath), media (images), nested chapters
 - **Export / import** — full JSON export and import of all notes
-- **Keyboard-friendly** — configurable accessibility keybindings
+- **Keyboard-friendly** — arrow-key navigation between notes and blocks
 - **Light / dark theme** — toggle via UI
-- **Strict security** — per-request CSP nonce, secure headers, atomic file writes, path traversal protection
-- **Plugin hooks** — extensible server-side lifecycle events
+- **Strict security** — CSP, secure headers, atomic file writes, path traversal protection
 
 ## Quickstart
 
@@ -46,8 +45,6 @@ pytest tests/
 | `app/services/` | Business logic (`NoteService`) and file storage |
 | `app/blocks.py` | Block type catalogue |
 | `app/templates/` | Jinja2 templates and HTMX partials |
-| `app/plugins/` | Server-side plugin hooks |
-| `app/web/` | Dependency injection wiring |
 | `data/` | File-based note storage (one folder per note) |
 | `tests/` | Pytest test suite |
 

@@ -11,18 +11,16 @@ from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from typing import Any
 from typing import Optional
 
 from app.blocks import get_all_blocks
 from app.blocks import get_block
-from app.editor.mixed_content import build_editor_json
-from app.editor.mixed_content import split_mixed_content
 from app.schemas import Chapter
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services.notes import NoteService
-from app.web.dependencies import get_note_service
-from app.config import get_accessibility_bindings
+from app.services.notes import get_note_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -31,13 +29,7 @@ logger = logging.getLogger(__name__)
 
 def _template_context(request: Request, **kwargs) -> dict:
     """Build template context with block types configuration."""
-    ctx = {"request": request, "block_types": get_all_blocks(), "get_block": get_block, **kwargs}
-    # Include accessibility keybindings for templates and client JS
-    try:
-        ctx["accessibility"] = get_accessibility_bindings()
-    except Exception:
-        ctx["accessibility"] = {}
-    return ctx
+    return {"request": request, "block_types": get_all_blocks(), "get_block": get_block, **kwargs}
 
 
 def _normalize_source_multi(value) -> Optional[str]:
@@ -63,6 +55,47 @@ def _normalize_source_multi(value) -> Optional[str]:
     if not parts:
         return None
     return "; ".join(parts)
+
+
+def split_mixed_content(value: Any) -> tuple[str, list[dict[str, Any]]]:
+    if isinstance(value, list):
+        text_parts: list[str] = []
+        children: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, str):
+                text_parts.append(item)
+            elif isinstance(item, dict):
+                children.append(item)
+        content_text = "\n\n".join([t for t in text_parts if t])
+        return content_text, children
+
+    if isinstance(value, str):
+        return value, []
+
+    return "", []
+
+
+def build_editor_json(chapter: Chapter, all_chapters: list[Chapter], depth: int = 0, max_depth: int = 3) -> dict[str, Any]:
+    children = [c for c in all_chapters if c.parent_id == chapter.id]
+    children.sort(key=lambda c: c.order)
+
+    result: dict[str, Any] = {"id": chapter.id, "title": chapter.title, "type": chapter.type, "content": []}
+    
+    # Include language if it exists
+    if chapter.language:
+        result["language"] = chapter.language
+    # Include source if it exists
+    if chapter.source:
+        result["source"] = chapter.source
+
+    if chapter.content:
+        result["content"].append(chapter.content)
+
+    if children and depth < max_depth:
+        for child in children:
+                result["content"].append(build_editor_json(child, all_chapters, depth + 1, max_depth=max_depth))
+
+    return result
 
 
 @router.get("/", response_class=HTMLResponse)

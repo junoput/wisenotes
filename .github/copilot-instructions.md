@@ -9,7 +9,7 @@ Wisenotes is a FastAPI + Jinja2 note-taking app using server-rendered HTML and H
 ```
 app/
 ├── main.py                  # FastAPI app, middleware, CSP, router mounting
-├── config.py                # Settings (pydantic-settings) + accessibility config
+├── config.py                # Settings (pydantic-settings)
 ├── schemas.py               # Pydantic models: Note, Chapter, NoteCreate, NoteUpdate, NoteDocument
 ├── routes/
 │   ├── pages.py             # HTML/HTMX page endpoints (server-rendered)
@@ -19,15 +19,8 @@ app/
 │   ├── storage.py           # JsonNoteRepository — file-based persistence
 │   └── image_processing.py  # Pillow-based media processing
 ├── blocks.py                # Block type catalogue (chapter, paragraph, code, math, media, text)
-├── editor/
-│   └── mixed_content.py     # Mixed-content editor helpers
-├── plugins/
-│   ├── base.py              # PluginBase hooks interface
-│   └── registry.py          # Plugin lifecycle management
 ├── templates/               # Jinja2 (base, index, partials/, components/)
-├── static/                  # CSS, JS, vendor libs
-└── web/
-    └── dependencies.py      # FastAPI dependency injection wiring
+└── static/                  # CSS, JS, vendor libs
 tests/                       # Pytest test suite
 data/                        # Runtime note storage (one folder per note)
 ```
@@ -123,7 +116,7 @@ Settings are loaded via `app/config.py` using pydantic-settings with `lru_cache`
 
 ## Security
 
-- **CSP**: strict per-request nonce set in `app/main.py` middleware. When adding CDNs or inline scripts, update the CSP header
+- **CSP**: set in `app/main.py` middleware; no inline scripts. When adding CDNs, update the CSP header
 - **Headers**: X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy
 - **Storage**: path traversal protection on media endpoints, size limits on uploads (10MB)
 - **Imports**: max payload size enforced (`max_payload_bytes` setting)
@@ -186,7 +179,6 @@ pytest tests/
 | Storage | `app/services/storage.py` |
 | Schemas | `app/schemas.py` |
 | Blocks | `app/blocks.py` |
-| DI | `app/web/dependencies.py` |
+| DI | `get_note_service` in `app/services/notes.py` |
 | Config | `app/config.py` |
-| Plugins | `app/plugins/base.py`, `app/plugins/registry.py` |
 | Tests | `tests/conftest.py`, `tests/test_*.py` |

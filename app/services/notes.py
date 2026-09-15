@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 from uuid import uuid4
 
-from app.plugins.registry import PluginRegistry
+from app.config import get_settings
 from app.schemas import Chapter, Note, NoteCreate, NoteDocument, NoteUpdate
 from app.services.storage import JsonNoteRepository
 
@@ -42,9 +42,8 @@ def _make_chapter(
 
 
 class NoteService:
-    def __init__(self, repo: JsonNoteRepository, plugins: PluginRegistry) -> None:
+    def __init__(self, repo: JsonNoteRepository) -> None:
         self.repo = repo
-        self.plugins = plugins
 
     def list_notes(self) -> List[Note]:
         return self.repo.list_notes()
@@ -82,7 +81,6 @@ class NoteService:
             chapters=payload.chapters,
         )
         saved = self.repo.upsert_note(note)
-        self.plugins.notify_note_saved(saved)
         return saved
 
     def update_note(self, note_id: str, payload: NoteUpdate) -> Optional[Note]:
@@ -107,7 +105,6 @@ class NoteService:
         })
         # Pass old name to allow repo to rename folder/file if needed
         saved = self.repo.upsert_note(updated, old_name=existing.name)
-        self.plugins.notify_note_saved(saved)
         return saved
 
     def delete_note(self, note_id: str) -> bool:
@@ -133,7 +130,6 @@ class NoteService:
             "updated_at": datetime.utcnow(),
         })
         saved = self.repo.upsert_note(updated)
-        self.plugins.notify_note_saved(saved)
         return saved
 
     @staticmethod
@@ -167,11 +163,10 @@ class NoteService:
         return max((c.order for c in siblings), default=-1) + 1
 
     def _save(self, note: Note, **update_fields) -> Note:
-        """Apply updates, persist, and notify plugins."""
+        """Apply updates and persist."""
         update_fields.setdefault("updated_at", datetime.utcnow())
         updated = note.model_copy(update=update_fields)
         saved = self.repo.upsert_note(updated)
-        self.plugins.notify_note_saved(saved)
         return saved
 
     def add_chapter(self, note_id: str, title: Optional[str] = None, parent_id: Optional[str] = None, block_type: str = "chapter") -> Optional[Note]:
@@ -468,11 +463,12 @@ class NoteService:
         return self.repo.upsert_note(updated)
 
     def export_document(self) -> NoteDocument:
-        doc = self.repo.export_document()
-        self.plugins.notify_export(doc)
-        return doc
+        return self.repo.export_document()
 
     def import_document(self, doc: NoteDocument) -> NoteDocument:
-        imported = self.repo.import_document(doc)
-        self.plugins.notify_import(imported)
-        return imported
+        return self.repo.import_document(doc)
+
+
+def get_note_service() -> NoteService:
+    """FastAPI dependency: one repository-backed service per request."""
+    return NoteService(JsonNoteRepository(get_settings().data_path))

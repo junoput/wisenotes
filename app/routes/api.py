@@ -4,7 +4,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.schemas import NoteCreate, NoteDocument, NoteUpdate
 from app.services.notes import NoteService
-from app.web.dependencies import get_note_service
+from app.services.notes import get_note_service
 from app.config import get_settings
 
 templates = Jinja2Templates(directory="app/templates")

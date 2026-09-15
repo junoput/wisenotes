@@ -1,6 +1,4 @@
-import base64
 import logging
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,8 +15,6 @@ logging.basicConfig(level=logging.INFO)
 
 @app.middleware("http")
 async def set_security_headers(request: Request, call_next):
-    nonce = base64.b64encode(os.urandom(16)).decode("ascii")
-    request.state.csp_nonce = nonce
     try:
         response = await call_next(request)
     except Exception:
@@ -30,7 +26,7 @@ async def set_security_headers(request: Request, call_next):
 
     csp = (
         "default-src 'self'; "
-        f"script-src 'self' https://cdn.jsdelivr.net 'nonce-{nonce}' 'unsafe-hashes'; "
+        "script-src 'self' https://cdn.jsdelivr.net 'unsafe-hashes'; "
         "script-src-attr 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "font-src 'self' https://cdn.jsdelivr.net data:; "
