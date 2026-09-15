@@ -1,129 +1,29 @@
+{# Media library for one block: upload, pick, delete. Every action is a form. Needs active, chapter_id, media_files. #}
 {% set note_id = active.id %}
-<style>
-  .media-gallery-thumb {
-    position: relative;
-    border-radius: 4px;
-    overflow: visible;
-    border: 2px solid #3a3a3a;
-    cursor: pointer;
-  }
-  
-  .media-delete-btn {
-    --media-delete-bg: rgba(220, 38, 38, 0.9);
-    --media-delete-bg-hover: rgba(220, 38, 38, 1);
-    --media-delete-color: #fff;
-    --media-delete-border: 1px solid rgba(255, 255, 255, 0.12);
-    --media-delete-size: 22px;
-    --media-delete-radius: 4px;
-    --media-delete-icon: "\00d7";
-
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    width: var(--media-delete-size);
-    height: var(--media-delete-size);
-    background: var(--media-delete-bg);
-    border: var(--media-delete-border);
-    border-radius: var(--media-delete-radius);
-    color: var(--media-delete-color);
-    font-size: 13px;
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 0.2s ease, background 0.2s ease, border-color 0.2s ease;
-    z-index: 10;
-    padding: 0;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
-  }
-  
-  .media-gallery-thumb:hover .media-delete-btn {
-    opacity: 1;
-  }
-  
-  .media-delete-btn:hover {
-    background: var(--media-delete-bg-hover);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  
-  .media-gallery-thumb img {
-    width: 100%;
-    aspect-ratio: 1;
-    object-fit: cover;
-    border-radius: 2px;
-    display: block;
-  }
-  
-  .media-gallery-preview {
-    position: absolute;
-    bottom: 100%;
-    left: 50%;
-    transform: translateX(-50%) translateY(-8px);
-    background: #2a2a2a;
-    border: 1px solid #444;
-    border-radius: 6px;
-    padding: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    z-index: 1000;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.2s ease;
-    min-width: 200px;
-    max-width: 300px;
-  }
-  
-  .media-gallery-thumb:hover .media-gallery-preview {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  
-  .media-gallery-preview img {
-    width: auto;
-    height: auto;
-    max-width: 280px;
-    max-height: 280px;
-    object-fit: contain;
-    border-radius: 4px;
-    display: block;
-  }
-  
-  .media-gallery-preview-label {
-    font-size: 12px;
-    color: #aaa;
-    padding: 6px 4px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-</style>
-
-{% if media_files %}
+<form class="media-upload" action="/notes/{{ note_id }}/media/upload" method="post" enctype="multipart/form-data"
+      hx-post="/notes/{{ note_id }}/media/upload" hx-encoding="multipart/form-data" hx-trigger="submit, change"
+      hx-target="#media-gallery-{{ chapter_id }}" hx-swap="innerHTML">
+  <input type="hidden" name="chapter_id" value="{{ chapter_id }}">
+  <input type="file" name="file" accept="image/*" required aria-label="Image file">
+  <button type="submit" class="btn">Upload</button>
+</form>
+<div class="media-gallery">
   {% for filename in media_files %}
+    {% set url = '/api/notes/' ~ note_id ~ '/media/' ~ filename %}
     <div class="media-gallery-thumb">
-      <button 
-        class="media-delete-btn"
-        onclick="deleteMedia(event, '{{ note_id }}', '{{ filename }}', '{{ chapter_id }}')"
-        title="Delete {{ filename }}">
-        ×
-      </button>
-      <img src="/api/notes/{{ note_id }}/media/{{ filename }}" 
-           alt="{{ filename }}"
-           title="{{ filename }}"
-           hx-post="/notes/{{ note_id }}/chapters/{{ chapter_id }}/media/select"
-           hx-vals='{"url": "/api/notes/{{ note_id }}/media/{{ filename }}"}'
-           hx-target="body"
-           hx-swap="none">
-      <div class="media-gallery-preview">
-        <img src="/api/notes/{{ note_id }}/media/{{ filename }}" 
-             alt="preview">
-        <div class="media-gallery-preview-label">{{ filename }}</div>
-      </div>
+      <form action="/notes/{{ note_id }}/chapters/{{ chapter_id }}/media/select" method="post"
+            hx-post="/notes/{{ note_id }}/chapters/{{ chapter_id }}/media/select" hx-target="body" hx-swap="none">
+        <input type="hidden" name="url" value="{{ url }}">
+        <button type="submit" class="media-pick" title="Use {{ filename }}"><img src="{{ url }}" alt="{{ filename }}"></button>
+      </form>
+      <form action="/notes/{{ note_id }}/media/{{ filename }}/delete" method="post"
+            hx-post="/notes/{{ note_id }}/media/{{ filename }}/delete" hx-target="#media-gallery-{{ chapter_id }}" hx-swap="innerHTML"
+            data-confirm="Delete {{ filename }}?">
+        <input type="hidden" name="chapter_id" value="{{ chapter_id }}">
+        <button type="submit" class="media-delete-btn" title="Delete {{ filename }}" aria-label="Delete {{ filename }}">&times;</button>
+      </form>
     </div>
+  {% else %}
+    <p class="muted">No media uploaded yet</p>
   {% endfor %}
-{% else %}
-  <p style="grid-column: 1 / -1; color: #999; text-align: center;">No media uploaded yet</p>
-{% endif %}
-
-<script type="module" src="/static/js/media-delete.js"></script>
+</div>

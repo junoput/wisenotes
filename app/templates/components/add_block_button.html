@@ -1,19 +1,18 @@
-{% macro add_block_button(note_id, chapter_id, mode='after', header=False, title='Add', block_types={}) -%}
-<div class="add-button-wrap" data-add-mode="{{ mode }}">
+{% macro add_block_button(note_id, ref_id, position, header=False, title='Add', block_types={}) -%}
+{# CSS-only hover menu; each entry is a real form, so it works without JavaScript #}
+<div class="add-button-wrap" data-add-mode="{{ position }}">
 	<div class="add-block-menu css-only" aria-hidden="true">
-		{% set endpoint = "/notes/" ~ note_id ~ ("/chapters/child" if mode == 'child' else "/chapters/after") %}
-		{% set hidden_field = "parent_id" if mode == 'child' else "prev_id" %}
-		{% set hidden_value = chapter_id %}
 		{% for name, config in block_types.items() %}
 			{% if config.show_in_picker %}
-			<form hx-post="{{ endpoint }}" hx-target="body" hx-swap="none">
-				<input type="hidden" name="{{ hidden_field }}" value="{{ hidden_value }}">
+			<form action="/notes/{{ note_id }}/chapters" method="post" hx-post="/notes/{{ note_id }}/chapters" hx-target="body" hx-swap="none">
+				<input type="hidden" name="ref_id" value="{{ ref_id }}">
+				<input type="hidden" name="position" value="{{ position }}">
 				<input type="hidden" name="block_type" value="{{ name }}">
-				<button type="submit" title="Add {{ config.name }}" data-type="{{ name }}" style="background-color: {{ config.color }};">{{ config.emoji }}</button>
+				<button type="submit" title="Add {{ config.display_name }}" data-type="{{ name }}" style="background-color: {{ config.color }};">{{ config.emoji }}</button>
 			</form>
 			{% endif %}
 		{% endfor %}
 	</div>
-	<button class="add-block-icon{% if header %} header{% endif %}" title="{{ title }}" aria-haspopup="true" aria-expanded="false">+</button>
+	<button type="button" class="add-block-icon{% if header %} header{% endif %}" title="{{ title }}" aria-haspopup="true" aria-expanded="false">+</button>
 </div>
 {%- endmacro %}

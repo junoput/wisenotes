@@ -5,6 +5,7 @@ from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
@@ -82,10 +83,12 @@ async def import_notes(
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON document") from exc
     service.import_document(doc)
+    if request.headers.get("hx-request", "").lower() != "true":
+        return RedirectResponse(url="/", status_code=303)
     notes = service.list_notes()
     active = notes[0] if notes else None
     return templates.TemplateResponse(
-        request, "partials/note_list.html", {"request": request, "notes": notes, "active": active}
+        request, "partials/hx_refresh.html", {"request": request, "notes": notes, "active": active}
     )
 
 

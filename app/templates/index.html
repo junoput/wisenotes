@@ -6,4 +6,8 @@
   <section id="editor" class="pane editor" {% if active %}data-note-id="{{ active.id }}"{% endif %}>
     {% include "partials/editor.html" %}
   </section>
+  {% if settings and active %}
+    {% set note = active %}
+    {% include "partials/note_settings.html" %}
+  {% endif %}
 {% endblock %}

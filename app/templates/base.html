@@ -12,34 +12,10 @@
   <script src="/static/js/init-layout.js"></script>
   <script src="/static/vendor/htmx/htmx.min.js" defer></script>
   <script type="module" src="/static/js/app.js?v=16" defer></script>
-  <script src="/static/js/media-drop.js" defer></script>
-  <script src="/static/js/image-editor.js" defer></script>
 </head>
 <body class="page">
   <header class="topbar">
     <div class="brand">Wisenotes</div>
-    <nav class="actions">
-      <div class="toolbar-control">
-        <select id="editor-mode-select" class="toolbar-select" aria-label="Editor mode">
-          <option value="graphical">JSON Editor</option>
-          <option value="json">Raw Code</option>
-          <option value="graphical-2">Graphical Editor</option>
-        </select>
-      </div>
-      <button
-        class="icon-btn settings-btn"
-        title="Settings"
-        aria-label="Settings"
-        hx-get="/settings"
-        hx-target="body"
-        hx-swap="beforeend"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m3.08 3.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m-3.08-3.08l4.24-4.24M19.78 19.78l-4.24-4.24m-3.08-3.08l-4.24-4.24"></path>
-        </svg>
-      </button>
-    </nav>
   </header>
   <main class="layout">
     {% block content %}{% endblock %}

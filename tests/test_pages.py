@@ -1,58 +1,221 @@
-"""The HTML routes. Every other test file talks to /api or the service; these
-are the pages a browser loads, so a template-signature or layout regression
-shows up here and nowhere else."""
+"""The HTML routes, driven the way a browser without JavaScript drives them:
+plain form POSTs with no HX-Request header must redirect to a full page, and
+the same POSTs with the header must return the htmx fragment."""
+
+import re
+from io import BytesIO
+
+from PIL import Image
+
+HX = {"HX-Request": "true"}
+
+
+def _doc(resp):
+    return resp.text.lstrip().lower().startswith("<!doctype html>")
 
 
 def _create(client, title="Page test"):
-    resp = client.post("/notes", data={"title": title})
-    assert resp.status_code == 200
-    return resp
+    resp = client.post("/notes", data={"title": title}, follow_redirects=False)
+    assert resp.status_code == 303
+    note = client.get("/api/notes").json()[-1]
+    assert resp.headers["location"] == f"/notes/{note['id']}"
+    return note
 
 
 def test_home_is_a_full_document(client):
     resp = client.get("/")
-    assert resp.status_code == 200
-    assert resp.text.lstrip().lower().startswith("<!doctype html>")
+    assert resp.status_code == 200 and _doc(resp)
     assert 'rel="stylesheet"' in resp.text
 
 
-def test_create_note_form_post_returns_fragment_and_persists(client):
-    resp = _create(client, "Formed")
-    # today: an HTMX out-of-band fragment, not a document (no-JS gap, ticketed)
-    assert "<!doctype" not in resp.text.lower()
-    assert "Formed" in resp.text
-    notes = client.get("/api/notes").json()
-    assert [n["title"] for n in notes] == ["Formed"]
-    assert len(notes[0]["chapters"]) == 1
+def test_create_note_plain_post_redirects_to_the_note(client):
+    note = _create(client, "Formed")
+    assert note["title"] == "Formed" and len(note["chapters"]) == 1
+    page = client.get(f"/notes/{note['id']}")
+    assert _doc(page) and "Formed" in page.text
+
+
+def test_create_note_htmx_post_gets_fragment(client):
+    resp = client.post("/notes", data={"title": "Swapped"}, headers=HX)
+    assert resp.status_code == 200 and not _doc(resp)
+    assert "hx-swap-oob" in resp.text and "Swapped" in resp.text
 
 
 def test_note_page_by_id_and_by_name(client):
-    _create(client, "Deep Link")
-    note = client.get("/api/notes").json()[0]
+    note = _create(client, "Deep Link")
     for url in (f"/notes/{note['id']}", f"/{note['name']}"):
         resp = client.get(url)
-        assert resp.status_code == 200, url
-        assert resp.text.lstrip().lower().startswith("<!doctype html>")
-        assert "Deep Link" in resp.text
+        assert resp.status_code == 200 and _doc(resp), url
         assert 'class="chapter-section' in resp.text
 
 
-def test_htmx_request_gets_fragment(client):
-    _create(client)
-    note = client.get("/api/notes").json()[0]
-    resp = client.get(f"/notes/{note['id']}", headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    assert "<!doctype" not in resp.text.lower()
-    assert "hx-swap-oob" in resp.text
-
-
-def test_chapter_edit_form_renders(client):
-    _create(client)
-    note = client.get("/api/notes").json()[0]
+def test_every_hx_form_is_also_a_real_form(client):
+    """The no-JS rule, checked mechanically on the two densest pages."""
+    note = _create(client)
     cid = note["chapters"][0]["id"]
-    resp = client.get(f"/notes/{note['id']}/chapters/{cid}/edit")
-    assert resp.status_code == 200
-    assert 'class="chapter-edit-form"' in resp.text
+    for url in (
+        f"/notes/{note['id']}",
+        f"/notes/{note['id']}/chapters/{cid}/edit",
+        f"/notes/{note['id']}/settings",
+    ):
+        html = client.get(url).text
+        for form in re.findall(r"<form[^>]*>", html):
+            if "hx-post" in form:
+                assert 'action="' in form and 'method="post"' in form, (url, form)
+        for tag in re.findall(r"<(?:a|div|button|img)[^>]*hx-get[^>]*>", html):
+            assert tag.startswith("<a") and 'href="' in tag, (url, tag)
+
+
+def test_edit_form_is_a_page_without_htmx_and_a_fragment_with(client):
+    note = _create(client)
+    cid = note["chapters"][0]["id"]
+    url = f"/notes/{note['id']}/chapters/{cid}/edit"
+    page = client.get(url)
+    assert _doc(page) and 'class="chapter-edit-form"' in page.text
+    frag = client.get(url, headers=HX)
+    assert not _doc(frag) and 'class="chapter-edit-form"' in frag.text
+
+
+def test_save_chapter_with_plain_fields(client):
+    note = _create(client)
+    cid = note["chapters"][0]["id"]
+    resp = client.post(
+        f"/notes/{note['id']}/chapters/{cid}/edit",
+        data={"title": "Renamed", "content_text": "hello, no script", "source": "a ;; b ;"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    ch = client.get(f"/api/notes/{note['id']}").json()["chapters"][0]
+    assert (ch["title"], ch["content"], ch["source"]) == ("Renamed", "hello, no script", "a; b")
+
+
+def test_add_block_positions(client):
+    note = _create(client)
+    root = note["chapters"][0]["id"]
+    nid = note["id"]
+    client.post(
+        f"/notes/{nid}/chapters",
+        data={"block_type": "paragraph", "position": "child", "ref_id": root},
+    )
+    client.post(
+        f"/notes/{nid}/chapters",
+        data={"block_type": "chapter", "position": "after", "ref_id": root},
+    )
+    client.post(
+        f"/notes/{nid}/chapters",
+        data={"block_type": "chapter", "position": "before", "ref_id": root},
+    )
+    chapters = client.get(f"/api/notes/{nid}").json()["chapters"]
+    roots = sorted([c for c in chapters if c["parent_id"] is None], key=lambda c: c["order"])
+    assert [c["id"] == root for c in roots] == [False, True, False]
+    assert [c["type"] for c in chapters if c["parent_id"] == root] == ["paragraph"]
+
+
+def test_reorder_buttons(client):
+    note = _create(client)
+    nid, first = note["id"], note["chapters"][0]["id"]
+    client.post(f"/notes/{nid}/chapters", data={"block_type": "chapter", "position": "end"})
+    second = client.get(f"/api/notes/{nid}").json()["chapters"][1]["id"]
+    assert (
+        client.post(
+            f"/notes/{nid}/chapters/{second}/reorder", data={"op": "up"}, follow_redirects=False
+        ).status_code
+        == 303
+    )
+    orders = {c["id"]: c["order"] for c in client.get(f"/api/notes/{nid}").json()["chapters"]}
+    assert orders[second] < orders[first]
+    assert (
+        client.post(f"/notes/{nid}/chapters/{second}/reorder", data={"op": "sideways"}).status_code
+        == 400
+    )
+
+
+def test_settings_page_rename_and_delete(client):
+    note = _create(client, "Old")
+    nid = note["id"]
+    page = client.get(f"/notes/{nid}/settings")
+    assert _doc(page) and 'id="note-settings"' in page.text
+    client.post(f"/notes/{nid}/title", data={"title": "New"})
+    assert client.get(f"/api/notes/{nid}").json()["title"] == "New"
+    resp = client.post(f"/notes/{nid}/delete", follow_redirects=False)
+    assert resp.status_code == 303 and resp.headers["location"] == "/"
+    assert client.get(f"/api/notes/{nid}").status_code == 404
+
+
+def test_delete_chapter_form(client):
+    note = _create(client)
+    nid, cid = note["id"], note["chapters"][0]["id"]
+    assert (
+        client.post(f"/notes/{nid}/chapters/{cid}/delete", follow_redirects=False).status_code
+        == 303
+    )
+    assert client.get(f"/api/notes/{nid}").json()["chapters"] == []
+
+
+def test_media_upload_select_delete_as_forms(client):
+    note = _create(client)
+    nid, root = note["id"], note["chapters"][0]["id"]
+    client.post(
+        f"/notes/{nid}/chapters", data={"block_type": "media", "position": "child", "ref_id": root}
+    )
+    mcid = client.get(f"/api/notes/{nid}").json()["chapters"][1]["id"]
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "red").save(buf, format="PNG")
+    resp = client.post(
+        f"/notes/{nid}/media/upload",
+        data={"chapter_id": mcid},
+        files={"file": ("red.png", buf.getvalue(), "image/png")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303 and resp.headers["location"].endswith(f"/chapters/{mcid}/edit")
+    [filename] = client.get(f"/api/notes/{nid}/media/list").json()["media"]
+    url = f"/api/notes/{nid}/media/{filename}"
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
+    assert client.get(f"/api/notes/{nid}").json()["chapters"][1]["content"] == url
+    assert (
+        client.post(
+            f"/notes/{nid}/media/{filename}/delete",
+            data={"chapter_id": mcid},
+            follow_redirects=False,
+        ).status_code
+        == 303
+    )
+    assert client.get(f"/api/notes/{nid}/media/list").json()["media"] == []
+    bad = client.post(
+        f"/notes/{nid}/media/upload",
+        data={"chapter_id": mcid},
+        files={"file": ("x.png", b"not an image", "image/png")},
+    )
+    assert bad.status_code == 400
+
+
+def test_code_block_is_visible_without_scripts(client):
+    note = _create(client)
+    nid, root = note["id"], note["chapters"][0]["id"]
+    client.post(
+        f"/notes/{nid}/chapters", data={"block_type": "code", "position": "child", "ref_id": root}
+    )
+    cid = client.get(f"/api/notes/{nid}").json()["chapters"][1]["id"]
+    client.post(
+        f"/notes/{nid}/chapters/{cid}/edit", data={"content_text": "print(1)", "language": "python"}
+    )
+    html = client.get(f"/notes/{nid}").text
+    assert (
+        "<pre" in html
+        and "print(1)" in html
+        and "display:none" not in html.split("print(1)")[0][-300:]
+    )
+
+
+def test_import_form_redirects_home(client):
+    _create(client, "Exported")
+    doc = client.get("/api/export").content
+    resp = client.post(
+        "/api/import",
+        files={"file": ("notes.json", doc, "application/json")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303 and resp.headers["location"] == "/"
 
 
 def test_unknown_note_is_404(client):
