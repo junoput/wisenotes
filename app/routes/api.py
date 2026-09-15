@@ -76,7 +76,7 @@ async def import_notes(
     imported = service.import_document(doc)
     notes = service.list_notes()
     active = notes[0] if notes else None
-    return templates.TemplateResponse(
+    return templates.TemplateResponse(request, 
         "partials/note_list.html", {"request": request, "notes": notes, "active": active}
     )
 
