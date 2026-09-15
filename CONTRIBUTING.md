@@ -144,7 +144,7 @@ Changed:
 | `release/*` branches | none; tag on `main` | No stabilisation window is needed for a repo this size. |
 | squash-merge topic branches | `--no-ff` merge commits | Commit bodies here carry the verification; squashing loses it. |
 | `cargo fmt/clippy/test/deny` | `ruff check`, `ruff format --check`, `pytest` | Python toolchain. No dependency-audit step yet; add `pip-audit` when there is a reason to. |
-| three documents | one | Three files for a 72-file project is the kind of thing this project is trying to stop doing. |
+| three documents | one | Three files for a 55-file project is the kind of thing this project is trying to stop doing. |
 | lane workflow, `tick mr`, gate tool | not required by this doc | Those are dev-box conventions, documented in the box's own rules; a contributor without the box follows §1–§5 and is compliant. |
 
 Added, not in nexora: §4, the no-JavaScript rule, and the "say how you know

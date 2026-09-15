@@ -44,13 +44,14 @@ In `app/main.py`, routers are included in this order:
 
 ## Strict Rules
 
-### HTMX Endpoints Return HTML, Not JSON
+### Page POSTs Redirect; htmx Gets the Fragment
 
-```python
-@router.post("/notes", response_class=HTMLResponse)
-async def create_note(...):
-    return templates.TemplateResponse("partials/hx_refresh.html", {...})
-```
+Every page handler that changes state ends with `_after_change(request, service, note)`:
+a plain browser (no `HX-Request` header) gets `303 See Other` to the note page,
+htmx gets `partials/hx_refresh.html`. Page GETs use `_page(...)`, which picks
+`index.html` or the fragment the same way. Never return a fragment to a request
+without the header, and never put an `hx-*` attribute on an element that is not
+also a `<form action method>` or an `<a href>`; `tests/test_pages.py` checks both.
 
 ### Service Boundary
 
