@@ -30,7 +30,7 @@ async def set_security_headers(request: Request, call_next):
 
     csp = (
         "default-src 'self'; "
-        f"script-src 'self' https://unpkg.com https://cdn.jsdelivr.net 'nonce-{nonce}' 'unsafe-hashes'; "
+        f"script-src 'self' https://cdn.jsdelivr.net 'nonce-{nonce}' 'unsafe-hashes'; "
         "script-src-attr 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "font-src 'self' https://cdn.jsdelivr.net data:; "
