@@ -37,6 +37,9 @@ uvicorn app.main:app --reload --port 8000
 pytest tests/
 ```
 
+Needs Python 3.12; see [CONTRIBUTING.md](CONTRIBUTING.md) for a clean-shell
+recipe and for the browser journey driver.
+
 ## Project Structure
 
 | Path | Purpose |

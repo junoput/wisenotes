@@ -82,14 +82,39 @@ ruff format --check app tests
 pytest tests/
 ```
 
-Run them locally before opening the PR; on a warm venv the three take under
-five seconds. Green means green: a flaky test is a bug with a ticket, not a
-retry.
+### Running them from a clean shell
+
+Python 3.12 or newer is required. If `python3.12` is on your PATH:
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/ruff check app tests && .venv/bin/ruff format --check app tests && .venv/bin/pytest tests/
+```
+
+If the system Python is older (devbox has 3.11 and no sudo), bootstrap a 3.12
+with `uv` in a throwaway venv; nothing is installed outside the checkout:
+
+```sh
+python3 -m venv .venv-uv && .venv-uv/bin/pip install -q uv
+.venv-uv/bin/uv venv --python 3.12 .venv
+.venv-uv/bin/uv pip install --python .venv/bin/python -e '.[dev]'
+.venv/bin/ruff check app tests && .venv/bin/ruff format --check app tests && .venv/bin/pytest tests/
+```
+
+The venv must be named `.venv`: the dev box's shared `gate` tool looks only
+there. Expected last line today: `NN passed` with no `failed`; a run that
+prints only dots and no summary did not finish.
+
+On a warm venv the three take under five seconds. Green means green: a
+flaky test is a bug with a ticket, not a retry.
 
 A green here says what it ran and nothing more: unit and HTTP-level tests
-against the FastAPI test client on Linux. It does **not** drive a browser. A
-change that touches templates or JavaScript is verified by hand against a
-running server (see §4) and the PR says which journeys were driven.
+against the FastAPI test client on Linux, including `tests/test_journeys_nojs.py`,
+which submits the real forms out of the rendered HTML the way a browser
+with scripts off would. It does **not** run a browser, so it cannot see
+htmx, CodeMirror or KaTeX. For a change that touches templates or
+JavaScript, also run the browser driver (§4) and name the result in the PR.
 
 ## 4. The no-JavaScript rule
 
@@ -104,11 +129,28 @@ review criterion, checked per change:
   redirect (303) to the page, not with a fragment.
 - Anything the server can do, the server does: rendering code, listing media,
   reordering. JavaScript may do it faster or prettier, never only.
-- To check: open the page with JavaScript disabled (Firefox `about:config`
-  `javascript.enabled=false`, Chromium DevTools > Settings > Debugger >
-  Disable JavaScript, or Playwright `java_script_enabled=False`), drive the
-  journey, and name it in the PR. `curl` on the form's action with its fields
-  is a sufficient check for a single form.
+- To check by hand: open the page with JavaScript disabled (Firefox
+  `about:config` `javascript.enabled=false`; Chromium DevTools > Settings >
+  Debugger > Disable JavaScript) and drive the journey.
+- To check mechanically: `tests/journeys.py` drives fourteen journeys in a
+  real browser twice, once with scripts off and once with them on (the
+  control arm, which proves the driver can see success), against a running
+  server:
+
+  ```sh
+  .venv/bin/pip install -e '.[e2e]' && .venv/bin/playwright install chromium
+  .venv/bin/uvicorn app.main:app --port 8000 &     # any writable data dir
+  .venv/bin/python tests/journeys.py http://127.0.0.1:8000
+  ```
+
+  Exit 0 is a pass in both arms; exit 1 names the failed journey; exit 2 is
+  VACUOUS, meaning an arm observed fewer than fourteen journeys or could not
+  tell scripts-on from scripts-off, and no verdict is reported. Expected
+  output ends with `VERDICT: PASS (14/14 journeys observed)` for each arm.
+  On devbox the cached chromium needs two variables before the run:
+  `LD_LIBRARY_PATH=$HOME/.local/chromium-libs/extracted/usr/lib/x86_64-linux-gnu`
+  and `FONTCONFIG_FILE` pointing at a `fonts.conf` whose `<dir>` is
+  `$HOME/.local/chromium-libs/extracted/usr/share/fonts`.
 
 ## 5. Pull requests and review
 
