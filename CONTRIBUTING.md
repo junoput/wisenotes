@@ -152,6 +152,26 @@ review criterion, checked per change:
   and `FONTCONFIG_FILE` pointing at a `fonts.conf` whose `<dir>` is
   `$HOME/.local/chromium-libs/extracted/usr/share/fonts`.
 
+### Third-party hosts
+
+The app must stay usable when only its own host answers. Every asset a
+journey needs is served from `/static`: htmx is vendored for that reason
+(commit 6e6acdd, after the vendored copy turned out to be a truncated
+stub). One exception is deliberate: **KaTeX loads from cdn.jsdelivr.net**
+with subresource integrity. It renders math blocks and nothing else; with
+the CDN unreachable the formula source stays visible as text, and vendoring
+it would add three files plus about sixty font files to a tree this project
+is trying to keep small. The check is the driver with every non-server host
+aborted:
+
+```sh
+.venv/bin/python tests/journeys.py http://127.0.0.1:8000 --block-cdn
+```
+
+Expected: `PASS (14/14 journeys observed)` in both arms. Anything a journey
+needs may not come from a CDN; anything that does come from one must
+degrade to readable content, and this run is how that is shown.
+
 ## 5. Pull requests and review
 
 - Target `main`. Small: aim for under ~400 changed lines; a large change is a

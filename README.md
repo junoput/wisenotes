@@ -8,8 +8,8 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 - **Block types** — paragraph, code (syntax-highlighted), math (LaTeX/AsciiMath), media (images), nested chapters
 - **Export / import** — full JSON export and import of all notes
 - **Keyboard-friendly** — arrow-key navigation between notes and blocks
-- **Light / dark theme** — toggle via UI
 - **Strict security** — CSP, secure headers, atomic file writes, path traversal protection
+- **Self-contained** — every asset the app needs is served by the app; only KaTeX (math rendering) comes from a CDN and math falls back to its source text without it
 
 ## Quickstart
 

@@ -4,6 +4,8 @@ disabled and once with it enabled, against a running server.
     python tests/journeys.py http://127.0.0.1:8000            # both arms
     python tests/journeys.py http://127.0.0.1:8000 --arm nojs # one arm
 
+    python tests/journeys.py http://127.0.0.1:8000 --block-cdn # no third-party hosts
+
 Exit 0: every journey OK in every arm.  Exit 1: a journey failed.
 Exit 2: VACUOUS, an arm observed fewer than the fourteen journeys, or its
 apparatus check could not tell the arms apart, so no verdict is reported.
@@ -64,8 +66,8 @@ def png_bytes() -> bytes:
 
 
 class Arm:
-    def __init__(self, base: str, js: bool):
-        self.base, self.js, self.rows = base, js, {}
+    def __init__(self, base: str, js: bool, block_cdn: bool = False):
+        self.base, self.js, self.block_cdn, self.rows = base, js, block_cdn, {}
         self.mark = f"marker {'js' if js else 'nojs'} {int(time.time())}"
 
     def rec(self, journey: str, ok: bool, detail: str = ""):
@@ -89,6 +91,8 @@ class Arm:
         b = p.chromium.launch()
         ctx = b.new_context(java_script_enabled=self.js)
         page = ctx.new_page()
+        if self.block_cdn:  # the app must stay usable when only its own host answers
+            ctx.route(lambda url: not url.startswith(self.base), lambda route: route.abort())
         errors: list[str] = []
         page.on(
             "response",
@@ -234,9 +238,14 @@ def main() -> int:
     )
     ap.add_argument("base", help="server URL, e.g. http://127.0.0.1:8000")
     ap.add_argument("--arm", choices=["nojs", "js", "both"], default="both")
+    ap.add_argument(
+        "--block-cdn",
+        action="store_true",
+        help="abort every request to a host other than the server",
+    )
     args = ap.parse_args()
     arms = [
-        Arm(args.base, js)
+        Arm(args.base, js, args.block_cdn)
         for js in (
             (False,) if args.arm == "nojs" else (True,) if args.arm == "js" else (False, True)
         )
@@ -246,7 +255,7 @@ def main() -> int:
             arm.run(p)
     worst = 0
     for arm in arms:
-        label = "JS on " if arm.js else "JS off"
+        label = ("JS on " if arm.js else "JS off") + (", CDN blocked" if arm.block_cdn else "")
         print(f"\n== arm: {label}  (page scripts ran: {arm.scripts_ran})")
         for j in JOURNEYS:
             verdict, detail = arm.rows.get(j, ("NOT RUN", ""))
