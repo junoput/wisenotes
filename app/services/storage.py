@@ -139,7 +139,7 @@ class JsonNoteRepository:
 
                     if "name" not in raw and "slug" in raw:
                         raw["name"] = raw["slug"]
-                    if raw.get("name"):
+                    if raw.get("name") and not raw.get("title"):
                         raw["title"] = self.name_to_title(raw["name"])
 
                     notes.append(Note.model_validate(raw))
@@ -292,10 +292,12 @@ class JsonNoteRepository:
         name = name.strip("-")
         return name or "Untitled-note"
 
-    def ensure_unique_name(self, base_name: str) -> str:
+    def ensure_unique_name(self, base_name: str, keep: str | None = None) -> str:
+        """First of base_name, base_name-2, ... not already on disk; `keep` is the
+        caller's own current name and never counts as taken."""
         name = base_name
         i = 2
-        while self._note_dir(name).exists() or self._note_file(name).exists():
+        while name != keep and (self._note_dir(name).exists() or self._note_file(name).exists()):
             name = f"{base_name}-{i}"
             i += 1
         return name

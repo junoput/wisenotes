@@ -74,13 +74,13 @@ class NoteService:
 
     def create_note(self, payload: NoteCreate) -> Note:
         now = datetime.utcnow()
-        # Derive a unique name from title
-        base_name = self.repo.derive_name(payload.title)
-        unique_name = self.repo.ensure_unique_name(base_name)
+        title = payload.title.strip() or "Untitled note"
+        # The folder name is derived from the title; the title itself is kept as typed.
+        unique_name = self.repo.ensure_unique_name(self.repo.derive_name(title))
         note = Note(
             id=str(uuid4()),
             name=unique_name,
-            title=self.repo.name_to_title(unique_name),
+            title=title,
             tags=payload.tags,
             created_at=now,
             updated_at=now,
@@ -93,18 +93,19 @@ class NoteService:
         existing = self.repo.get_note(note_id)
         if not existing:
             return None
-        # Compute new name if title changes
-        new_title_input = payload.title or existing.title
-        base_name = self.repo.derive_name(new_title_input)
-        # If title unchanged, keep existing name; otherwise ensure uniqueness
-        if new_title_input == existing.title:
-            new_name = existing.name
-        else:
-            new_name = self.repo.ensure_unique_name(base_name)
+        title = (payload.title or "").strip() or existing.title
+        base_name = self.repo.derive_name(title)
+        # Keep the folder unless the title now derives a different name; the note's own
+        # folder never counts as taken, so a rename does not earn a "-2" from itself.
+        new_name = (
+            existing.name
+            if base_name == existing.name
+            else self.repo.ensure_unique_name(base_name, keep=existing.name)
+        )
         updated = existing.model_copy(
             update={
                 "name": new_name,
-                "title": self.repo.name_to_title(new_name),
+                "title": title,
                 "folder": payload.folder if payload.folder is not None else existing.folder,
                 "tags": payload.tags if payload.tags is not None else existing.tags,
                 "chapters": payload.chapters if payload.chapters is not None else existing.chapters,
