@@ -152,6 +152,23 @@ review criterion, checked per change:
   and `FONTCONFIG_FILE` pointing at a `fonts.conf` whose `<dir>` is
   `$HOME/.local/chromium-libs/extracted/usr/share/fonts`.
 
+### The JavaScript floor
+
+Eleven script files are tracked, and that is the floor while CodeMirror
+stays, not a number to drive down:
+
+| file | why it stays |
+|---|---|
+| `static/vendor/htmx/htmx.min.js` | the enhancement layer itself: fragments instead of full reloads |
+| `static/js/app.js` (~190 lines) | pane state, keyboard, confirms, mounts CodeMirror and KaTeX, re-runs after swaps |
+| `static/js/drag-drop.js` | drag-to-reorder; the reorder buttons are the plain path it enhances |
+| `static/js/init-layout.js` (8 lines) | sets the sidebar width before first paint; must be a blocking script, and CSP forbids inline scripts, so it is a file |
+| `static/vendor/codemirror/` (7 files) | editor core, close-brackets, and one mode per offered language (python, javascript for JS and TS, clike for Java, go, rust) |
+
+Delete CodeMirror and the floor is four. That is a product decision (the
+code editor becomes a plain textarea, which already works with scripts
+off), not a cleanup; make it on a ticket, not in passing.
+
 ### Third-party hosts
 
 The app must stay usable when only its own host answers. Every asset a

@@ -5,8 +5,6 @@
  * On drop, the block moves to the target position and becomes solid again.
  */
 
-console.log('[drag-drop.js] module loaded - ghost block mode');
-
 let draggedEl = null;
 let targetBlockId = null; // Track which block is the target
 
@@ -18,10 +16,6 @@ function onDragStart(e) {
   }
 
   const draggedType = draggedEl.dataset.chapterType || 'chapter';
-  console.log('[drag-drop] dragstart', {
-    id: draggedEl.dataset.chapterId,
-    type: draggedType,
-  });
   
   e.dataTransfer.effectAllowed = 'move';
   e.dataTransfer.setData('text/plain', draggedEl.dataset.chapterId);
@@ -72,7 +66,6 @@ function onDragOver(e) {
   // Update target tracking and move ghost block
   if (targetId !== targetBlockId) {
     targetBlockId = targetId;
-    console.log('[drag-drop] hovering over block', { targetId, targetParentId });
     // Position ghost by inserting after target (no highlight)
     if (target.parentNode) {
       target.parentNode.insertBefore(draggedEl, target.nextSibling);
@@ -98,7 +91,6 @@ function onAppendDrop(e) {
   e.preventDefault();
   e.stopPropagation();
   const parentId = e.currentTarget.dataset?.parentId || '';
-  console.log('[drag-drop] drop to append as child', { parentId });
   // ensure draggedEl looks solid before performing move
   draggedEl.style.opacity = '1';
   draggedEl.style.pointerEvents = 'auto';
@@ -145,7 +137,6 @@ function onHeaderDrop(e) {
     }
   }
   
-  console.log('[drag-drop] drop on chapter header to insert as first child', { parentId, targetId });
   
   // ensure draggedEl looks solid before performing move
   draggedEl.style.opacity = '1';
@@ -169,7 +160,6 @@ function onDrop(e) {
     // Dropped before a sibling block
     targetId = nextSibling.dataset?.chapterId || '';
     parentId = nextSibling.dataset?.parentId || '';
-    console.log('[drag-drop] drop before sibling', { targetId, parentId });
   } else {
     // Dropped at end - infer parent from container
     const container = draggedEl.parentElement;
@@ -179,29 +169,20 @@ function onDrop(e) {
         const parentSection = container.closest('.chapter-section');
         parentId = parentSection?.dataset?.chapterId || '';
         targetId = '';
-        console.log('[drag-drop] drop at end of chapter', { parentId });
       } else {
         // Root level
         parentId = '';
         targetId = '';
-        console.log('[drag-drop] drop at root end');
       }
     }
   }
 
   // Validate: non-chapter blocks cannot be at root
   if (draggedType !== 'chapter' && parentId === '') {
-    console.warn('[drag-drop] Blocked: non-chapter block cannot be at root');
     alert('Only chapter blocks can be placed at root level.');
     window.location.reload();
     return;
   }
-
-  console.log('[drag-drop] drop final params', { 
-    dragged: draggedEl.dataset.chapterId, 
-    target: targetId, 
-    parent: parentId 
-  });
 
   // Make the block solid again before move
   if (draggedEl) {
@@ -217,7 +198,6 @@ function performMove(targetId, parentId = '') {
   const noteId = document.querySelector('[data-note-id]')?.dataset.noteId;
 
   if (!noteId || !chapterId) {
-    console.error('performMove: missing noteId or chapterId', { noteId, chapterId });
     return;
   }
 
@@ -230,7 +210,6 @@ function performMove(targetId, parentId = '') {
     return;
   }
 
-  console.log('performMove: attempting move', { noteId, chapterId, targetId, parentId });
   
   const form = new FormData();
   form.append('target_id', targetId);
@@ -242,26 +221,21 @@ function performMove(targetId, parentId = '') {
     headers: { 'HX-Request': 'true' }
   })
   .then(res => {
-    console.log('performMove: response status', res.status);
     if (!res.ok) {
       return res.text().then(text => {
         const error = `Move failed with status ${res.status}: ${text}`;
-        console.error('performMove: HTTP error', error);
         throw new Error(error);
       });
     }
     return res.text();
   })
   .then(html => {
-    console.log('performMove: received HTML response, parsing for OOB elements');
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
     
     const oobElements = doc.querySelectorAll('[hx-swap-oob]');
-    console.log('performMove: found', oobElements.length, 'OOB elements');
     
     if (oobElements.length === 0) {
-      console.warn('performMove: no OOB elements found, reloading page');
       window.location.reload();
       return;
     }
@@ -269,7 +243,6 @@ function performMove(targetId, parentId = '') {
     oobElements.forEach(el => {
       const swapType = el.getAttribute('hx-swap-oob');
       const existing = document.getElementById(el.id);
-      console.log('performMove: applying OOB swap', { id: el.id, swapType, elementExists: !!existing });
       if (existing) {
         if (swapType === 'outerHTML') {
           existing.outerHTML = el.outerHTML;
@@ -281,11 +254,9 @@ function performMove(targetId, parentId = '') {
       }
     });
     
-    console.log('performMove: reinitializing drag and drop');
     setTimeout(() => initDragAndDrop(), 100);
   })
   .catch(err => {
-    console.error('performMove: FAILED:', err);
     alert(`Move operation failed: ${err.message}\n\nReloading page to restore state.`);
     window.location.reload();
   });
@@ -293,7 +264,6 @@ function performMove(targetId, parentId = '') {
 
 export function initDragAndDrop() {
   const handles = document.querySelectorAll('.drag-handle');
-  console.log('[drag-drop] init: handles=', handles.length);
   handles.forEach(handle => {
     handle.setAttribute('draggable', 'true');
     handle.addEventListener('dragstart', onDragStart);
@@ -301,7 +271,6 @@ export function initDragAndDrop() {
   });
 
   const sections = document.querySelectorAll('.chapter-section');
-  console.log('[drag-drop] init: sections=', sections.length);
   sections.forEach(section => {
     section.addEventListener('dragover', onDragOver);
     section.addEventListener('drop', onDrop);
@@ -309,7 +278,6 @@ export function initDragAndDrop() {
 
   // Append-child persistent drop areas
   const appendZones = document.querySelectorAll('.chapter-append-drop');
-  console.log('[drag-drop] init: append-drop zones=', appendZones.length);
   appendZones.forEach(zone => {
     zone.addEventListener('dragover', onAppendDragOver);
     zone.addEventListener('drop', onAppendDrop);
@@ -317,7 +285,6 @@ export function initDragAndDrop() {
 
   // Chapter headers as drop targets for appending as child
   const chapterHeaders = document.querySelectorAll('.chapter-header');
-  console.log('[drag-drop] init: chapter headers=', chapterHeaders.length);
   chapterHeaders.forEach(header => {
     header.addEventListener('dragover', onHeaderDragOver);
     header.addEventListener('drop', onHeaderDrop);
@@ -333,7 +300,6 @@ export function initDragAndDrop() {
 
   document.addEventListener('drop', (e) => {
     if (!draggedEl) return;
-    console.log('[drag-drop] document-level drop captured');
     e.preventDefault();
     e.stopPropagation();
     
@@ -360,7 +326,6 @@ export function initDragAndDrop() {
       if (!draggedEl) return;
       const draggedType = draggedEl.dataset.chapterType || 'chapter';
       if (draggedType !== 'chapter') {
-        console.warn('Root drop blocked for non-chapter type');
         // restore UI
         window.location.reload();
         return;
