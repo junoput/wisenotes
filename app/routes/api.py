@@ -12,19 +12,12 @@ from app.config import get_settings
 from app.schemas import NoteCreate
 from app.schemas import NoteDocument
 from app.schemas import NoteUpdate
-from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
 
 templates = Jinja2Templates(directory="app/templates")
 
 router = APIRouter(prefix="/api")
-
-
-@router.get("/health")
-async def health_check():
-    """Health check endpoint for container orchestration"""
-    return {"status": "ok"}
 
 
 @router.get("/notes")
@@ -92,42 +85,6 @@ async def import_notes(
     )
 
 
-@router.post("/notes/{note_id}/media/upload")
-async def upload_media(
-    note_id: str, file: UploadFile, service: NoteService = Depends(get_note_service)
-):
-    """Upload media file to note's media folder."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    content = await file.read()
-
-    # Max 10MB per file
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
-
-    # Process image (resize, reformat, rename)
-    new_filename, processed_content, metadata = process_uploaded_image(file.filename, content)
-
-    # Save processed media
-    relative_path = service.save_media_file(note_id, new_filename, processed_content)
-    if relative_path is None:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    # Persist media metadata in note JSON
-    service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
-
-    return JSONResponse(
-        {
-            "filename": new_filename,
-            "original_filename": file.filename,
-            "path": relative_path,
-            "metadata": metadata.to_dict(),
-        }
-    )
-
-
 @router.get("/notes/{note_id}/media/list")
 async def list_media(note_id: str, service: NoteService = Depends(get_note_service)):
     """List all media files in a note's media folder."""
@@ -137,22 +94,6 @@ async def list_media(note_id: str, service: NoteService = Depends(get_note_servi
 
     files = service.repo.list_media(note.name)
     return JSONResponse({"media": files})
-
-
-@router.delete("/notes/{note_id}/media/{filename}")
-async def delete_media(
-    note_id: str, filename: str, service: NoteService = Depends(get_note_service)
-):
-    """Delete a media file."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    ok = service.repo.delete_media(note.name, filename)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Media file not found")
-
-    return JSONResponse({"status": "deleted"})
 
 
 @router.get("/notes/{note_id}/media/{filename}")

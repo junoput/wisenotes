@@ -32,13 +32,12 @@ data/                        # Runtime note storage (one folder per note)
 3. **NoteService** calls `JsonNoteRepository` for persistence
 4. **Response**: pages return HTML fragments (HTMX) or full pages; API returns JSON
 
-### Router Ordering (Critical)
+### Routers
 
-In `app/main.py`, routers are included in this order:
-1. `api.router` (prefix `/api`) — must come first
-2. `pages.router` — has a catch-all `/{note_name}` route
-
-**Never add new catch-all GET routes to `pages.py`.** The existing `/{note_name}` already catches unmatched paths. New API endpoints go in `api.py` under the `/api` prefix.
+`api.router` (prefix `/api`, JSON) and `pages.router` (HTML). Pages have no
+catch-all route: an unknown path is a 404, and a note's only URL is `/notes/{id}`.
+Everything a form or link needs lives in `pages.py`; `/api` is for scripts and
+export/import, and must not duplicate a page route.
 
 ---
 

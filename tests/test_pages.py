@@ -41,12 +41,11 @@ def test_create_note_htmx_post_gets_fragment(client):
     assert "hx-swap-oob" in resp.text and "Swapped" in resp.text
 
 
-def test_note_page_by_id_and_by_name(client):
+def test_note_page(client):
     note = _create(client, "Deep Link")
-    for url in (f"/notes/{note['id']}", f"/{note['name']}"):
-        resp = client.get(url)
-        assert resp.status_code == 200 and _doc(resp), url
-        assert 'class="chapter-section' in resp.text
+    resp = client.get(f"/notes/{note['id']}")
+    assert resp.status_code == 200 and _doc(resp)
+    assert 'class="chapter-section' in resp.text
 
 
 def test_every_hx_form_is_also_a_real_form(client):
@@ -220,4 +219,4 @@ def test_import_form_redirects_home(client):
 
 def test_unknown_note_is_404(client):
     assert client.get("/notes/does-not-exist").status_code == 404
-    assert client.get("/does-not-exist").status_code == 404
+    assert client.get("/does-not-exist").status_code == 404  # no catch-all swallows it

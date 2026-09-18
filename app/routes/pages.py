@@ -359,16 +359,3 @@ async def select_media(
         note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
     )
     return _after_change(request, service, note)
-
-
-# ---------------------------------------------------------------- pretty URLs (must stay last)
-
-
-@router.get("/{note_name}", response_class=HTMLResponse)
-async def fetch_note_by_name(
-    note_name: str, request: Request, service: NoteService = Depends(get_note_service)
-):
-    note = next((n for n in service.list_notes() if n.name == note_name), None)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    return _page(request, service, note)
