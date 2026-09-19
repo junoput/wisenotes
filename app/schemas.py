@@ -1,6 +1,4 @@
 from datetime import datetime
-from typing import List
-from typing import Optional
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -13,21 +11,21 @@ class Chapter(BaseModel):
     title: str = Field(min_length=0, max_length=120)
     content: str = Field(default="", max_length=20_000)
     order: int = Field(ge=0)
-    parent_id: Optional[str] = None  # For nested chapters
+    parent_id: str | None = None  # For nested chapters
     type: str = Field(default="chapter")  # Block type - unknown types fallback to 'text'
-    language: Optional[str] = None  # Language for code/math blocks (e.g., 'python', 'latex')
-    source: Optional[str] = None  # Optional source/attribution for any block
+    language: str | None = None  # Language for code/math blocks (e.g., 'python', 'latex')
+    source: str | None = None  # Optional source/attribution for any block
 
 
 class Note(BaseModel):
     id: str
     name: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=200)
-    folder: Optional[str] = Field(default=None, max_length=120)  # Group notes in folders
-    tags: List[str] = Field(default_factory=list)
+    folder: str | None = Field(default=None, max_length=120)  # Group notes in folders
+    tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
-    chapters: List[Chapter] = Field(default_factory=list)
+    chapters: list[Chapter] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_chapters(self) -> "Note":
@@ -36,7 +34,7 @@ class Note(BaseModel):
             raise ValueError("Duplicate chapter ids in note")
 
         by_id = {c.id: c for c in self.chapters}
-        sanitized: List[Chapter] = []
+        sanitized: list[Chapter] = []
         for ch in self.chapters:
             if ch.parent_id is None:
                 sanitized.append(ch)
@@ -60,11 +58,11 @@ class Note(BaseModel):
 class NoteDocument(BaseModel):
     version: str = Field(default="1.0.0")
     exported_at: datetime
-    notes: List[Note] = Field(default_factory=list)
+    notes: list[Note] = Field(default_factory=list)
 
     @field_validator("notes")
     @classmethod
-    def ensure_ids_unique(cls, notes: List[Note]) -> List[Note]:
+    def ensure_ids_unique(cls, notes: list[Note]) -> list[Note]:
         ids = {note.id for note in notes}
         if len(ids) != len(notes):
             raise ValueError("Duplicate note ids in document")
@@ -73,12 +71,12 @@ class NoteDocument(BaseModel):
 
 class NoteCreate(BaseModel):
     title: str
-    tags: List[str] = Field(default_factory=list)
-    chapters: List[Chapter] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    chapters: list[Chapter] = Field(default_factory=list)
 
 
 class NoteUpdate(BaseModel):
-    title: Optional[str] = None
-    folder: Optional[str] = None
-    tags: Optional[List[str]] = None
-    chapters: Optional[List[Chapter]] = None
+    title: str | None = None
+    folder: str | None = None
+    tags: list[str] | None = None
+    chapters: list[Chapter] | None = None

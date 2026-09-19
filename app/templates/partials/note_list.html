@@ -39,10 +39,6 @@
           {% for note in ns.folders[folder_name] %}
             {% set title = note.title %}
             {% set meta = note.chapters|length ~ ' chapters' %}
-            {% set body = None %}
-            {% set hx_get = '/notes/' ~ note.id %}
-            {% set hx_target = 'body' %}
-            {% set hx_swap = 'none' %}
             {% set extra_classes = 'active' if active and note.id == active.id else '' %}
             {% set focus_first = loop.first and loop.parent is not defined %}
             {% include "components/item.html" %}
@@ -55,10 +51,6 @@
     {% for note in ns.ungrouped %}
       {% set title = note.title %}
       {% set meta = note.chapters|length ~ ' chapters' %}
-      {% set body = None %}
-      {% set hx_get = '/notes/' ~ note.id %}
-      {% set hx_target = 'body' %}
-      {% set hx_swap = 'none' %}
       {% set extra_classes = 'active' if active and note.id == active.id else '' %}
       {% set focus_first = loop.first and not ns.folders %}
       {% include "components/item.html" %}

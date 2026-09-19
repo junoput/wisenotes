@@ -17,7 +17,8 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +34,24 @@ VECTOR_EXTENSIONS = {".svg", ".svgz"}
 ANIMATED_EXTENSIONS = {".gif"}
 # Raster image extensions that will be converted
 RASTER_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif",
-    ".webp", ".ico", ".ppm", ".pgm", ".pbm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".webp",
+    ".ico",
+    ".ppm",
+    ".pgm",
+    ".pbm",
 }
 
 
 @dataclass
 class ImageMetadata:
     """Metadata about a processed image, intended for storage in note JSON."""
+
     original_filename: str
     stored_filename: str
     mime_type: str
@@ -136,7 +147,6 @@ def _process_animated(filename: str, content: bytes) -> tuple[str, bytes, ImageM
     # Try to get dimensions
     width, height = None, None
     try:
-        from PIL import Image
         with Image.open(io.BytesIO(content)) as img:
             width, height = img.size
     except Exception:
@@ -155,7 +165,6 @@ def _process_animated(filename: str, content: bytes) -> tuple[str, bytes, ImageM
 
 def _process_raster(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
     """Convert raster image to WebP with resizing."""
-    from PIL import Image
 
     with Image.open(io.BytesIO(content)) as img:
         # Preserve transparency (convert to RGBA if palette with transparency)

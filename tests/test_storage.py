@@ -2,8 +2,7 @@
 
 import json
 
-from app.schemas import Note, NoteCreate
-from app.services.storage import JsonNoteRepository
+from app.schemas import NoteCreate
 
 
 class TestDeriveNames:

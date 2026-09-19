@@ -6,12 +6,10 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 
 - **Notes & chapters** — create, edit, delete, reorder; drag-and-drop chapter ordering
 - **Block types** — paragraph, code (syntax-highlighted), math (LaTeX/AsciiMath), media (images), nested chapters
-- **Modular block system** — add new block types by dropping a folder into `app/blocks/` (auto-discovered)
 - **Export / import** — full JSON export and import of all notes
-- **Keyboard-friendly** — configurable accessibility keybindings
-- **Light / dark theme** — toggle via UI
-- **Strict security** — per-request CSP nonce, secure headers, atomic file writes, path traversal protection
-- **Plugin hooks** — extensible server-side lifecycle events
+- **Keyboard-friendly** — arrow-key navigation between notes and blocks
+- **Strict security** — CSP, secure headers, atomic file writes, path traversal protection
+- **Self-contained** — every asset the app needs is served by the app; only KaTeX (math rendering) comes from a CDN and math falls back to its source text without it
 
 ## Quickstart
 
@@ -39,16 +37,17 @@ uvicorn app.main:app --reload --port 8000
 pytest tests/
 ```
 
+Needs Python 3.12; see [CONTRIBUTING.md](CONTRIBUTING.md) for a clean-shell
+recipe and for the browser journey driver.
+
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
 | `app/routes/` | FastAPI route handlers (pages + API) |
 | `app/services/` | Business logic (`NoteService`) and file storage |
-| `app/blocks/` | Modular block type definitions (auto-discovered) |
+| `app/blocks.py` | Block type catalogue |
 | `app/templates/` | Jinja2 templates and HTMX partials |
-| `app/plugins/` | Server-side plugin hooks |
-| `app/web/` | Dependency injection wiring |
 | `data/` | File-based note storage (one folder per note) |
 | `tests/` | Pytest test suite |
 
@@ -61,4 +60,6 @@ pytest tests/
 
 ## Documentation
 
-- [Block System](docs/BLOCKS_SYSTEM.md) — how blocks work and how to add new types
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): branches, commits, the quality gates CI runs, and the no-JavaScript rule.

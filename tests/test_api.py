@@ -1,18 +1,11 @@
 """Tests for API routes."""
 
-import json
-
 
 class TestHealthEndpoint:
     def test_html_health(self, client):
         resp = client.get("/health")
         assert resp.status_code == 200
         assert resp.text == "ok"
-
-    def test_api_health(self, client):
-        resp = client.get("/api/health")
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
 
 
 class TestNoteAPI:

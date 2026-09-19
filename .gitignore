@@ -21,3 +21,7 @@ node_modules/
 data/*.json
 data/*.lock
 data/
+
+# lane-local scratch and tool venvs
+.scratch/
+.venv-uv/

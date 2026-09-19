@@ -4,11 +4,12 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from filelock import FileLock
 
-from app.schemas import Note, NoteDocument
+from app.schemas import Note
+from app.schemas import NoteDocument
 
 logger = logging.getLogger(__name__)
 
@@ -38,56 +39,12 @@ class JsonNoteRepository:
         return self._note_dir(name) / f"{name}.json"
 
     def _media_dir(self, name: str) -> Path:
-        """Get media folder for a note.
-
-        Uses the media block's ``data_folder`` declaration so the folder
-        name is owned by the block, not hard-coded here.
-        """
-        from app.blocks import get_block
-        media_block = get_block("media")
-        return self._block_note_data_dir(name, media_block.name)
+        return self._note_dir(name) / "media"
 
     def _ensure_media_dir(self, name: str) -> Path:
-        """Lazily create media folder via the media block's data management."""
-        from app.blocks import get_block
-        media_block = get_block("media")
-        return self.ensure_block_note_data_dir(name, media_block.name)
-
-    def _block_note_data_dir(self, note_name: str, block_name: str) -> Path:
-        """Return a block-owned per-note data directory without creating it."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.data_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
-        return block.get_note_data_dir(self._root_dir, note_name)
-
-    def ensure_block_note_data_dir(self, note_name: str, block_name: str) -> Path:
-        """Create and return a block-owned per-note data directory on demand."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.data_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a data_folder")
-        return block.ensure_note_data_dir(self._root_dir, note_name)
-
-    def get_block_profile_dir(self, block_name: str) -> Path:
-        """Return a block-owned hidden profile directory at the data root."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.profile_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
-        return block.get_profile_dir(self._root_dir)
-
-    def ensure_block_profile_dir(self, block_name: str) -> Path:
-        """Create and return a block-owned hidden profile directory on demand."""
-        from app.blocks import get_block
-
-        block = get_block(block_name)
-        if not block.profile_folder:
-            raise ValueError(f"Block '{block_name}' does not declare a profile_folder")
-        return block.ensure_profile_dir(self._root_dir)
+        d = self._media_dir(name)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     def _maybe_migrate_from_legacy(self) -> None:
         # If no legacy file, nothing to do
@@ -161,8 +118,8 @@ class JsonNoteRepository:
         # Optionally keep a backup; do not delete legacy file
         # The repository will ignore it going forward.
 
-    def list_notes(self) -> List[Note]:
-        notes: List[Note] = []
+    def list_notes(self) -> list[Note]:
+        notes: list[Note] = []
         with self._lock:
             for entry in sorted(self._root_dir.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("."):
@@ -194,13 +151,13 @@ class JsonNoteRepository:
         notes.sort(key=lambda n: n.created_at)
         return notes
 
-    def get_note(self, note_id: str) -> Optional[Note]:
+    def get_note(self, note_id: str) -> Note | None:
         for note in self.list_notes():
             if note.id == note_id:
                 return note
         return None
 
-    def upsert_note(self, note: Note, old_name: Optional[str] = None) -> Note:
+    def upsert_note(self, note: Note, old_name: str | None = None) -> Note:
         """Create or update a note file; optionally rename its folder/file if name changed."""
         with self._lock:
             # Rename folder if needed
@@ -251,13 +208,13 @@ class JsonNoteRepository:
                             existing_payload = json.load(ef)
                     except Exception:
                         existing_payload = {}
-                elif 'existing_payload_from_old' in locals() and existing_payload_from_old:
+                elif "existing_payload_from_old" in locals() and existing_payload_from_old:
                     existing_payload = existing_payload_from_old
 
                 for key in ("_module_meta", "_media_meta"):
                     if key in existing_payload and key not in note_data:
                         note_data[key] = existing_payload[key]
-                
+
                 chapter_ids = [ch["id"] for ch in note_data.get("chapters", [])]
                 if len(chapter_ids) != len(set(chapter_ids)):
                     raise ValueError(f"Duplicate chapter IDs detected in note {note.id}")
@@ -277,7 +234,7 @@ class JsonNoteRepository:
 
     def delete_note(self, note_id: str) -> None:
         with self._lock:
-            target: Optional[Path] = None
+            target: Path | None = None
             for note in self.list_notes():
                 if note.id == note_id:
                     target = self._note_dir(note.name)
@@ -297,7 +254,13 @@ class JsonNoteRepository:
             for note in document.notes:
                 base_name = getattr(note, "name", None) or self.derive_name(note.title)
                 name = self.ensure_unique_name(base_name)
-                note = note.model_copy(update={"name": name, "title": self.name_to_title(name), "updated_at": datetime.utcnow()})
+                note = note.model_copy(
+                    update={
+                        "name": name,
+                        "title": self.name_to_title(name),
+                        "updated_at": datetime.utcnow(),
+                    }
+                )
                 ndir = self._note_dir(name)
                 ndir.mkdir(parents=True, exist_ok=True)
                 with (self._note_file(name)).open("w", encoding="utf-8") as f:
@@ -311,24 +274,23 @@ class JsonNoteRepository:
         out = []
         prev_dash = False
         for ch in title.strip():
-            if ch.isalnum() or ch in ['-', '_']:
+            if ch.isalnum() or ch in ["-", "_"]:
                 out.append(ch)
                 prev_dash = False
             elif ch.isspace():
                 if not prev_dash:
-                    out.append('-')
+                    out.append("-")
                     prev_dash = True
-            else:
-                # drop special chars; treat as dash separator
-                if not prev_dash:
-                    out.append('-')
-                    prev_dash = True
+            # drop special chars; treat as dash separator
+            elif not prev_dash:
+                out.append("-")
+                prev_dash = True
         # Collapse multiple dashes and trim
-        name = ''.join(out)
-        while '--' in name:
-            name = name.replace('--', '-')
-        name = name.strip('-')
-        return name or 'Untitled-note'
+        name = "".join(out)
+        while "--" in name:
+            name = name.replace("--", "-")
+        name = name.strip("-")
+        return name or "Untitled-note"
 
     def ensure_unique_name(self, base_name: str) -> str:
         name = base_name
@@ -341,9 +303,9 @@ class JsonNoteRepository:
     @staticmethod
     def name_to_title(name: str) -> str:
         # Convert dashes to single spaces and trim
-        title = name.replace('-', ' ')
+        title = name.replace("-", " ")
         # Collapse multiple spaces
-        title = ' '.join(title.split())
+        title = " ".join(title.split())
         return title
 
     def save_media(self, note_name: str, filename: str, content: bytes) -> str:
@@ -357,7 +319,7 @@ class JsonNoteRepository:
         # Return relative path for storage in chapter content
         return f"media/{filename}"
 
-    def list_media(self, note_name: str) -> List[str]:
+    def list_media(self, note_name: str) -> list[str]:
         """List all media filenames in a note's media folder."""
         media_dir = self._media_dir(note_name)
         if not media_dir.exists():
@@ -374,7 +336,7 @@ class JsonNoteRepository:
             return True
         return False
 
-    def get_media_path(self, note_name: str, filename: str) -> Optional[Path]:
+    def get_media_path(self, note_name: str, filename: str) -> Path | None:
         """Get full path to a media file if it exists."""
         # Sanitize filename
         filename = Path(filename).name
@@ -383,7 +345,9 @@ class JsonNoteRepository:
             return filepath
         return None
 
-    def upsert_module_metadata(self, note_name: str, module_name: str, key: str, payload: dict[str, Any]) -> None:
+    def upsert_module_metadata(
+        self, note_name: str, module_name: str, key: str, payload: dict[str, Any]
+    ) -> None:
         """Persist module metadata in a note JSON under ``_module_meta``."""
         with self._lock:
             nfile = self._note_file(note_name)
@@ -420,4 +384,3 @@ class JsonNoteRepository:
             return scoped if isinstance(scoped, dict) else {}
         except Exception:
             return {}
-

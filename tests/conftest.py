@@ -1,14 +1,14 @@
 """Shared test fixtures."""
 
-import pytest
 from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.plugins.registry import PluginRegistry
 from app.services.notes import NoteService
+from app.services.notes import get_note_service
 from app.services.storage import JsonNoteRepository
-from app.web.dependencies import get_note_service
 
 
 @pytest.fixture()
@@ -27,7 +27,7 @@ def repo(data_dir: Path) -> JsonNoteRepository:
 @pytest.fixture()
 def service(repo: JsonNoteRepository) -> NoteService:
     """NoteService wired to a temp repo."""
-    return NoteService(repo=repo, plugins=PluginRegistry())
+    return NoteService(repo=repo)
 
 
 @pytest.fixture()
