@@ -37,8 +37,8 @@ uvicorn app.main:app --reload --port 8000
 pytest tests/
 ```
 
-Needs Python 3.12; see [CONTRIBUTING.md](CONTRIBUTING.md) for a clean-shell
-recipe and for the browser journey driver.
+Needs Python 3.12; see [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) for a clean-shell
+recipe and [CONTRIBUTING.md](CONTRIBUTING.md) for the browser journey driver.
 
 ## Project Structure
 
@@ -62,4 +62,4 @@ recipe and for the browser journey driver.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md): branches, commits, the quality gates CI runs, and the no-JavaScript rule.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (start here, the no-JavaScript rule), [docs/BRANCHING.md](docs/BRANCHING.md) and [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) (commits, gates, review).

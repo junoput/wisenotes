@@ -1,80 +1,30 @@
 # Contributing to Wisenotes
 
-One document: branch policy, commit rules, quality gates, review. Wisenotes is
-small enough that splitting these into three files would cost more in reading
-than it buys in structure. The rules are adapted from nexora's
-`docs/BRANCHING.md`, `docs/GIT_WORKFLOW.md` and `CONTRIBUTING.md`; §6 says what
-was kept, what was changed, and why.
+Two documents before a first change, same names as in nexora so the box's
+conventions read the same everywhere:
 
-Engineering rules (architecture, security, testing conventions) live in
-[`.github/copilot-instructions.md`](.github/copilot-instructions.md). Read both
-before a first change.
+1. [`docs/BRANCHING.md`](docs/BRANCHING.md) — the branch policy: `main` only,
+   topic branches, releases as tags.
+2. [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) — commit format, quality
+   gates and how to run them from a clean shell, pull requests and review, and
+   what was kept or changed from nexora and why.
 
-## 1. Branches
+Engineering rules (architecture, security, testing conventions) are in
+[`.github/copilot-instructions.md`](.github/copilot-instructions.md).
 
-```
-main       ──●────●────●────●──▶   the only permanent branch; every commit deployable
-              ▲    ▲    ▲
-fix/x    ─────┘    │    │           short-lived topic branches, merged --no-ff
-feat/y   ──────────┘    │
-chore/z  ───────────────┘
-```
+## The short version of the workflow
 
-- **`main` is the only permanent branch.** It is what `docker compose up
-  --build` deploys. Protected: no direct pushes, no force-pushes, no rewriting.
-- **There is no `develop`.** A second permanent branch buys a staging line
-  between "merged" and "released" for a project with several developers and
-  a release train. Wisenotes has one deployment surface and one operator;
-  `develop` would double every merge and make `main` lag the reviewed state
-  for no reader. If that changes, add it then, with a written reason.
-- **Every change is a topic branch** cut from `origin/main`, named
-  `<type>/<short-kebab-slug>`: `feat/`, `fix/`, `chore/`, `docs/`, `test/`,
-  `refactor/`. The name should let a reader guess the content. One branch,
-  one logical change; if it grows a second purpose, split it.
-- **Short-lived.** Days, not weeks. Push the branch the day it is created.
-- **Rebase, do not merge `main` into a topic branch.** `git fetch origin &&
-  git rebase origin/main`. Force-push your own unshared branch with
-  `--force-with-lease` only, and never after review has started without
-  saying so.
-- **Delete at merge**, local and remote. Before deleting any branch, prove it
-  landed: `git merge-base --is-ancestor <branch> origin/main` must succeed
-  for the branch's current tip. `git branch --merged` is not proof. If the
-  answer is unclear, leave the branch and say so.
-- **Releases are tags on `main`**: `vMAJOR.MINOR.PATCH`, semantic versioning,
-  created when the container is rebuilt for the operator's server. The
-  version in `pyproject.toml` moves in the same commit as the tag.
-
-## 2. Commits
-
-[Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-<type>(<optional scope>): <imperative summary, <= 72 chars>
-
-<body: what changed and WHY; how it was verified, with the command and
-its result line. Wrap at ~100.>
-
-<footer: Fixes <ticket id>, BREAKING CHANGE: ...>
-```
-
-Types: `feat`, `fix`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`,
-`revert`. Imperative mood, no trailing period.
-
-- **Atomic.** One logical change per commit; build and tests pass at every
-  commit. Never mix a refactor with a behaviour change.
-- **The body carries the verification**, not just the intent: the command run
-  and the line it printed (`pytest tests/` -> `61 passed`). "Tests pass" with
-  no output is a claim; the line is evidence.
-- **Before deleting anything, say how you know it is unused.** A file that
-  looks unused and a file that is unused are different things; the commit
-  names the grep (or the runtime check) that separated them.
+- Branch from `origin/main`: `feat/`, `fix/`, `chore/`, `docs/`, `test/`,
+  `refactor/` + short slug. One branch, one logical change, days not weeks,
+  pushed the day it is created.
+- [Conventional Commits](https://www.conventionalcommits.org/), atomic, and
+  the body carries the verification: the command and the line it printed.
+- Open a PR into `main`, small (under ~400 changed lines), with a reader who
+  did not write it. Merged `--no-ff`; the topic branch is deleted after an
+  ancestry check, never on the strength of its name.
 - Tests ship in the same commit as the code they cover.
-- Never commit secrets, `.env`, `data/`, build output, or commented-out code.
 
-## 3. Quality gates
-
-CI (`.github/workflows/ci.yml`) runs these on every push and pull request,
-and a pull request cannot merge red:
+## Quality gates (CI enforces these)
 
 ```sh
 ruff check app tests
@@ -82,41 +32,13 @@ ruff format --check app tests
 pytest tests/
 ```
 
-### Running them from a clean shell
+Clean-shell recipe, expected output and what a green does and does not
+cover: `docs/GIT_WORKFLOW.md` §2. A change that touches templates or
+JavaScript is also driven in a browser; the rule below says how.
 
-Python 3.12 or newer is required. If `python3.12` is on your PATH:
+## Ground rules worth repeating
 
-```sh
-python3.12 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/ruff check app tests && .venv/bin/ruff format --check app tests && .venv/bin/pytest tests/
-```
-
-If the system Python is older (devbox has 3.11 and no sudo), bootstrap a 3.12
-with `uv` in a throwaway venv; nothing is installed outside the checkout:
-
-```sh
-python3 -m venv .venv-uv && .venv-uv/bin/pip install -q uv
-.venv-uv/bin/uv venv --python 3.12 .venv
-.venv-uv/bin/uv pip install --python .venv/bin/python -e '.[dev]'
-.venv/bin/ruff check app tests && .venv/bin/ruff format --check app tests && .venv/bin/pytest tests/
-```
-
-The venv must be named `.venv`: the dev box's shared `gate` tool looks only
-there. Expected last line today: `NN passed` with no `failed`; a run that
-prints only dots and no summary did not finish.
-
-On a warm venv the three take under five seconds. Green means green: a
-flaky test is a bug with a ticket, not a retry.
-
-A green here says what it ran and nothing more: unit and HTTP-level tests
-against the FastAPI test client on Linux, including `tests/test_journeys_nojs.py`,
-which submits the real forms out of the rendered HTML the way a browser
-with scripts off would. It does **not** run a browser, so it cannot see
-htmx, CodeMirror or KaTeX. For a change that touches templates or
-JavaScript, also run the browser driver (§4) and name the result in the PR.
-
-## 4. The no-JavaScript rule
+### The no-JavaScript rule
 
 The app must work with JavaScript disabled; JavaScript enhances. That is a
 review criterion, checked per change:
@@ -189,44 +111,9 @@ Expected: `PASS (14/14 journeys observed)` in both arms. Anything a journey
 needs may not come from a CDN; anything that does come from one must
 degrade to readable content, and this run is how that is shown.
 
-## 5. Pull requests and review
+## Dev-box conventions are not part of the contract
 
-- Target `main`. Small: aim for under ~400 changed lines; a large change is a
-  stack of small PRs.
-- Description: what changed, why, how it was verified (commands and their
-  output), what a reviewer should look at first, the ticket id.
-- **At least one reader who did not write it.** On the dev box that is the
-  `@code-reviewer` subagent or the operator; the author never merges their
-  own PR unreviewed.
-- Merge with a merge commit (`--no-ff`), not squash. The atomic commits and
-  their verification bodies are the record; squashing throws them away, and
-  `main` stays bisectable per logical change either way.
-- Resolve review threads by changing code or by explicit agreement in the
-  thread, never by clicking resolve.
-- Broken `main` is the top priority for whoever broke it; revert first, fix
-  after. Reverting is cheap.
-
-## 6. What was kept from nexora, what changed, and why
-
-Kept as-is: Conventional Commits and atomic commits; `<type>/<slug>` branch
-names; short-lived branches pushed on day one; rebase-not-merge for topic
-branches; delete-at-merge with an ancestry check rather than a name check;
-small PRs; one non-author reviewer; green-means-green; releases as
-semver tags; revert-first on a broken integration branch.
-
-Changed:
-
-| nexora | wisenotes | why |
-|---|---|---|
-| `main` + `develop` + `ios/develop` | `main` only | One deployment surface, one operator; a staging branch has no reader here. |
-| `hotfix/*` from `main`, back-merged to `develop` | just `fix/*` | With one permanent branch there is nothing to back-merge into. |
-| `release/*` branches | none; tag on `main` | No stabilisation window is needed for a repo this size. |
-| squash-merge topic branches | `--no-ff` merge commits | Commit bodies here carry the verification; squashing loses it. |
-| `cargo fmt/clippy/test/deny` | `ruff check`, `ruff format --check`, `pytest` | Python toolchain. No dependency-audit step yet; add `pip-audit` when there is a reason to. |
-| three documents | one | Three files for a 55-file project is the kind of thing this project is trying to stop doing. |
-| lane workflow, `tick mr`, gate tool | not required by this doc | Those are dev-box conventions, documented in the box's own rules; a contributor without the box follows §1–§5 and is compliant. |
-
-Added, not in nexora: §4, the no-JavaScript rule, and the "say how you know
-it is unused" commit rule. Both exist because the audit that produced this
-document found the app broken without JavaScript in nine journeys, 22 files
-nothing loaded, and nine more modules with one consumer or none.
+Lane worktrees, `tick mr`, the shared `gate` tool and the orchestrator's
+review are how work is organised on the development box. A contributor
+without the box who follows the two documents above and this page is
+compliant.

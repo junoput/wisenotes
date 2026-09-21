@@ -125,8 +125,9 @@ Settings are loaded via `app/config.py` using pydantic-settings with `lru_cache`
 
 ## Git and review
 
-Branching, commit format, quality gates and the no-JavaScript rule are in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md). CI runs `ruff check`, `ruff format --check`
+Branch policy is in [`docs/BRANCHING.md`](../docs/BRANCHING.md), commit format,
+quality gates and review in [`docs/GIT_WORKFLOW.md`](../docs/GIT_WORKFLOW.md), and
+the no-JavaScript rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md). CI runs `ruff check`, `ruff format --check`
 and `pytest` on every push and pull request.
 
 ---
