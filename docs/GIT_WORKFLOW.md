@@ -97,6 +97,33 @@ JavaScript, also run the browser driver (`CONTRIBUTING.md`, the no-JavaScript ru
   first, fix
   after. Reverting is cheap.
 
+### Branch protection on `main`, and why it is shaped this way
+
+`main` is protected on GitHub (set by the operator, 2026-09-21; checked from
+the API, not from the command that set it): every change must arrive by
+pull request, force-pushes and deletions are refused. Three settings look
+loose and are deliberate. Do not "tighten" them without reading this:
+
+- **No required status checks.** A required check that stops reporting
+  turns protection into a deadlock: nexora once had protection demanding
+  three checks that could no longer pass, and nothing could merge for
+  days. CI here is young; make a check required once it has a track
+  record, not before.
+- **Zero required approvals.** The pull request is still mandatory, which
+  is the point. Requiring one approval means an author cannot approve
+  their own PR; with one operator and a fleet of agents that is a merge
+  that can never happen.
+- **Not enforced on admins.** The operator keeps an escape hatch for the
+  day protection wedges the repo.
+
+The review requirement in §3 (a reader who did not write it) is therefore
+a rule people follow, not one GitHub enforces; that is intentional.
+
+`develop` is **not** protected, and that is the operator's open decision
+rather than an oversight. Until it is decided, the rule in
+`BRANCHING.md` ("nobody pushes to either directly") holds by discipline on
+`develop` and by the platform on `main`.
+
 ## 4. What was kept from nexora, what changed, and why
 
 Kept as-is: Conventional Commits and atomic commits; `<type>/<slug>` branch

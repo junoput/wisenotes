@@ -13,7 +13,9 @@ Exactly two:
   is deployable and the promotions are tagged.
 - **`develop`** — integration. Every topic branch lands here first.
 
-Nobody pushes to either directly, force-pushes them, or rewrites them.
+Nobody pushes to either directly, force-pushes them, or rewrites them. On
+`main` GitHub enforces that; on `develop` it is discipline until the operator
+decides otherwise (`GIT_WORKFLOW.md` §3, branch protection).
 
 **Why two, when an earlier draft of this file argued for `main` only:** the
 operator chose fleet consistency over per-project minimalism (2026-09-21).
