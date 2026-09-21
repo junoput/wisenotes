@@ -3,8 +3,8 @@
 > **Audience:** every contributor. Branch policy is in
 > [`BRANCHING.md`](BRANCHING.md); the short version and the project's own
 > rules are in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
-> **Model:** `main` plus short-lived topic branches, merged `--no-ff`. No
-> `develop`; §4 says why.
+> **Model:** `main` (deployment) + `develop` (integration) + short-lived topic
+> branches, merged `--no-ff`; promotion `develop -> main` by pull request and tag.
 
 ## 1. Commit rules
 
@@ -80,7 +80,8 @@ JavaScript, also run the browser driver (`CONTRIBUTING.md`, the no-JavaScript ru
 
 ## 3. Pull requests and review
 
-- Target `main`. Small: aim for under ~400 changed lines; a large change is a
+- Target `develop` (only a hotfix and a promotion target `main`). Small: aim
+  for under ~400 changed lines; a large change is a
   stack of small PRs.
 - Description: what changed, why, how it was verified (commands and their
   output), what a reviewer should look at first, the ticket id.
@@ -89,10 +90,11 @@ JavaScript, also run the browser driver (`CONTRIBUTING.md`, the no-JavaScript ru
   own PR unreviewed.
 - Merge with a merge commit (`--no-ff`), not squash. The atomic commits and
   their verification bodies are the record; squashing throws them away, and
-  `main` stays bisectable per logical change either way.
+  `develop` and `main` stay bisectable per logical change either way.
 - Resolve review threads by changing code or by explicit agreement in the
   thread, never by clicking resolve.
-- Broken `main` is the top priority for whoever broke it; revert first, fix
+- Broken `develop` or `main` is the top priority for whoever broke it; revert
+  first, fix
   after. Reverting is cheap.
 
 ## 4. What was kept from nexora, what changed, and why
@@ -107,10 +109,10 @@ Changed:
 
 | nexora | wisenotes | why |
 |---|---|---|
-| `main` + `develop` + `ios/develop` | `main` only | One deployment surface, one operator; a staging branch has no reader here. |
-| `hotfix/*` from `main`, back-merged to `develop` | just `fix/*` | With one permanent branch there is nothing to back-merge into. |
-| `release/*` branches | none; tag on `main` | No stabilisation window is needed for a repo this size. |
-| squash-merge topic branches | `--no-ff` merge commits | Commit bodies here carry the verification; squashing loses it. |
+| `main` + `develop` + `ios/develop` | `main` + `develop` | Operator's decision, 2026-09-21: fleet consistency over per-project minimalism, so every repo on the box has the same branch model. An earlier draft had `main` only, on the reasoning that one deployment surface and one operator gave a staging branch no reader; that reasoning was sound on its premise and the premise changed. No `ios/develop`: no block owns a second integration line here. |
+| `hotfix/*` from `main`, back-merged to `develop` | `fix/*` from `main`, back-merged to `develop` | Same flow, plainer name; a hotfix is a fix that cannot wait for promotion. |
+| `release/*` branches | none; promote `develop -> main` by PR and tag | No stabilisation window is needed for a repo this size; promotion is a `--no-ff` merge plus a tag. |
+| squash-merge topic branches, merge commits for release/hotfix | `--no-ff` merge commits everywhere | Commit bodies here carry the verification; squashing loses it. |
 | `cargo fmt/clippy/test/deny` | `ruff check`, `ruff format --check`, `pytest` | Python toolchain. No dependency-audit step yet; add `pip-audit` when there is a reason to. |
 | three documents | three documents, same names | Deliberate convention-matching, not an accident of copying: an operator opening `docs/GIT_WORKFLOW.md` in any repo on the box should find the same thing. The minimum-files goal is about source, not documentation; an earlier draft folded these into one file on a misreading of it. |
 | lane workflow, `tick mr`, gate tool | not required by this doc | Those are dev-box conventions, documented in the box's own rules; a contributor without the box follows `docs/BRANCHING.md`, this file and `CONTRIBUTING.md` and is compliant. |

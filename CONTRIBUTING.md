@@ -3,8 +3,8 @@
 Two documents before a first change, same names as in nexora so the box's
 conventions read the same everywhere:
 
-1. [`docs/BRANCHING.md`](docs/BRANCHING.md) — the branch policy: `main` only,
-   topic branches, releases as tags.
+1. [`docs/BRANCHING.md`](docs/BRANCHING.md) — the branch policy: `develop` for
+   integration, `main` for deployment, topic branches, releases as tags.
 2. [`docs/GIT_WORKFLOW.md`](docs/GIT_WORKFLOW.md) — commit format, quality
    gates and how to run them from a clean shell, pull requests and review, and
    what was kept or changed from nexora and why.
@@ -14,12 +14,12 @@ Engineering rules (architecture, security, testing conventions) are in
 
 ## The short version of the workflow
 
-- Branch from `origin/main`: `feat/`, `fix/`, `chore/`, `docs/`, `test/`,
+- Branch from `origin/develop`: `feat/`, `fix/`, `chore/`, `docs/`, `test/`,
   `refactor/` + short slug. One branch, one logical change, days not weeks,
   pushed the day it is created.
 - [Conventional Commits](https://www.conventionalcommits.org/), atomic, and
   the body carries the verification: the command and the line it printed.
-- Open a PR into `main`, small (under ~400 changed lines), with a reader who
+- Open a PR into `develop`, small (under ~400 changed lines), with a reader who
   did not write it. Merged `--no-ff`; the topic branch is deleted after an
   ancestry check, never on the strength of its name.
 - Tests ship in the same commit as the code they cover.
