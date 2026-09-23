@@ -25,6 +25,9 @@ from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
+from app.services.bundle import BundleError
+from app.services.bundle import export_zip
+from app.services.bundle import import_bundle
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
@@ -41,7 +44,13 @@ def _is_htmx(request: Request) -> bool:
 
 
 def _ctx(request: Request, **kwargs) -> dict:
-    ctx = {"request": request, "block_types": get_all_blocks(), "editing": None, "settings": False}
+    ctx = {
+        "request": request,
+        "block_types": get_all_blocks(),
+        "editing": None,
+        "settings": False,
+        "new_note": False,
+    }
     ctx.update(kwargs)
     return ctx
 
@@ -95,6 +104,43 @@ def _normalize_source(value: str | None) -> str | None:
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, service: NoteService = Depends(get_note_service)):
     return _page(request, service, None)
+
+
+@router.get("/notes/new", response_class=HTMLResponse)
+async def new_note_chooser(request: Request, service: NoteService = Depends(get_note_service)):
+    """Add a note: empty, or from a .json / .zip file. Overlay for htmx, page otherwise."""
+    if _is_htmx(request):
+        return templates.TemplateResponse(request, "partials/note_new.html", _ctx(request))
+    return _page(request, service, None, new_note=True)
+
+
+@router.post("/notes/import")
+async def import_notes(
+    request: Request,
+    file: UploadFile,
+    service: NoteService = Depends(get_note_service),
+):
+    """Create new notes from an export .json or a .zip (notes.json + media/). Never merges."""
+    content = await file.read()
+    try:
+        result = import_bundle(service, file.filename or "", content)
+    except BundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not result.notes:
+        raise HTTPException(status_code=400, detail="The file contained no notes")
+    for line in result.skipped:
+        logger.info("import skipped %s", line)
+    return _after_change(request, service, result.notes[0])
+
+
+@router.get("/notes/{note_id}/export.zip")
+async def export_note_zip(note_id: str, service: NoteService = Depends(get_note_service)):
+    note = _note_or_404(service, note_id)
+    return Response(
+        export_zip(service, [note.id]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{note.name}.zip"'},
+    )
 
 
 @router.post("/notes")

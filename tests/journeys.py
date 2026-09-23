@@ -118,7 +118,9 @@ class Arm:
         self.rec("home", page.locator(".pane.list").count() == 1 and self.full_page(page))
 
         before = page.locator("a.item").count()
-        page.locator("form.add-note-form button").first.click()
+        page.locator("a.add-note-btn").first.click()  # the chooser: overlay with JS, page without
+        self.wait(page, 1000)
+        page.locator("#note-new form.new-note-form button[type=submit]").click()
         self.wait(page, 1500)
         created = page.locator("a.item").count() == before + 1 and self.full_page(page)
         self.rec("create note", created, page.url.replace(B, ""))

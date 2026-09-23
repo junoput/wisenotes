@@ -206,15 +206,76 @@ def test_code_block_is_visible_without_scripts(client):
     )
 
 
-def test_import_form_redirects_home(client):
-    _create(client, "Exported")
+def test_add_note_chooser_is_a_page_and_a_fragment(client):
+    page = client.get("/notes/new")
+    assert _doc(page) and 'id="note-new"' in page.text
+    frag = client.get("/notes/new", headers=HX)
+    assert not _doc(frag) and 'class="row new-note-form"' in frag.text
+    for form in re.findall(r"<form[^>]*>", frag.text):
+        assert 'action="' in form and 'method="post"' in form, form
+
+
+def test_import_json_from_the_chooser_redirects_to_the_new_note(client):
+    src = _create(client, "Exported")
     doc = client.get("/api/export").content
     resp = client.post(
-        "/api/import",
+        "/notes/import",
         files={"file": ("notes.json", doc, "application/json")},
         follow_redirects=False,
     )
-    assert resp.status_code == 303 and resp.headers["location"] == "/"
+    assert resp.status_code == 303
+    new_id = resp.headers["location"].rsplit("/", 1)[-1]
+    assert new_id != src["id"]  # a new note, never a merge into the existing one
+    assert client.get(f"/api/notes/{new_id}").json()["title"] == "Exported"
+    assert len(client.get("/api/notes").json()) == 2
+
+
+def test_import_rejects_garbage_with_400(client):
+    for name, body in (
+        ("notes.json", b"not json"),
+        ("x.zip", b"PK\x03\x04garbage"),
+        ("e.json", b""),
+    ):
+        resp = client.post(
+            "/notes/import", files={"file": (name, body, "application/octet-stream")}
+        )
+        assert resp.status_code == 400, name
+
+
+def test_note_zip_export_round_trips_with_its_image(client):
+    note = _create(client, "Zipped")
+    nid, root = note["id"], note["chapters"][0]["id"]
+    client.post(
+        f"/notes/{nid}/chapters", data={"block_type": "media", "position": "child", "ref_id": root}
+    )
+    mcid = client.get(f"/api/notes/{nid}").json()["chapters"][1]["id"]
+    buf = BytesIO()
+    Image.new("RGB", (6, 4), "blue").save(buf, format="PNG")
+    client.post(
+        f"/notes/{nid}/media/upload",
+        data={"chapter_id": mcid},
+        files={"file": ("b.png", buf.getvalue(), "image/png")},
+    )
+    [filename] = client.get(f"/api/notes/{nid}/media/list").json()["media"]
+    client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select",
+        data={"url": f"/api/notes/{nid}/media/{filename}"},
+    )
+    zipped = client.get(f"/notes/{nid}/export.zip")
+    assert zipped.status_code == 200 and zipped.headers["content-type"] == "application/zip"
+    resp = client.post(
+        "/notes/import",
+        files={"file": ("zipped.zip", zipped.content, "application/zip")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    new_id = resp.headers["location"].rsplit("/", 1)[-1]
+    new = client.get(f"/api/notes/{new_id}").json()
+    [new_file] = client.get(f"/api/notes/{new_id}/media/list").json()["media"]
+    media_chapter = next(c for c in new["chapters"] if c["type"] == "media")
+    assert media_chapter["content"] == f"/api/notes/{new_id}/media/{new_file}"
+    assert new_file != filename  # minted, not copied from the archive
+    assert client.get(media_chapter["content"]).status_code == 200
 
 
 def test_unknown_note_is_404(client):

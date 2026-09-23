@@ -1,10 +1,7 @@
 <div class="pane-header">
   <div class="pane-title">Notes</div>
   <div class="pane-actions">
-    <form action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none" class="add-note-form">
-      <input type="hidden" name="title" value="Untitled note">
-      <button type="submit" class="icon-btn add-note-btn" aria-label="Add note">+</button>
-    </form>
+    <a class="icon-btn add-note-btn" href="/notes/new" hx-get="/notes/new" hx-target="body" hx-swap="beforeend" aria-label="Add note" title="Add note">+</a>
     <button type="button" class="icon-btn sidebar-toggle-btn" aria-label="Collapse notes" data-toggle-pane="note-list">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="9 18 15 12 9 6"></polyline>

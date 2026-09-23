@@ -5,13 +5,14 @@ from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 
-from app.config import get_settings
 from app.schemas import NoteCreate
-from app.schemas import NoteDocument
 from app.schemas import NoteUpdate
+from app.services.bundle import BundleError
+from app.services.bundle import export_zip
+from app.services.bundle import import_bundle
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
 
@@ -65,23 +66,38 @@ async def export_notes(service: NoteService = Depends(get_note_service)):
 async def import_notes(
     request: Request, file: UploadFile, service: NoteService = Depends(get_note_service)
 ):
-    settings = get_settings()
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(raw) > settings.max_payload_bytes:
-        raise HTTPException(status_code=413, detail="Import too large")
+    """Create notes from an export .json or a bundle .zip; same sanitisation as the page route."""
+    content = await file.read()
     try:
-        doc = NoteDocument.model_validate_json(raw)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON document") from exc
-    service.import_document(doc)
-    if request.headers.get("hx-request", "").lower() != "true":
-        return RedirectResponse(url="/", status_code=303)
-    notes = service.list_notes()
-    active = notes[0] if notes else None
-    return templates.TemplateResponse(
-        request, "partials/hx_refresh.html", {"request": request, "notes": notes, "active": active}
+        result = import_bundle(service, file.filename or "", content)
+    except BundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if request.headers.get("hx-request", "").lower() == "true":
+        notes = service.list_notes()
+        return templates.TemplateResponse(
+            request,
+            "partials/hx_refresh.html",
+            {
+                "request": request,
+                "notes": notes,
+                "active": result.notes[0] if result.notes else None,
+            },
+        )
+    return JSONResponse(
+        {
+            "imported": [n.id for n in result.notes],
+            "images": result.images,
+            "skipped": result.skipped,
+        }
+    )
+
+
+@router.get("/export.zip")
+async def export_all_zip(service: NoteService = Depends(get_note_service)):
+    return Response(
+        export_zip(service),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="wisenotes.zip"'},
     )
 
 

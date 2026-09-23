@@ -23,14 +23,13 @@
         <p class="muted">Group notes by folder. Leave empty to ungroup.</p>
       </div>
       <div class="note-settings-section">
-        <strong>Export / import</strong>
+        <strong>Export</strong>
         <div class="row">
-          <a class="btn" href="/api/export" download>Download all notes (JSON)</a>
+          <a class="btn" href="/notes/{{ note.id }}/export.zip" download>Download this note (zip with images)</a>
+          <a class="btn" href="/api/export" download>All notes (JSON)</a>
+          <a class="btn" href="/api/export.zip" download>All notes (zip)</a>
         </div>
-        <form class="row" action="/api/import" method="post" enctype="multipart/form-data" hx-post="/api/import" hx-encoding="multipart/form-data" hx-target="body" hx-swap="none">
-          <input type="file" name="file" accept="application/json,.json" required aria-label="JSON file">
-          <button type="submit" class="btn">Import</button>
-        </form>
+        <p class="muted">Import lives under the "+" in the notes list.</p>
       </div>
       <div class="note-settings-section">
         <strong class="danger-text">Delete</strong>

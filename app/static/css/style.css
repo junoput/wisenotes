@@ -1088,3 +1088,5 @@ pre.code-block-display { margin: 0; padding: 10px 12px; background: #282a36; col
 .note-settings-section .row input[type=text], .note-settings-section .row input:not([type]) { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: #0b1220; color: var(--text); }
 a.item, a.item:hover, a.btn, a.btn:hover, a.icon-btn { text-decoration: none; }
 pre.code-block-display code { background: none; padding: 0; font: inherit; color: inherit; }
+a.add-note-btn, a.narrow-add-note-btn { display: inline-flex; align-items: center; justify-content: center; }
+#note-new .row input[type=file] { flex: 1; min-width: 0; }

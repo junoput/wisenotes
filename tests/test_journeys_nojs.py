@@ -120,7 +120,11 @@ def test_fourteen_journeys_without_scripts(journeys):
     rec("home")
 
     p = Page(home.text, "/")
-    loc = submit(client, p.form(**{"class": "add-note-form"}), "/")
+    chooser_link = next(a["href"] for a in p.links if "add-note-btn" in a.get("class", ""))
+    chooser = client.get(chooser_link)
+    assert is_page(chooser) and 'id="note-new"' in chooser.text
+    p = Page(chooser.text, chooser_link)
+    loc = submit(client, p.form(**{"class": "new-note-form"}), chooser_link)
     note_url = loc
     note_id = loc.rsplit("/", 1)[-1]
     assert client.get(f"/api/notes/{note_id}").status_code == 200
