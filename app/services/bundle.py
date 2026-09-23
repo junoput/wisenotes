@@ -10,8 +10,10 @@ Everything that arrives here is untrusted. The rules, in the order they run:
    belongs to which note.
 3. JSON only through the models. Note and Chapter are pydantic models with
    length limits; anything else is a 400.
-4. Images are re-encoded through Pillow (raster -> webp) or verified as GIF,
-   never written as received. SVG and unknown types are dropped and reported.
+4. Images go through the upload pipeline, which decides by content: raster is
+   re-encoded to webp, GIF is verified and kept, SVG and anything Pillow cannot
+   open are dropped and reported. Nothing is written as received except a
+   verified GIF.
 5. Text is scrubbed of control characters; a media block keeps only a
    reference that resolves inside the bundle or a plain http(s) URL.
 6. Nothing is executed and nothing is extracted to a path: entries are read
@@ -38,8 +40,6 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
 
-from PIL import Image
-from PIL import UnidentifiedImageError
 from pydantic import ValidationError
 
 from app.blocks import BLOCKS
@@ -48,6 +48,7 @@ from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteDocument
 from app.schemas import NoteUpdate
+from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 
@@ -294,21 +295,12 @@ def _import_media_ref(service, note_id, src_name, content, media, media_urls, re
 
 
 def _store_image(service, note_id, filename, raw, result) -> str:
-    ext = PurePosixPath(filename).suffix.lower()
     try:
-        with Image.open(io.BytesIO(raw)) as img:
-            img.verify()  # cheap structural check before decoding
-        if ext == ".gif":
-            with Image.open(io.BytesIO(raw)) as img:
-                if img.format != "GIF":
-                    raise UnidentifiedImageError("not a GIF")
-            new_name, data, meta = process_uploaded_image(
-                filename, raw
-            )  # kept verbatim, verified above
-        else:
-            new_name, data, meta = process_uploaded_image(filename, raw)  # re-encoded to webp
-    except (UnidentifiedImageError, OSError, ValueError) as e:
-        result.skipped.append(f"{filename}: not a readable image ({type(e).__name__})")
+        new_name, data, meta = process_uploaded_image(
+            filename, raw
+        )  # content-based; refuses SVG/unknown
+    except UnsupportedImage as e:
+        result.skipped.append(f"{filename}: {e}")
         return ""
     service.save_media_file(note_id, new_name, data)
     service.save_module_metadata(note_id, "media", new_name, meta.to_dict())

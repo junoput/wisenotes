@@ -28,6 +28,7 @@ from app.schemas import NoteUpdate
 from app.services.bundle import BundleError
 from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
+from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
@@ -370,8 +371,8 @@ async def upload_media(
         new_filename, processed, metadata = process_uploaded_image(
             file.filename or "upload", content
         )
-    except Exception as e:  # Pillow raises several types for a bad file
-        raise HTTPException(status_code=400, detail="Not a readable image") from e
+    except UnsupportedImage as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     service.save_media_file(note_id, new_filename, processed)
     service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
     return _media_reply(request, service, note, chapter_id)

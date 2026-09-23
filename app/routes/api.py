@@ -13,6 +13,7 @@ from app.schemas import NoteUpdate
 from app.services.bundle import BundleError
 from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
+from app.services.image_processing import STORED_MEDIA_TYPES
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
 
@@ -123,4 +124,13 @@ async def get_media(note_id: str, filename: str, service: NoteService = Depends(
     if not filepath:
         raise HTTPException(status_code=404, detail="Media file not found")
 
-    return FileResponse(filepath)
+    # Only the two types the pipeline stores are served as images. Anything else on
+    # disk (older uploads, hand-copied files) is offered as a download, never rendered.
+    media_type = STORED_MEDIA_TYPES.get(filepath.suffix.lower())
+    if media_type is None:
+        return FileResponse(
+            filepath,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{filepath.name}"'},
+        )
+    return FileResponse(filepath, media_type=media_type)
