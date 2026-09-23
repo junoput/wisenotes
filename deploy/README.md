@@ -23,11 +23,14 @@ picked up again unchanged if that changes.
 | runtime | rootless podman 4.3 |
 | checkout | a clone the script fetches into; nobody edits it by hand |
 | branch | `develop` (`WISENOTES_BRANCH`) |
-| data | `$WISENOTES_DATA`, a directory outside every checkout and lane; **location pending a permission decision**, see ticket 20260923-016 |
+| data | `/home/claude/wisenotes` (operator's decision, 2026-09-23): outside every checkout and lane, mounted at `/app/data`; only the container writes there |
 | bind / URL | `127.0.0.1:20015` (port from `port_alloc`), published on the tailnet by `tailscale serve --http=8094` as `http://devbox.tail499b22.ts.net:8094/` |
-| boot | devbox is a container that does not survive a host reboot; restart the preview loop after one |
+| loop | transient user unit: `systemd-run --user --unit=wisenotes-preview --working-directory=<clone> --property=Restart=always <clone>/deploy/preview.sh --loop 120`; `journalctl --user -u wisenotes-preview` shows each pass. Does not survive a host reboot; re-run the line |
 
-No compose file: devbox has no compose provider; plain `podman run`.
+No compose file: devbox has no compose provider; plain `podman run`. The
+tailnet has no TLS certs, so the publish is `tailscale serve --bg --http=8094
+localhost:20015`, and `demo.sh up` (HTTPS only) hangs; take it down with
+`tailscale serve --http=8094 off`.
 
 ## The preview loop
 
