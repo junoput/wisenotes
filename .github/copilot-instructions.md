@@ -151,8 +151,8 @@ Tests live in `tests/` using pytest + FastAPI TestClient. Fixtures in `tests/con
 ## Run
 
 ```bash
-# Docker
-docker compose up --build
+# Container (same path as production; see deploy/README.md)
+deploy/deploy.sh --ref HEAD
 
 # Native (Python 3.12+)
 python -m venv .venv && source .venv/bin/activate

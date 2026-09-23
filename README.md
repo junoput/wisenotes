@@ -13,13 +13,14 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 
 ## Quickstart
 
-### Docker (recommended)
+### Container (how it is deployed)
 
 ```bash
-docker compose up --build
+deploy/deploy.sh --ref HEAD     # builds the image with podman, starts it on :8000, smoke-tests it
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:8000>. `deploy/README.md` has the production layout,
+the data path and what happens on a bad deploy.
 
 ### Native
 
@@ -53,10 +54,9 @@ recipe and [CONTRIBUTING.md](CONTRIBUTING.md) for the browser journey driver.
 
 ## Deployment
 
-- **Docker**: multi-stage build, non-root user, health check at `/health`
+- **Container**: multi-stage image, non-root user, one `podman run` per host via `deploy/deploy.sh`, smoke-tested (`/health` and `GET /`), rolled back if the new image does not answer
 - **Volumes**: mount `/data` for persistent note storage
 - **Config**: environment variables prefixed `WISENOTES_` (e.g. `WISENOTES_DATA_DIR`)
-- **Dev override**: `docker-compose.override.yml` adds hot-reload and source mounting
 
 ## Documentation
 

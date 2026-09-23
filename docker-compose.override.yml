@@ -1,9 +1,0 @@
-services:
-  wisenotes:
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    volumes:
-      - ./:/app:delegated
-      # Force static assets to be present at the path FastAPI mounts (/app/app/static)
-      - ./app/static:/app/app/static:ro
-    environment:
-      - WISENOTES_DATA_DIR=/app/data
