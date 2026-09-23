@@ -32,6 +32,19 @@ tailnet has no TLS certs, so the publish is `tailscale serve --bg --http=8094
 localhost:20015`, and `demo.sh up` (HTTPS only) hangs; take it down with
 `tailscale serve --http=8094 off`.
 
+Verifying the published URL from this box: `tailscale serve` matches on the
+MagicDNS name, so a bare-IP request 404s, and `devbox` resolves to the LAN
+address here (`getent hosts devbox`), not the tailnet one, so a request by
+name takes a different path than the operator's phone. The honest local
+check is an explicit Host header against the tailnet IP:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: devbox.tail499b22.ts.net' http://100.123.18.125:8094/
+```
+
+The true check is the operator opening it (ticket 20260923-044 aims the fix
+at demo.sh).
+
 ## The preview loop
 
 `deploy/preview.sh --loop` polls `origin/develop` every two minutes and calls
