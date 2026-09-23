@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Deploy wisenotes as one rootless podman container, with rollback.
 #
-#   deploy/deploy.sh                 build+start from $WISENOTES_REF (default origin/main)
+#   deploy/deploy.sh                 build+start from $WISENOTES_REF (default origin/develop)
 #   deploy/deploy.sh --ref <ref>     any git ref: a branch, tag or sha (rehearsals)
 #   deploy/deploy.sh --rollback      put the previous image back and start it
 #   deploy/deploy.sh status          what is running, from which image
 #   deploy/deploy.sh --dry-run ...   print the plan, change nothing
 #
-# Runs ON the host that serves (agrarius, or devbox for a rehearsal), from a
+# Runs ON the host that serves (devbox preview; any podman host), from a
 # checkout of the repo. Reads deploy/.env if present (see deploy/env.example).
 #
 # What a deploy does, in order:
@@ -34,7 +34,7 @@ repo=$(cd "$here/.." && pwd)
 [ -f "$here/.env" ] && { set -a; . "$here/.env"; set +a; }
 
 NAME=${WISENOTES_NAME:-wisenotes}            # container name; image tags are <NAME>:current/previous/<sha>
-REF=${WISENOTES_REF:-origin/main}
+REF=${WISENOTES_REF:-origin/develop}
 PORT=${WISENOTES_PORT:-8000}
 BIND=${WISENOTES_BIND:-127.0.0.1}            # 100.x.y.z to serve on the tailnet only
 DATA=${WISENOTES_DATA:-$HOME/wisenotes}

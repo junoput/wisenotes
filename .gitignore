@@ -28,3 +28,4 @@ data/
 
 # per-host deploy settings (see deploy/env.example)
 deploy/.env
+deploy/.preview-last-tried

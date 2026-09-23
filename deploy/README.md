@@ -5,30 +5,45 @@ host that serves and does everything: build the image from a git ref, swap the
 container, prove the new one answers, roll back if it does not.
 
 > **Read this before running it on a fresh host: `deploy.sh` deploys
-> `origin/main` unconditionally, and `main` before PR #1 lands serves HTTP 500
-> on every HTML page.** The smoke check will refuse that release (GET / is not
+> `origin/main` unless told otherwise, and both `main` and `develop` before
+> PR #1 lands serve HTTP 500 on every HTML page.** The smoke check will refuse that release (GET / is not
 > 200) and, on a first deploy with nothing to roll back to, nothing serves.
 > That is the script working, not the app being broken. Wait for #1 and #2.
 
-## Hosts
+## Where it runs
 
-| | devbox (rehearsal / demo) | agrarius (production) |
-|---|---|---|
-| runtime | rootless podman 4.3 | rootless podman 5.8, SELinux enforcing |
-| checkout | any clone, e.g. `.scratch/src` | `~/wisenotes-src` (clone of the repo) |
-| data | any dir outside the checkout | `~/wisenotes` — operator's instruction, a folder in the home dir, never inside the checkout |
-| bind | `127.0.0.1` | `100.87.237.97` (tailnet only) |
-| boot | not needed | `podman-restart.service --user` + linger (already on), enabled by the script |
+Operator decision, 2026-09-23: the deployment is the **preview on devbox**,
+tracking `develop` and redeploying itself when the branch moves. The
+agrarius production host was dropped; the script was rehearsed there
+(record on ticket 20260923-005) and nothing was left behind, so it can be
+picked up again unchanged if that changes.
 
-Neither host has a compose provider, so there is no compose file: plain
-`podman run` with `--restart=always`.
+| | devbox preview |
+|---|---|
+| runtime | rootless podman 4.3 |
+| checkout | a clone the script fetches into; nobody edits it by hand |
+| branch | `develop` (`WISENOTES_BRANCH`) |
+| data | `$WISENOTES_DATA`, a directory outside every checkout and lane; **location pending a permission decision**, see ticket 20260923-016 |
+| bind / URL | `127.0.0.1:20015` (port from `port_alloc`), published on the tailnet by `tailscale serve --http=8094` as `http://devbox.tail499b22.ts.net:8094/` |
+| boot | devbox is a container that does not survive a host reboot; restart the preview loop after one |
 
-## First deploy on a host
+No compose file: devbox has no compose provider; plain `podman run`.
+
+## The preview loop
+
+`deploy/preview.sh --loop` polls `origin/develop` every two minutes and calls
+`deploy.sh --ref origin/develop` when the tip moves. A tip that fails the
+smoke check is rolled back, remembered, and not retried until the branch
+moves again; the previous tip keeps serving meanwhile. Today `develop` is
+a524392, the release that 500s on every page, so the loop keeps serving the
+last good image and says so on each pass until PR #1 lands.
+
+## First deploy on a host (or by hand, any ref)
 
 ```sh
-git clone <repo> ~/wisenotes-src && cd ~/wisenotes-src
-cp deploy/env.example deploy/.env && $EDITOR deploy/.env   # port, bind, data dir
-deploy/deploy.sh                                            # origin/main
+git clone <repo> wisenotes-src && cd wisenotes-src
+cp deploy/env.example deploy/.env && $EDITOR deploy/.env   # port, bind, data dir, branch
+deploy/deploy.sh --ref origin/develop
 deploy/deploy.sh status
 ```
 
@@ -38,8 +53,8 @@ if it ever does, they go in that file and `env.example` documents the names.
 ## Every later deploy
 
 ```sh
-cd ~/wisenotes-src && deploy/deploy.sh          # main
-deploy/deploy.sh --ref v1.2.0                   # or a tag / branch / sha
+deploy/preview.sh                               # one pass: redeploy if develop moved
+deploy/deploy.sh --ref v1.2.0                   # or by hand: a tag / branch / sha
 ```
 
 ## The data path, and the test that it survives
