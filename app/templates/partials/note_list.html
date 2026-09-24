@@ -1,13 +1,14 @@
-<div class="pane-header">
+{# The pane is a <details>: the summary toggles it without scripts; app.js only remembers the state. #}
+<summary class="pane-header" title="Show or hide the notes list">
   <div class="pane-title">Notes</div>
-  <div class="pane-actions">
-    <a class="icon-btn add-note-btn" href="/notes/new" hx-get="/notes/new" hx-target="body" hx-swap="beforeend" aria-label="Add note" title="Add note">+</a>
-    <button type="button" class="icon-btn sidebar-toggle-btn" aria-label="Collapse notes" data-toggle-pane="note-list">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="9 18 15 12 9 6"></polyline>
-      </svg>
-    </button>
-  </div>
+  <span class="icon-btn sidebar-toggle-btn" aria-hidden="true">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </span>
+</summary>
+<div class="pane-actions">
+  <a class="icon-btn add-note-btn" href="/notes/new" hx-get="/notes/new" hx-target="body" hx-swap="beforeend" aria-label="Add note" title="Add note">+</a>
 </div>
 <div class="pane-content">
   <div class="note-list">

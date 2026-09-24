@@ -69,6 +69,8 @@ if it ever does, they go in that file and `env.example` documents the names.
 ## Every later deploy
 
 ```sh
+# by hand on devbox: pass the port demos assigned, or the container binds 8000 and the serve slot 502s
+PORT=$(demos status | awk '/wisenotes-preview/{print $3}') deploy/deploy.sh --ref lane/some-branch
 deploy/preview.sh                               # one pass: redeploy if develop moved
 deploy/deploy.sh --ref v1.2.0                   # or by hand: a tag / branch / sha
 ```

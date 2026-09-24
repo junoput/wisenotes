@@ -11,6 +11,7 @@ const root = document.documentElement;
 // ---------------------------------------------------------------- panes
 
 function setCollapsed(pane, collapsed) {
+  if (pane.tagName === 'DETAILS' && pane.open === collapsed) pane.open = !collapsed; // the <details> is the truth; the class mirrors it for CSS
   pane.classList.toggle('collapsed', collapsed);
   const content = pane.querySelector('.pane-content');
   if (content) content.style.display = collapsed ? 'none' : '';
@@ -29,6 +30,14 @@ function restorePanes() {
   const collapsed = isNarrow() || localStorage.getItem('pane:note-list:collapsed') === '1';
   setCollapsed(pane, collapsed);
 }
+
+// The summary toggles the <details> natively; mirror that into the class and remember it.
+document.body.addEventListener('toggle', (e) => {
+  const pane = e.target;
+  if (!(pane instanceof HTMLDetailsElement) || pane.id !== 'note-list') return;
+  setCollapsed(pane, !pane.open);
+  if (!isNarrow()) localStorage.setItem('pane:note-list:collapsed', pane.open ? '0' : '1');
+}, true);
 
 document.body.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-toggle-pane]');

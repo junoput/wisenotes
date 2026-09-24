@@ -281,3 +281,12 @@ def test_note_zip_export_round_trips_with_its_image(client):
 def test_unknown_note_is_404(client):
     assert client.get("/notes/does-not-exist").status_code == 404
     assert client.get("/does-not-exist").status_code == 404  # no catch-all swallows it
+
+
+def test_notes_pane_toggles_without_scripts(client):
+    """The pane is a <details> with a <summary>: native collapse, no script required."""
+    html = client.get("/").text
+    m = re.search(r'<details id="note-list"[^>]*>', html)
+    assert m and " open" in m.group(0)
+    assert re.search(r'<summary class="pane-header"', html)
+    assert "<noscript>" in html

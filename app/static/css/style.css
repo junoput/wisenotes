@@ -1090,3 +1090,13 @@ a.item, a.item:hover, a.btn, a.btn:hover, a.icon-btn { text-decoration: none; }
 pre.code-block-display code { background: none; padding: 0; font: inherit; color: inherit; }
 a.add-note-btn, a.narrow-add-note-btn { display: inline-flex; align-items: center; justify-content: center; }
 #note-new .row input[type=file] { flex: 1; min-width: 0; }
+/* notes pane as <details>: native toggle without scripts */
+details#note-list > summary { list-style: none; cursor: pointer; user-select: none; }
+details#note-list > summary::-webkit-details-marker { display: none; }
+details#note-list > .pane-actions { margin: -6px 0 10px; justify-content: flex-end; }
+details#note-list:not([open]) { padding: 12px 8px; overflow: hidden; }
+details#note-list:not([open]) > summary { margin-bottom: 0; }
+details#note-list:not([open]) .pane-title { display: none; }
+details#note-list:not([open]) .sidebar-toggle-btn { transform: rotate(180deg); }
+.layout:has(details#note-list:not([open])) { --notes-col: 48px; }  /* CSS-only narrow rail; JS sets the same variable */
+.noscript-note { margin: 0; padding: 8px 16px; background: #1f2937; color: #e5e7eb; font-size: 13px; border-bottom: 1px solid var(--border); }
