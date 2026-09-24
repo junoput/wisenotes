@@ -24,12 +24,12 @@ picked up again unchanged if that changes.
 | checkout | a clone the script fetches into; nobody edits it by hand |
 | branch | `develop` (`WISENOTES_BRANCH`) |
 | data | `/home/claude/wisenotes` (operator's decision, 2026-09-23): outside every checkout and lane, mounted at `/app/data`; only the container writes there |
-| bind / URL | `127.0.0.1:20015` (port from `port_alloc`), published on the tailnet by `tailscale serve --http=8094` as `http://devbox.tail499b22.ts.net:8094/` |
-| loop | transient user unit: `systemd-run --user --unit=wisenotes-preview --working-directory=<clone> --property=Restart=always <clone>/deploy/preview.sh --loop 120`; `journalctl --user -u wisenotes-preview` shows each pass. Does not survive a host reboot; re-run the line |
+| bind / URL | `127.0.0.1:$PORT`, the port `demos status` shows (20001 today), published on the tailnet by `tailscale serve --bg --http=8094 localhost:<port>` as `http://devbox.tail499b22.ts.net:8094/` |
+| loop | `demos` (dev-agent-tools) runs `deploy/preview.sh --loop 120` as the user unit `demo@wisenotes-preview`, enabled on boot; `journalctl --user -u demo@wisenotes-preview` shows each pass. `demos` exports the port as `$PORT`, which the scripts honour, so `WISENOTES_PORT` is left unset in `deploy/.env`. After a reboot the first pass starts the last good image (`deploy.sh --start`) even when `develop` is still refused |
 
 No compose file: devbox has no compose provider; plain `podman run`. The
 tailnet has no TLS certs, so the publish is `tailscale serve --bg --http=8094
-localhost:20015`, and `demo.sh up` (HTTPS only) hangs; take it down with
+localhost:<port>`, and `demo.sh up` (HTTPS only) hangs; take it down with
 `tailscale serve --http=8094 off`.
 
 Verifying the published URL from this box: `tailscale serve` matches on the

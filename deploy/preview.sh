@@ -31,6 +31,12 @@ pass() {
   tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
   serving=$(serving_sha)
   tried=$(cat "$last_tried_file" 2>/dev/null || true)
+  if [ -z "$serving" ] && podman image exists "$NAME:current"; then
+    # nothing running (a reboot, or a removed container) but a good image exists: serve it
+    echo "preview: no container running; starting the current image"
+    "$here/deploy.sh" --start || echo "preview: current image failed to start"
+    serving=$(serving_sha)
+  fi
   if [ "$tip" = "$serving" ]; then echo "preview: $BRANCH at $tip already serving"; return 0; fi
   if [ "$tip" = "$tried" ]; then echo "preview: $BRANCH at $tip failed smoke earlier; still serving ${serving:-nothing}; waiting for the tip to move"; return 0; fi
   echo "preview: $BRANCH moved ${serving:-none} -> $tip; deploying"

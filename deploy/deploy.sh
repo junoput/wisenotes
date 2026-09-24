@@ -4,6 +4,7 @@
 #   deploy/deploy.sh                 build+start from $WISENOTES_REF (default origin/develop)
 #   deploy/deploy.sh --ref <ref>     any git ref: a branch, tag or sha (rehearsals)
 #   deploy/deploy.sh --rollback      put the previous image back and start it
+#   deploy/deploy.sh --start         start the current image again (after a reboot); no build
 #   deploy/deploy.sh status          what is running, from which image
 #   deploy/deploy.sh --dry-run ...   print the plan, change nothing
 #
@@ -35,7 +36,7 @@ repo=$(cd "$here/.." && pwd)
 
 NAME=${WISENOTES_NAME:-wisenotes}            # container name; image tags are <NAME>:current/previous/<sha>
 REF=${WISENOTES_REF:-origin/develop}
-PORT=${WISENOTES_PORT:-8000}
+PORT=${WISENOTES_PORT:-${PORT:-8000}}          # $PORT is what a supervisor like `demos` hands out
 BIND=${WISENOTES_BIND:-127.0.0.1}            # 100.x.y.z to serve on the tailnet only
 DATA=${WISENOTES_DATA:-$HOME/wisenotes}
 SMOKE_SECONDS=${WISENOTES_SMOKE_SECONDS:-60}
@@ -45,6 +46,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --ref) REF=$2; shift 2 ;;
     --rollback) MODE=rollback; shift ;;
+    --start) MODE=start; shift ;;
     status) MODE=status; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
@@ -116,6 +118,13 @@ case "$MODE" in
     else
       say "no container named $NAME"; exit 1
     fi
+    exit 0 ;;
+  start)
+    have_image "$NAME:current" || { say "no $NAME:current image; run a deploy first"; exit 1; }
+    [ -d "$DATA" ] || { say "creating data dir $DATA"; run mkdir -p "$DATA"; }
+    say "starting $NAME from the current image"
+    stop_container; start_container "$NAME:current"; ensure_boot_persistence
+    smoke || { say "current image failed smoke; container left running for inspection"; exit 1; }
     exit 0 ;;
   rollback)
     have_image "$NAME:previous" || { say "no $NAME:previous image; nothing to roll back to"; exit 1; }
