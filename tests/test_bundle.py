@@ -263,3 +263,51 @@ class TestZip:
             import_bundle(service, "b.zip", _zip({"media/x/p.png": _png()}))
         with pytest.raises(BundleError, match="valid zip"):
             import_bundle(service, "b.zip", b"PK\x03\x04" + b"garbage")
+
+
+def _three_note_zip(bad_image_in_second: bytes) -> bytes:
+    notes, files = [], {}
+    for i, name in enumerate(("One", "Two", "Three")):
+        n = _note(id=f"n{i}", name=name, title=name)
+        n["chapters"][2]["content"] = f"media/{name}/pic.jpg"
+        notes.append(n)
+        files[f"media/{name}/pic.jpg"] = bad_image_in_second if i == 1 else _png()
+    files["notes.json"] = _doc(*notes)
+    return _zip(files)
+
+
+def _jpeg_truncated_in_scan_data() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), "red").save(buf, format="JPEG")
+    return buf.getvalue()[:-10]  # passes verify(), fails at decode
+
+
+class TestAllOrNothing:
+    def test_a_bad_image_mid_import_is_skipped_not_a_half_import(self, service):
+        # The reviewer's reproduction: 3 notes, a truncated JPEG in note 2. Was a
+        # 500 with 2 notes left behind; now all 3 notes, the image reported.
+        r = import_bundle(service, "x.zip", _three_note_zip(_jpeg_truncated_in_scan_data()))
+        assert [n.title for n in r.notes] == ["One", "Two", "Three"]
+        assert r.images == 2 and len(r.skipped) == 1 and "pic.jpg" in r.skipped[0]
+        assert len(service.list_notes()) == 3
+
+    def test_an_unexpected_failure_rolls_back_every_note_created(
+        self, service, data_dir, monkeypatch
+    ):
+        service.create_note(NoteCreate(title="Already here"))
+        real_save = service.save_media_file
+        calls = []
+
+        def save_then_fail(note_id, name, data):
+            calls.append(note_id)
+            if len(calls) == 2:
+                raise RuntimeError("disk full")
+            real_save(note_id, name, data)
+
+        monkeypatch.setattr(service, "save_media_file", save_then_fail)
+        with pytest.raises(RuntimeError, match="disk full"):
+            import_bundle(service, "x.zip", _three_note_zip(_png()))
+        assert len(calls) == 2  # precondition: the failure came after a note was created
+        assert [n.title for n in service.list_notes()] == ["Already here"]
+        # and no folder left on disk either (media included)
+        assert [p.name for p in data_dir.iterdir() if p.is_dir()] == [service.list_notes()[0].name]

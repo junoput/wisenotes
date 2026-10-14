@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from app.blocks import get_all_blocks
 from app.schemas import Chapter
@@ -127,7 +128,8 @@ async def import_notes(
     """Create new notes from an export .json or a .zip (notes.json + media/). Never merges."""
     content = await file.read()
     try:
-        result = import_bundle(service, file.filename or "", content)
+        # Decoding images is CPU-bound; off the event loop so one import cannot stall every request.
+        result = await run_in_threadpool(import_bundle, service, file.filename or "", content)
     except BundleError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not result.notes:
@@ -369,8 +371,8 @@ async def upload_media(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
     try:
-        new_filename, processed, metadata = process_uploaded_image(
-            file.filename or "upload", content
+        new_filename, processed, metadata = await run_in_threadpool(
+            process_uploaded_image, file.filename or "upload", content
         )
     except UnsupportedImage as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

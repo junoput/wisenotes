@@ -239,40 +239,55 @@ def _clean_text(s: str | None, limit: int) -> str:
 def _create_notes(
     service: NoteService, notes: list[Note], media: dict[tuple[str, str], bytes]
 ) -> ImportResult:
+    """All or nothing: if anything raises part-way, the notes created so far are deleted."""
     result = ImportResult()
-    for src in notes:
-        title = _clean_text(src.title, 200).strip() or "Imported note"
-        created = service.create_note(
-            NoteCreate(title=title, tags=[_clean_text(t, 50) for t in src.tags][:50])
-        )
-        id_map = {ch.id: str(uuid.uuid4()) for ch in src.chapters}
-        media_urls: dict[str, str] = {}
-        chapters: list[Chapter] = []
-        for ch in sorted(src.chapters, key=lambda c: c.order):
-            block_type = ch.type if ch.type in BLOCKS else "text"
-            content = _clean_text(ch.content, 20_000)
-            if block_type == "media":
-                content = _import_media_ref(
-                    service, created.id, src.name, content, media, media_urls, result
-                )
-            chapters.append(
-                Chapter(
-                    id=id_map[ch.id],
-                    title=_clean_text(ch.title, 120),
-                    content=content,
-                    order=ch.order,
-                    parent_id=id_map.get(ch.parent_id) if ch.parent_id else None,
-                    type=block_type,
-                    language=_clean_text(ch.language, 40) or None,
-                    source=_clean_text(ch.source, 500) or None,
-                )
-            )
-        note = service.update_note(
-            created.id,
-            NoteUpdate(folder=_clean_text(src.folder, 120) or None, chapters=chapters),
-        )
-        result.notes.append(note or created)
+    created_ids: list[str] = []
+    try:
+        for src in notes:
+            _create_note(service, src, media, result, created_ids)
+    except BaseException:
+        for note_id in created_ids:
+            try:
+                service.delete_note(note_id)
+            except Exception:
+                logger.exception("import rollback could not delete note %s", note_id)
+        raise
     return result
+
+
+def _create_note(service, src: Note, media, result: ImportResult, created_ids: list[str]) -> None:
+    title = _clean_text(src.title, 200).strip() or "Imported note"
+    created = service.create_note(
+        NoteCreate(title=title, tags=[_clean_text(t, 50) for t in src.tags][:50])
+    )
+    created_ids.append(created.id)
+    id_map = {ch.id: str(uuid.uuid4()) for ch in src.chapters}
+    media_urls: dict[str, str] = {}
+    chapters: list[Chapter] = []
+    for ch in sorted(src.chapters, key=lambda c: c.order):
+        block_type = ch.type if ch.type in BLOCKS else "text"
+        content = _clean_text(ch.content, 20_000)
+        if block_type == "media":
+            content = _import_media_ref(
+                service, created.id, src.name, content, media, media_urls, result
+            )
+        chapters.append(
+            Chapter(
+                id=id_map[ch.id],
+                title=_clean_text(ch.title, 120),
+                content=content,
+                order=ch.order,
+                parent_id=id_map.get(ch.parent_id) if ch.parent_id else None,
+                type=block_type,
+                language=_clean_text(ch.language, 40) or None,
+                source=_clean_text(ch.source, 500) or None,
+            )
+        )
+    note = service.update_note(
+        created.id,
+        NoteUpdate(folder=_clean_text(src.folder, 120) or None, chapters=chapters),
+    )
+    result.notes.append(note or created)
 
 
 def _import_media_ref(service, note_id, src_name, content, media, media_urls, result) -> str:

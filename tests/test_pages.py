@@ -2,10 +2,14 @@
 plain form POSTs with no HX-Request header must redirect to a full page, and
 the same POSTs with the header must return the htmx fragment."""
 
+import asyncio
 import re
 from io import BytesIO
 
 from PIL import Image
+
+from app.routes import api
+from app.routes import pages
 
 HX = {"HX-Request": "true"}
 
@@ -308,3 +312,41 @@ def test_notes_pane_toggles_without_scripts(client):
     assert m and " open" in m.group(0)
     assert re.search(r'<summary class="pane-header"', html)
     assert "<noscript>" in html
+
+
+def _off_the_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return True
+    return False
+
+
+def test_import_and_upload_decode_off_the_event_loop(client, monkeypatch):
+    # Image decoding is CPU-bound; run on the loop it stalls every other request.
+    seen = {}
+    real_import, real_process = pages.import_bundle, pages.process_uploaded_image
+
+    def spy(name, real):
+        def wrapper(*args):
+            seen[name] = _off_the_event_loop()
+            return real(*args)
+
+        return wrapper
+
+    monkeypatch.setattr(pages, "import_bundle", spy("pages import", real_import))
+    monkeypatch.setattr(api, "import_bundle", spy("api import", real_import))
+    monkeypatch.setattr(pages, "process_uploaded_image", spy("upload", real_process))
+    nid = _create(client, "Loop")["id"]
+    doc = client.get("/api/export").content
+    for url in ("/notes/import", "/api/import"):
+        assert client.post(url, files={"file": ("n.json", doc, "application/json")}).is_success
+    png = BytesIO()
+    Image.new("RGB", (4, 4)).save(png, format="PNG")
+    resp = client.post(
+        f"/notes/{nid}/media/upload",
+        files={"file": ("p.png", png.getvalue(), "image/png")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303  # stored; the redirect target is not under test
+    assert seen == {"pages import": True, "api import": True, "upload": True}

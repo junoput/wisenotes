@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
@@ -70,7 +71,7 @@ async def import_notes(
     """Create notes from an export .json or a bundle .zip; same sanitisation as the page route."""
     content = await file.read()
     try:
-        result = import_bundle(service, file.filename or "", content)
+        result = await run_in_threadpool(import_bundle, service, file.filename or "", content)
     except BundleError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if request.headers.get("hx-request", "").lower() == "true":
