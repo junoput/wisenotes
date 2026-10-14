@@ -404,3 +404,37 @@ def test_an_import_with_a_missing_image_says_so_on_the_note_page(client):
 def test_harness_control_a_complete_note_shows_no_missing_notice(client):
     nid = _create(client, "Complete")["id"]
     assert "import-missing" not in client.get(f"/notes/{nid}").text
+
+
+def test_theme_is_a_cookie_the_page_reads(client):
+    nid = _create(client, "Themed")["id"]
+    # no cookie: no data-theme, so the CSS follows the system preference
+    assert "data-theme=" not in client.get("/").text
+    resp = client.post(
+        "/theme",
+        data={"theme": "light"},
+        headers={"referer": f"http://testserver/notes/{nid}"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303 and resp.headers["location"] == f"/notes/{nid}"
+    assert client.cookies.get("theme") == "light"
+    assert '<html lang="en" data-theme="light">' in client.get("/").text
+    client.post("/theme", data={"theme": "system"}, follow_redirects=False)
+    assert "data-theme=" not in client.get("/").text
+
+
+def test_theme_ignores_unknown_values_and_foreign_referers(client):
+    client.cookies.set("theme", 'x" onload="alert(1)')
+    assert "data-theme=" not in client.get("/").text  # only light/dark are echoed
+    resp = client.post(
+        "/theme",
+        data={"theme": "dark"},
+        headers={"referer": "https://evil.example/phish"},
+        follow_redirects=False,
+    )
+    assert resp.headers["location"] == "/"
+    for ref in ("//evil.example/x", "javascript:alert(1)"):
+        resp = client.post(
+            "/theme", data={"theme": "dark"}, headers={"referer": ref}, follow_redirects=False
+        )
+        assert resp.headers["location"] == "/", ref
