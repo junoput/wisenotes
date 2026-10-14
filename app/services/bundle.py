@@ -24,6 +24,11 @@ Bundle layout (what export_zip writes and import_bundle reads):
 
     notes.json                 a NoteDocument; media blocks reference media/<note-name>/<file>
     media/<note-name>/<file>   the images of that note
+
+import_bundle also reads a note folder zipped straight from the data directory:
+
+    <note-name>/<note-name>.json   one note; media blocks reference /api/notes/<id>/media/<file>
+    <note-name>/media/<file>       its images
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ MAX_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100  # above this for a large entry, treat as a bomb
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 _MEDIA_ENTRY = re.compile(r"^(?:.*/)?media/([^/]+)/([^/]+)$")
+_FOLDER_MEDIA_ENTRY = re.compile(r"^(?:.*/)?([^/]+)/media/([^/]+)$")  # data-dir layout
 _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -181,7 +187,7 @@ def _inspect_zip(zf: zipfile.ZipFile):
             if json_entry is None or base == "notes.json":
                 json_entry = name
             continue
-        m = _MEDIA_ENTRY.match(name)
+        m = _MEDIA_ENTRY.match(name) or _FOLDER_MEDIA_ENTRY.match(name)
         if m and PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS:
             media_entries.append((info, m.group(1), base))
         else:
