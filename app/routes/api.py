@@ -132,6 +132,6 @@ async def get_media(note_id: str, filename: str, service: NoteService = Depends(
         return FileResponse(
             filepath,
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{filepath.name}"'},
+            filename=filepath.name,  # Starlette encodes it per RFC 6266, non-ASCII included
         )
     return FileResponse(filepath, media_type=media_type)

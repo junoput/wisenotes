@@ -8,6 +8,7 @@ element carrying an hx-* attribute is also a real <form action method> or
 """
 
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -82,6 +83,16 @@ def _after_change(
     return RedirectResponse(url=f"/notes/{note.id}" if note else "/", status_code=303)
 
 
+def _attachment(filename: str) -> str:
+    """RFC 6266: an ASCII fallback, and the real name as UTF-8 in filename*.
+
+    Headers are latin-1, so a raw non-ASCII name was a UnicodeEncodeError (500)."""
+    fallback = "".join(
+        c if c.isascii() and c.isprintable() and c not in '"\\' else "_" for c in filename
+    )
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 def _note_or_404(service: NoteService, note_id: str) -> Note:
     note = service.get_note(note_id)
     if not note:
@@ -145,7 +156,7 @@ async def export_note_zip(note_id: str, service: NoteService = Depends(get_note_
     return Response(
         export_zip(service, [note.id]),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{note.name}.zip"'},
+        headers={"Content-Disposition": _attachment(f"{note.name}.zip")},
     )
 
 

@@ -5,6 +5,7 @@ the same POSTs with the header must return the htmx fragment."""
 import asyncio
 import re
 from io import BytesIO
+from urllib.parse import quote
 
 from PIL import Image
 
@@ -350,3 +351,24 @@ def test_import_and_upload_decode_off_the_event_loop(client, monkeypatch):
     )
     assert resp.status_code == 303  # stored; the redirect target is not under test
     assert seen == {"pages import": True, "api import": True, "upload": True}
+
+
+def test_export_of_a_non_ascii_title_downloads_with_its_name(client):
+    # The title 'Заметки' was a UnicodeEncodeError (500): headers are latin-1.
+    nid = _create(client, 'Заметки "q"')["id"]
+    resp = client.get(f"/notes/{nid}/export.zip")
+    assert resp.status_code == 200
+    cd = resp.headers["content-disposition"]
+    name = client.get(f"/api/notes/{nid}").json()["name"]
+    assert cd.startswith('attachment; filename="')
+    assert f"filename*=UTF-8''{quote(name + '.zip', safe='')}" in cd
+    fallback = cd.split('filename="', 1)[1].split('"', 1)[0]
+    assert fallback.isascii() and '"' not in fallback
+
+
+def test_stray_non_ascii_media_downloads_with_its_name(client, service):
+    note = _create(client, "Stray")
+    service.repo.save_media(note["name"], "файл.bin", b"\x00\x01")
+    resp = client.get(f"/api/notes/{note['id']}/media/{quote('файл.bin')}")
+    assert resp.status_code == 200
+    assert "filename*=utf-8''" + quote("файл.bin") in resp.headers["content-disposition"]
