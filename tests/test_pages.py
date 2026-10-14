@@ -230,6 +230,24 @@ def test_import_json_from_the_chooser_redirects_to_the_new_note(client):
     assert len(client.get("/api/notes").json()) == 2
 
 
+def test_create_and_import_close_the_add_note_overlay(client):
+    # htmx appends the chooser to <body>; the refresh fragment does not cover it,
+    # so the answer must carry the event app.js removes overlays on.
+    created = client.post("/notes", data={"title": "Via htmx"}, headers=HX)
+    assert created.status_code == 200
+    assert created.headers.get("hx-trigger") == "close-note-settings"
+    doc = client.get("/api/export").content
+    imported = client.post(
+        "/notes/import", files={"file": ("notes.json", doc, "application/json")}, headers=HX
+    )
+    assert imported.status_code == 200
+    assert imported.headers.get("hx-trigger") == "close-note-settings"
+    # control: a mutation that leaves the overlay alone does not send it
+    nid = client.get("/api/notes").json()[0]["id"]
+    renamed = client.post(f"/notes/{nid}/folder", data={"folder": "x"}, headers=HX)
+    assert renamed.status_code == 200 and "hx-trigger" not in renamed.headers
+
+
 def test_import_rejects_garbage_with_400(client):
     for name, body in (
         ("notes.json", b"not json"),

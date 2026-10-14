@@ -38,6 +38,9 @@ templates = Jinja2Templates(directory="app/templates")
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# htmx appends the add-note and settings overlays to <body>, outside what the
+# out-of-band refresh replaces; this event tells app.js to remove them.
+CLOSE_OVERLAY = {"HX-Trigger": "close-note-settings"}
 
 
 def _is_htmx(request: Request) -> bool:
@@ -131,7 +134,7 @@ async def import_notes(
         raise HTTPException(status_code=400, detail="The file contained no notes")
     for line in result.skipped:
         logger.info("import skipped %s", line)
-    return _after_change(request, service, result.notes[0])
+    return _after_change(request, service, result.notes[0], headers=CLOSE_OVERLAY)
 
 
 @router.get("/notes/{note_id}/export.zip")
@@ -152,7 +155,7 @@ async def create_note(
 ):
     note = service.create_note(NoteCreate(title=title))
     note = service.add_chapter(note.id, title="Chapter 1") or note
-    return _after_change(request, service, note)
+    return _after_change(request, service, note, headers=CLOSE_OVERLAY)
 
 
 @router.get("/notes/{note_id}", response_class=HTMLResponse)
@@ -210,9 +213,7 @@ async def delete_note(
     if not service.delete_note(note_id):
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return _after_change(
-        request, service, notes[0] if notes else None, headers={"HX-Trigger": "close-note-settings"}
-    )
+    return _after_change(request, service, notes[0] if notes else None, headers=CLOSE_OVERLAY)
 
 
 # ---------------------------------------------------------------- blocks

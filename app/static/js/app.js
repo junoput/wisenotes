@@ -113,10 +113,20 @@ document.body.addEventListener('submit', (e) => {
   if (form && !window.confirm(form.getAttribute('data-confirm'))) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 
-function closeSettings() { document.getElementById('note-settings')?.remove(); }
+// Overlays (note settings, add a note) are appended to <body> by htmx; closing removes them.
+function closeSettings() { document.querySelectorAll('.note-settings-overlay').forEach((el) => el.remove()); }
 document.body.addEventListener('close-note-settings', closeSettings);
 document.body.addEventListener('click', (e) => {
-  if (e.target.closest('[data-close-settings]')) { e.preventDefault(); closeSettings(); }
+  if (e.target.closest('[data-close-settings]') || e.target.classList.contains('note-settings-overlay')) {
+    e.preventDefault(); closeSettings();
+  }
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.querySelector('.note-settings-overlay')) closeSettings();
+});
+// A second click on "+" would stack a second overlay; drop the old one first.
+document.body.addEventListener('htmx:beforeSwap', (e) => {
+  if (e.detail.requestConfig?.path === '/notes/new') closeSettings();
 });
 
 // ---------------------------------------------------------------- code and math
