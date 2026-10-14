@@ -7,6 +7,7 @@ real podman, systemd or network.
 """
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -204,3 +205,25 @@ def test_stubs_are_the_ones_on_path(box):
     assert (box / "state/log").exists() and "podman build" in (box / "state/log").read_text()
     assert os.environ.get("STUB_STATE") is None  # nothing leaked into this process
     assert r.returncode == 0
+
+
+# ---------------------------------------------------------------- item 7
+
+
+def test_the_docs_name_the_ref_the_script_deploys():
+    # deploy/README.md said origin/main for months after deploy.sh moved to develop.
+    script = (REPO / "deploy/deploy.sh").read_text()
+    [default] = re.findall(r"^REF=\$\{WISENOTES_REF:-([^}]+)\}", script, re.M)
+    readme = (REPO / "deploy/README.md").read_text()
+    env = (REPO / "deploy/env.example").read_text()
+    assert f"deploys `{default}` unless" in readme
+    assert re.search(rf"^WISENOTES_REF={re.escape(default)}\s", env, re.M)
+    others = set(re.findall(r"deploys `(origin/[\w./-]+)`", readme)) - {default}
+    assert not others, others
+
+
+def test_the_docs_record_the_csrf_acceptance_and_what_ends_it():
+    readme = (REPO / "deploy/README.md").read_text()
+    section = readme.split("## Accepted risks", 1)[1].split("\n## ", 1)[0]
+    assert "No CSRF protection" in section and "tailnet" in section
+    assert "acceptance ends if the app is exposed beyond the" in " ".join(section.split())

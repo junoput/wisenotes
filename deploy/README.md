@@ -4,11 +4,11 @@ One container, one script, one data directory. `deploy/deploy.sh` runs on the
 host that serves and does everything: build the image from a git ref, swap the
 container, prove the new one answers, roll back if it does not.
 
-> **Read this before running it on a fresh host: `deploy.sh` deploys
-> `origin/main` unless told otherwise, and both `main` and `develop` before
-> PR #1 lands serve HTTP 500 on every HTML page.** The smoke check will refuse that release (GET / is not
-> 200) and, on a first deploy with nothing to roll back to, nothing serves.
-> That is the script working, not the app being broken. Wait for #1 and #2.
+> **Read this before running it: `deploy.sh` deploys `origin/develop` unless
+> told otherwise (`WISENOTES_REF`, or `--ref`).** On devbox the preview loop
+> follows `develop`, so every landing on `develop` is a release onto the
+> operator's real notes in `/home/claude/wisenotes` (operator, 2026-10-14).
+> Land on `develop` as if releasing.
 
 ## Where it runs
 
@@ -20,12 +20,13 @@ picked up again unchanged if that changes.
 
 | | devbox preview |
 |---|---|
-| runtime | rootless podman 4.3 |
+| runtime | rootless podman (5.4.2 on 2026-10-14) |
 | checkout | a clone the script fetches into; nobody edits it by hand |
 | branch | `develop` (`WISENOTES_BRANCH`) |
 | data | `/home/claude/wisenotes` (operator's decision, 2026-09-23): outside every checkout and lane, mounted at `/app/data`; only the container writes there |
 | bind / URL | `127.0.0.1:$PORT`, the port `demos status` shows (20001 today), published on the tailnet by `tailscale serve --bg --http=8094 localhost:<port>` as `http://devbox.tail499b22.ts.net:8094/` |
 | loop | `demos` (dev-agent-tools) runs `deploy/preview.sh --loop 120` as the user unit `demo@wisenotes-preview`, enabled on boot; `journalctl --user -u demo@wisenotes-preview` shows each pass. `demos` exports the port as `$PORT`, which the scripts honour, so `WISENOTES_PORT` is left unset in `deploy/.env`. After a reboot the first pass starts the last good image (`deploy.sh --start`) even when `develop` is still refused |
+| boot | `wisenotes-container.service` (user unit, written and enabled by `deploy.sh`) runs `podman start wisenotes` and nothing else. `deploy.sh` never enables `podman-restart.service`: that unit starts every `restart=always` container of the user, and making other projects' containers persistent is not wisenotes' call (operator, 2026-10-14). On devbox `podman-restart` was already enabled when this changed and was left as it was |
 
 No compose file: devbox has no compose provider; plain `podman run`. The
 tailnet has no TLS certs, so the publish is `tailscale serve --bg --http=8094
@@ -50,9 +51,9 @@ at demo.sh).
 `deploy/preview.sh --loop` polls `origin/develop` every two minutes and calls
 `deploy.sh --ref origin/develop` when the tip moves. A tip that fails the
 smoke check is rolled back, remembered, and not retried until the branch
-moves again; the previous tip keeps serving meanwhile. Today `develop` is
-a524392, the release that 500s on every page, so the loop keeps serving the
-last good image and says so on each pass until PR #1 lands.
+moves again; the previous tip keeps serving meanwhile. A pass that finds the
+container stopped (after a reboot) starts the current image first; a stopped
+container is not "serving".
 
 ## First deploy on a host (or by hand, any ref)
 
@@ -91,17 +92,22 @@ The script keeps two image tags: `<name>:current` and `<name>:previous`.
 
 1. New image built from `git archive <sha>` in a temp dir (the checkout is
    never moved, so the script survives deploying a ref older than itself)
-   and tagged `current`; old `current` becomes `previous`.
-2. Old container removed, new one started. This is the only moment nothing
-   serves: a few seconds, single container, no overlap.
+   and tagged `<name>:<sha>`. Nothing else is retagged yet.
+2. Old container removed, new one started from `<name>:<sha>`. This is the
+   only moment nothing serves: a few seconds, single container, no overlap.
 3. Smoke: `/health` **and** `GET /` must both answer 200 within 60 s.
-4. Failure: new container removed, `previous` retagged to `current` and
-   started, smoke run again. The old version serves; the script exits 1 and
-   says `ROLLED BACK`. If there is no previous image (first deploy), it says
-   `NOTHING IS SERVING` and exits 1.
+4. Pass: old `current` becomes `previous`, `<sha>` becomes `current`. So
+   `current` only ever names an image that passed the smoke check.
+5. Failure, of the start or the smoke: new container removed, `current`
+   (untouched, so the last good image) started and smoked again. The script
+   exits 1 and says `ROLLED BACK`. If there is no `current` image (first
+   deploy) or it fails too, it says `NOTHING IS SERVING` and exits 1.
 
-`deploy/deploy.sh --rollback` does step 4 by hand at any time, for a release
-that passed smoke and turned out wrong later. Rolling back never touches the
+`deploy.sh --start` (after a reboot) starts `current` and smokes it. If that
+fails, it stops the container rather than leave a failing image serving.
+
+`deploy/deploy.sh --rollback` retags `previous` to `current` and starts it,
+for a release that passed smoke and turned out wrong later. Rolling back never touches the
 data directory; a release that changed the data format is a migration
 problem, not a rollback problem, and there is none today.
 
@@ -116,6 +122,24 @@ WISENOTES_NAME=wisenotes-rehearsal WISENOTES_PORT=8001 WISENOTES_DATA=$HOME/wise
 ```
 
 Then remove it: `podman rm -f wisenotes-rehearsal; podman rmi wisenotes-rehearsal:current`.
+
+## Accepted risks
+
+**No CSRF protection.** Forms post without tokens, and nothing checks
+`Origin`. The operator accepts this (2026-10-14) because the app is reached
+only over the tailnet, so a page that could forge a request must already run
+on a tailnet device. **The acceptance ends if the app is exposed beyond the
+tailnet**, whether by a public bind, `tailscale funnel`, a reverse proxy or a
+second user: then CSRF protection is a precondition of that change, not a
+follow-up.
+
+## Known behaviour worth knowing before a landing
+
+Changing a note's folder renames its data directory on disk when the
+directory name differs from the one the title derives (seen live: a note
+stored as `CT1_HS26-2`). The stack review (20261014-139) found no data loss.
+It is recorded here so that a directory renaming under a release is not
+mistaken for one.
 
 ## What this does not do
 
