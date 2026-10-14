@@ -187,6 +187,19 @@ class TestZip:
         r = import_bundle(service, "whatever.bin", z)
         assert r.images == 1
 
+    def test_note_folder_zipped_from_the_data_dir(self, service):
+        # The on-disk layout: <name>/<name>.json, images in <name>/media/, blocks
+        # pointing at the original note's /api/notes/<id>/media/<file>.
+        n = _note(name="Trip")
+        n["chapters"][2]["content"] = "/api/notes/n1/media/pic.png"
+        z = _zip({"Trip/Trip.json": json.dumps(n).encode(), "Trip/media/pic.png": _png()})
+        r = import_bundle(service, "Trip.zip", z)
+        [note] = r.notes
+        assert r.images == 1 and r.skipped == []
+        media = next(c for c in note.chapters if c.type == "media")
+        [stored] = service.repo.list_media(note.name)
+        assert media.content == f"/api/notes/{note.id}/media/{stored}"
+
     @pytest.mark.parametrize(
         "bad", ["../notes.json", "/abs/notes.json", "a\\b.json", "c:/x.json", "media/../../x.png"]
     )
