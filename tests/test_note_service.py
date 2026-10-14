@@ -228,3 +228,16 @@ class TestTitleIsKeptAsTyped:
         b = service.create_note(NoteCreate(title="Untitled note"))
         assert (a.title, b.title) == ("Untitled note", "Untitled note")
         assert (a.name, b.name) == ("Untitled-note", "Untitled-note-2")
+
+
+class TestNameIsKeptOnUpdate:
+    def test_a_suffixed_note_keeps_its_name_on_a_folder_only_update(self, service, data_dir):
+        # Pins babf60a's `name != keep` guard in ensure_unique_name. "X-2" exists
+        # because "X" did; its title still derives "X", which is taken, so without
+        # the guard the search skips its own folder and renames it to "X-3".
+        service.create_note(NoteCreate(title="X"))
+        second = service.create_note(NoteCreate(title="X"))
+        assert second.name == "X-2"  # precondition
+        updated = service.update_note(second.id, NoteUpdate(folder="Course"))
+        assert updated.name == "X-2" and updated.folder == "Course"
+        assert sorted(p.name for p in data_dir.iterdir() if p.is_dir()) == ["X", "X-2"]
