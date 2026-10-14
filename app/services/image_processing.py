@@ -2,7 +2,9 @@
 
 Every upload is decided by its CONTENT, never by its filename:
 
-- Pillow must open it. Anything it cannot decode is refused (UnsupportedImage).
+- Pillow must open it as one of ALLOWED_FORMATS, with at most MAX_PIXELS
+  pixels (read from the header, before any decoding). Anything else, and
+  anything that fails to decode later, is refused (UnsupportedImage).
 - GIF (Pillow says so) is kept byte-for-byte to preserve animation; a GIF is
   a binary format with no script surface.
 - Everything else Pillow decodes is re-encoded to WebP, resized to a maximum
@@ -30,6 +32,14 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE_DIMENSION = 2048
 # WebP quality (0-100)
 WEBP_QUALITY = 82
+# Formats Pillow may open. Without this list Image.open tries every plugin it
+# has, EPS among them, which hands the file to Ghostscript.
+ALLOWED_FORMATS = ("PNG", "JPEG", "WEBP", "GIF")
+# The byte caps do not bound pixels: a 20 KB PNG can declare 13000x13000 and
+# cost a gigabyte to decode. Checked on the header's size, before decoding.
+MAX_PIXELS = 50_000_000
+# Everything Pillow raises for a file it cannot finish reading.
+_DECODE_ERRORS = (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError)
 # What a stored media file may be, and how it is served
 STORED_MEDIA_TYPES = {".webp": "image/webp", ".gif": "image/gif"}
 
@@ -80,19 +90,33 @@ def process_uploaded_image(filename: str, content: bytes) -> tuple[str, bytes, I
     ):
         raise UnsupportedImage("SVG is not accepted; upload a raster image (PNG, JPEG, WebP, GIF)")
     try:
-        with Image.open(io.BytesIO(content)) as probe:
+        with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as probe:
             fmt = probe.format
+            width, height = probe.size
+            if width * height > MAX_PIXELS:
+                raise UnsupportedImage(
+                    f"Image is too large ({width}x{height}; at most {MAX_PIXELS:,} pixels)"
+                )
             probe.verify()  # structural check on the whole file before decoding pixels
-    except (UnidentifiedImageError, OSError, ValueError) as e:
+    except UnsupportedImage:
+        raise  # a ValueError, so it must pass before the decode-error clause below
+    except UnidentifiedImageError as e:
+        raise UnsupportedImage("Not a readable image (PNG, JPEG, WebP or GIF)") from e
+    except _DECODE_ERRORS as e:
         raise UnsupportedImage("Not a readable image") from e
-    if fmt == "GIF":
-        return _process_gif(filename, content)
-    return _process_raster(filename, content)
+    # verify() does not decode pixels, so a truncated JPEG passes it and fails
+    # here; that is a refused upload, not a server error.
+    try:
+        if fmt == "GIF":
+            return _process_gif(filename, content)
+        return _process_raster(filename, content)
+    except _DECODE_ERRORS as e:
+        raise UnsupportedImage("Not a readable image") from e
 
 
 def _process_gif(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
     """GIF is kept as received (verified above) so animation survives."""
-    with Image.open(io.BytesIO(content)) as img:
+    with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as img:
         width, height = img.size
         animated = getattr(img, "n_frames", 1) > 1
     new_name = _generate_unique_name(filename, ".gif")
@@ -111,7 +135,7 @@ def _process_gif(filename: str, content: bytes) -> tuple[str, bytes, ImageMetada
 def _process_raster(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
     """Convert raster image to WebP with resizing."""
 
-    with Image.open(io.BytesIO(content)) as img:
+    with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as img:
         # Preserve transparency (convert to RGBA if palette with transparency)
         if img.mode == "P" and "transparency" in img.info:
             img = img.convert("RGBA")

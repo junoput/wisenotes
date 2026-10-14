@@ -83,3 +83,50 @@ def test_stray_file_on_disk_is_never_rendered(client, service):
     assert served.status_code == 200
     assert served.headers["content-type"] == "application/octet-stream"
     assert served.headers["content-disposition"].startswith("attachment")
+
+
+@pytest.mark.parametrize("fmt", ["PNG", "JPEG", "WEBP"])
+def test_allowed_formats_still_pass(fmt):
+    _, _, meta = process_uploaded_image(f"x.{fmt.lower()}", _img(fmt))
+    assert meta.mime_type == "image/webp"
+
+
+@pytest.mark.parametrize("fmt", ["BMP", "TIFF", "PPM", "ICO"])
+def test_formats_outside_the_allowlist_are_refused(fmt):
+    # Pillow opens all of these; only PNG, JPEG, WebP and GIF may reach a decoder.
+    with pytest.raises(UnsupportedImage):
+        process_uploaded_image("x.png", _img(fmt))
+
+
+def test_eps_never_reaches_a_decoder():
+    eps = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n"
+    with pytest.raises(UnsupportedImage):
+        process_uploaded_image("x.png", eps)
+
+
+def test_pixel_cap_is_read_from_the_header(monkeypatch):
+    monkeypatch.setattr("app.services.image_processing.MAX_PIXELS", 100 * 100)
+    process_uploaded_image("ok.png", _img("PNG", size=(100, 100)))  # at the cap: accepted
+    for fmt in ("PNG", "GIF"):
+        with pytest.raises(UnsupportedImage, match="too large"):
+            process_uploaded_image("big", _img(fmt, size=(101, 100)))
+
+
+def test_default_pixel_cap_refuses_a_small_file_declaring_a_huge_image():
+    # The reviewer's bomb: tiny on disk, 13000x13000 declared. Refused before decoding.
+    big = _img("PNG", mode="1", size=(13000, 13000))
+    assert len(big) < 100_000
+    with pytest.raises(UnsupportedImage, match="too large"):
+        process_uploaded_image("bomb.png", big)
+
+
+def test_truncated_jpeg_is_refused_not_a_server_error():
+    # Cut inside the scan data: verify() passes (it does not decode a JPEG's
+    # pixels) and the decode raises OSError. A cut in the headers fails verify()
+    # instead and would not exercise the decode path.
+    jpeg = _img("JPEG", size=(64, 64))
+    truncated = jpeg[:-10]
+    with Image.open(io.BytesIO(truncated)) as probe:
+        probe.verify()  # precondition: this file reaches the decoder
+    with pytest.raises(UnsupportedImage):
+        process_uploaded_image("cut.jpg", truncated)
