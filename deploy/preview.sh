@@ -22,7 +22,9 @@ case "${1:-}" in
   *) echo "preview: unknown argument '$1'" >&2; exit 2 ;;
 esac
 
-serving_sha() { podman inspect -f '{{index .Config.Labels "wisenotes.sha"}}' "$NAME" 2>/dev/null || true; }
+# Only a RUNNING container serves. A stopped one (after a reboot) still has its
+# label, and counting it made a pass report "already serving" with nothing up.
+serving_sha() { podman inspect -f '{{if .State.Running}}{{index .Config.Labels "wisenotes.sha"}}{{end}}' "$NAME" 2>/dev/null || true; }
 last_tried_file="$here/.preview-last-tried"   # gitignored; a tip that failed smoke is not retried every pass
 
 pass() {

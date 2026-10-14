@@ -15,14 +15,19 @@
 #   1. git fetch; resolve the ref to a sha (this checkout is NOT moved: the
 #      script must survive deploying an old ref that predates it)
 #   2. git archive <sha> into a temp dir; podman build -> image wisenotes:<sha>
-#   3. retag: current -> previous, <sha> -> current
-#   4. replace the container: stop+rm the old one, run the new one
-#   5. smoke: /health must answer 200 AND GET / must answer 200 within 60s
+#   3. replace the container: stop+rm the old one, run wisenotes:<sha>
+#   4. smoke: /health must answer 200 AND GET / must answer 200 within 60s
 #      (GET / is the check that would have caught the "every page 500s"
 #      release; /health alone was green through it)
-#   6. on smoke failure: remove the new container, retag previous -> current,
-#      start previous again, exit 1. If there is no previous, nothing serves
-#      and the exit says so.
+#   5. only after the smoke passes, retag: current -> previous, <sha> -> current.
+#      So `current` only ever names an image that passed the smoke check.
+#   6. if the run or the smoke fails: remove the new container and start
+#      `current` again (untouched, so still the last good image), exit 1. If
+#      there is no current image, nothing serves and the exit says so.
+#
+# Boot: a wisenotes-only user unit, <NAME>-container.service, runs
+# `podman start <NAME>` at boot. It never enables podman-restart.service,
+# which would bring back every other restart=always container on the host.
 #
 # Data: the host directory $WISENOTES_DATA (default ~/wisenotes) is bind-mounted
 # at /app/data. It is never inside the checkout and never inside the image, so
@@ -91,15 +96,43 @@ stop_container() {
   if have_container "$NAME"; then run podman rm -f "$NAME" >/dev/null; fi
 }
 
+boot_unit() { # the unit text: start this one container at boot, nothing else
+  cat <<UNIT
+# Written by wisenotes deploy/deploy.sh. Starts only the $NAME container at boot.
+[Unit]
+Description=wisenotes container $NAME
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$(command -v podman) start $NAME
+
+[Install]
+WantedBy=default.target
+UNIT
+}
+
 ensure_boot_persistence() {
-  # rootless containers restart on boot only through the user's podman-restart unit
+  # Rootless containers do not come back after a reboot by themselves. The
+  # box-wide answer, podman-restart.service, starts EVERY restart=always
+  # container of this user, so it is not ours to enable (operator, 2026-10-14).
   # is-system-running exits non-zero for "degraded" (a failed unit somewhere), which is
   # still a running user manager; only offline/unknown/missing mean no systemd
-  local state; state=$(systemctl --user is-system-running 2>/dev/null || true)
+  local state unit dir
+  state=$(systemctl --user is-system-running 2>/dev/null || true)
   if [ "$state" = running ] || [ "$state" = degraded ] || [ "$state" = starting ]; then
-    if ! systemctl --user is-enabled podman-restart >/dev/null 2>&1; then
-      say "enabling podman-restart.service (user) so the container returns after a reboot"
-      run systemctl --user enable --now podman-restart.service || say "could not enable podman-restart; run it by hand"
+    unit="$NAME-container.service"
+    dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    if [ "$(cat "$dir/$unit" 2>/dev/null)" != "$(boot_unit)" ]; then
+      say "writing $dir/$unit so $NAME returns after a reboot"
+      run mkdir -p "$dir"
+      if [ "$DRY" = 1 ]; then printf '  + write %s\n' "$dir/$unit"; else boot_unit >"$dir/$unit"; fi
+      run systemctl --user daemon-reload || true
+    fi
+    if ! systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
+      run systemctl --user enable "$unit" || say "could not enable $unit; run: systemctl --user enable $unit"
     fi
   else
     say "no user systemd here: the container will not return after a reboot on this host"
@@ -123,9 +156,13 @@ case "$MODE" in
     have_image "$NAME:current" || { say "no $NAME:current image; run a deploy first"; exit 1; }
     [ -d "$DATA" ] || { say "creating data dir $DATA"; run mkdir -p "$DATA"; }
     say "starting $NAME from the current image"
-    stop_container; start_container "$NAME:current"; ensure_boot_persistence
-    smoke || { say "current image failed smoke; container left running for inspection"; exit 1; }
-    exit 0 ;;
+    stop_container
+    if start_container "$NAME:current" && smoke; then ensure_boot_persistence; exit 0; fi
+    # Never leave serving an image that fails the smoke check.
+    say "current image failed to start or failed smoke: NOTHING IS SERVING; last log lines:"
+    podman logs --tail 20 "$NAME" 2>&1 | sed 's/^/    /' || true
+    stop_container
+    exit 1 ;;
   rollback)
     have_image "$NAME:previous" || { say "no $NAME:previous image; nothing to roll back to"; exit 1; }
     say "rolling back: previous -> current"
@@ -149,29 +186,37 @@ else
   podman build -q -t "$NAME:$sha" --label "wisenotes.sha=$sha" -f "$ctx/Dockerfile" "$ctx" >/dev/null
 fi
 
-if have_image "$NAME:current"; then run podman tag "$NAME:current" "$NAME:previous"; fi
-run podman tag "$NAME:$sha" "$NAME:current"
-
 say "replacing container $NAME (was: $(image_of_running || echo none))"
 stop_container
-start_container "$NAME:current"
-ensure_boot_persistence
-if [ "$DRY" = 1 ]; then say "dry run ends here (smoke, rollback not simulated)"; exit 0; fi
+if [ "$DRY" = 1 ]; then
+  start_container "$NAME:$sha"
+  printf '  + (after smoke ok) podman tag %s:current %s:previous; podman tag %s:%s %s:current\n' \
+    "$NAME" "$NAME" "$NAME" "$sha" "$NAME"
+  say "dry run ends here (smoke, rollback not simulated)"; exit 0
+fi
 
-if smoke; then
+# `current` is retagged only after the new image has started AND passed the smoke
+# check, so on any failure below it still names the last good image.
+if start_container "$NAME:$sha" && smoke; then
+  if have_image "$NAME:current"; then podman tag "$NAME:current" "$NAME:previous"; fi
+  podman tag "$NAME:$sha" "$NAME:current"
+  ensure_boot_persistence
   say "deployed $NAME from $sha on http://$BIND:$PORT/ (data: $DATA)"
   exit 0
 fi
 
-say "new image failed smoke; last log lines:"
+say "$sha failed to start or failed smoke; last log lines:"
 podman logs --tail 20 "$NAME" 2>&1 | sed 's/^/    /' || true
 stop_container
-if have_image "$NAME:previous"; then
-  say "rolling back to previous image"
-  run podman tag "$NAME:previous" "$NAME:current"
-  start_container "$NAME:current"
-  if smoke; then say "ROLLED BACK: previous image is serving; $sha was NOT deployed"; else say "previous image also fails smoke; NOTHING IS SERVING"; fi
+if have_image "$NAME:current"; then
+  say "restarting the current (last good) image"
+  if start_container "$NAME:current" && smoke; then
+    say "ROLLED BACK: the current image is serving; $sha was NOT deployed"
+  else
+    stop_container
+    say "the current image also fails: NOTHING IS SERVING"
+  fi
 else
-  say "no previous image: NOTHING IS SERVING (first deploy failed)"
+  say "no current image: NOTHING IS SERVING (first deploy failed)"
 fi
 exit 1
