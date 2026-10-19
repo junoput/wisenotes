@@ -24,11 +24,11 @@ picked up again unchanged if that changes.
 | checkout | a clone the script fetches into; nobody edits it by hand |
 | branch | `develop` (`WISENOTES_BRANCH`) |
 | data | `/home/claude/wisenotes` (operator's decision, 2026-09-23): outside every checkout and lane, mounted at `/app/data`; only the container writes there |
-| bind / URL | `127.0.0.1:$PORT`, the port `demos status` shows (20001 today), published on the tailnet by `tailscale serve --bg --http=8094 localhost:<port>` as `http://devbox.tail499b22.ts.net:8094/` |
+| bind / URL | `127.0.0.1:$PORT`, the port `demos status` shows (20250, pinned in the port registry so it is never reassigned), published on the tailnet by `tailscale serve --bg --http=8094 localhost:<port>` as `http://devbox.tail499b22.ts.net:8094/` |
 | loop | `demos` (dev-agent-tools) runs `deploy/preview.sh --loop 120` as the user unit `demo@wisenotes-preview`, enabled on boot; `journalctl --user -u demo@wisenotes-preview` shows each pass. `demos` exports the port as `$PORT`, which the scripts honour, so `WISENOTES_PORT` is left unset in `deploy/.env`. After a reboot the first pass starts the last good image (`deploy.sh --start`) even when `develop` is still refused |
-| boot | `wisenotes-container.service` (user unit, written and enabled by `deploy.sh`) runs `podman start wisenotes` and nothing else. `deploy.sh` never enables `podman-restart.service`: that unit starts every `restart=always` container of the user, and making other projects' containers persistent is not wisenotes' call (operator, 2026-10-14). On devbox `podman-restart` was already enabled when this changed and was left as it was |
+| restarts and boot | `wisenotes-container.service` (user unit, written and enabled by `deploy.sh`) is the one thing that starts the container: it runs `podman start --attach wisenotes`, restarts it if it dies (`Restart=on-failure`), and starts it at boot. The container has no podman `--restart` policy (20261019-054). Because the unit starts it, the container's conmon and port forwarder live in that unit's cgroup, so restarting `demo@wisenotes-preview` no longer takes the container's networking with it (20261019-014). `deploy.sh` never enables `podman-restart.service`: that unit starts every `restart=always` container of the user, and making other projects' containers persistent is not wisenotes' call (operator, 2026-10-14). On devbox it was already enabled and is left as it is: with no restart policy, wisenotes' container is not one it starts |
 
-No compose file: devbox has no compose provider; plain `podman run`. The
+No compose file: devbox has no compose provider; plain `podman create` and the unit. The
 tailnet has no TLS certs, so the publish is `tailscale serve --bg --http=8094
 localhost:<port>`, and `demo.sh up` (HTTPS only) hangs; take it down with
 `tailscale serve --http=8094 off`.
