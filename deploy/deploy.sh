@@ -94,8 +94,8 @@ start_container() { # $1 image
 
 port_move_warning() { # say so when the container about to be replaced published another host port
   local old
-  old=$(podman port "$NAME" 8000/tcp 2>/dev/null || true)
-  old=${old##*:}
+  # from the container's config, not `podman port`, which says nothing once it stopped
+  old=$(podman inspect -f '{{range (index .HostConfig.PortBindings "8000/tcp")}}{{.HostPort}}{{end}}' "$NAME" 2>/dev/null || true)
   if [ -n "$old" ] && [ "$old" != "$PORT" ]; then
     say "PORT MOVES: $NAME served on $old and will serve on $PORT. Anything proxying to $old (a tailscale serve slot) must be repointed. The port comes from WISENOTES_PORT, else \$PORT from the supervisor."
   fi

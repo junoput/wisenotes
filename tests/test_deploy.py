@@ -27,7 +27,7 @@ case "$1" in
   tag) cp "$S/images/$(img "$2")" "$S/images/$(img "$3")" ;;
   run) image=${!#}; id=$(cat "$S/images/$(img "$image")") || exit 125
        grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "run failed" >&2; exit 126; }
-       printf '%s running\n' "$id" >"$S/container"
+       printf '%s running\n' "$id" >"$S/container"; rm -f "$S/deaf"
        while [ $# -gt 0 ]; do [ "$1" = -p ] && echo "$2" >"$S/port"; shift; done ;;
   port) [ -f "$S/container" ] && read -r p <"$S/port" && echo "${p%:*}" ;;  # real: "127.0.0.1:20004"
   rm) rm -f "$S/container" ;;
@@ -35,6 +35,7 @@ case "$1" in
            sha=${id#id-wisenotes:}
            case "$*" in *State.Running*) [ "$st" = running ] && echo "$sha" ;;
                         *wisenotes.sha*) echo "$sha" ;;
+                        *PortBindings*) read -r p <"$S/port"; p=${p%:*}; echo "${p##*:}" ;;
                         *) echo "$id" ;; esac ;;
   logs) echo "stub log" ;;
   start) [ -f "$S/container" ] && read -r id _ <"$S/container" && printf '%s running\n' "$id" >"$S/container" ;;
@@ -43,6 +44,7 @@ esac
     "curl": r"""#!/usr/bin/env bash
 S=$STUB_STATE
 [ -f "$S/container" ] || { printf 000; exit 7; }
+[ -f "$S/deaf" ] && { printf 000; exit 7; }  # running, but nothing forwards its port
 read -r id st <"$S/container"
 if [ "$st" != running ] || grep -qx "$id" "$S/bad" 2>/dev/null; then printf 500; else printf 200; fi
 """,
@@ -364,3 +366,26 @@ def test_harness_control_gitignored_files_do_not_count_as_edits(box, loop):
     assert "has edits" not in r.stdout
     assert serving(box) == f"id-wisenotes:{b}"
     assert (loop["checkout"] / "deploy/.env").exists()
+
+
+def test_preview_restarts_a_running_container_that_does_not_answer(box):
+    # 2026-10-19: the unit restart killed pasta; the container kept State.Running.
+    deploy_good(box, "aaa")
+    (box / "state/deaf").touch()
+    r = run(box, script="preview.sh", sha="aaa")
+    assert r.returncode == 0, r.stderr
+    assert "already serving" not in r.stdout.splitlines()[0]
+    assert "treating it as down" in r.stderr
+    assert "starting the current image" in r.stdout
+    assert not (box / "state/deaf").exists() and serving(box) == "id-wisenotes:aaa"
+
+
+def test_a_start_on_another_port_says_the_port_moved_even_when_stopped(box):
+    # The real move happened on this path: the old container had stopped, so
+    # `podman port` had nothing to say and the move went unannounced.
+    deploy_good(box, "aaa", PORT="20004")
+    c = box / "state/container"
+    c.write_text(c.read_text().replace("running", "stopped"))
+    r = run(box, script="preview.sh", sha="aaa", PORT="20250")
+    assert "PORT MOVES: wisenotes served on 20004 and will serve on 20250" in r.stdout
+    assert (box / "state/port").read_text().strip() == "127.0.0.1:20250:8000"

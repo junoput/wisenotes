@@ -30,9 +30,23 @@ case "${1:-}" in
   *) echo "preview: unknown argument '$1'" >&2; exit 2 ;;
 esac
 
-# Only a RUNNING container serves. A stopped one (after a reboot) still has its
-# label, and counting it made a pass report "already serving" with nothing up.
-serving_sha() { podman inspect -f '{{if .State.Running}}{{index .Config.Labels "wisenotes.sha"}}{{end}}' "$NAME" 2>/dev/null || true; }
+# Only a RUNNING container that ANSWERS serves. A stopped one (after a reboot)
+# still has its label, and counting it made a pass report "already serving"
+# with nothing up. A running one can be deaf too: on 2026-10-19 a restart of
+# the preview unit killed the container's port forwarder (pasta) while podman
+# restarted the container itself, and every pass said "already serving".
+serving_sha() {
+  local sha addr code
+  sha=$(podman inspect -f '{{if .State.Running}}{{index .Config.Labels "wisenotes.sha"}}{{end}}' "$NAME" 2>/dev/null || true)
+  [ -n "$sha" ] || return 0
+  addr=$(podman port "$NAME" 8000/tcp 2>/dev/null || true)
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$addr/health" || true)
+  if [ "$code" = 200 ]; then
+    echo "$sha"
+  else
+    echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}; treating it as down" >&2
+  fi
+}
 last_tried_file="$here/.preview-last-tried"   # gitignored; a tip that failed smoke is not retried every pass
 
 # Move the checkout to $1, so the deploy below is the tip's own deploy.sh.
