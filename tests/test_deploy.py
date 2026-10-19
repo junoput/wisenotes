@@ -27,7 +27,9 @@ case "$1" in
   tag) cp "$S/images/$(img "$2")" "$S/images/$(img "$3")" ;;
   run) image=${!#}; id=$(cat "$S/images/$(img "$image")") || exit 125
        grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "run failed" >&2; exit 126; }
-       printf '%s running\n' "$id" >"$S/container" ;;
+       printf '%s running\n' "$id" >"$S/container"
+       while [ $# -gt 0 ]; do [ "$1" = -p ] && echo "$2" >"$S/port"; shift; done ;;
+  port) [ -f "$S/container" ] && read -r p <"$S/port" && echo "${p%:*}" ;;  # real: "127.0.0.1:20004"
   rm) rm -f "$S/container" ;;
   inspect) [ -f "$S/container" ] || exit 125; read -r id st <"$S/container"
            sha=${id#id-wisenotes:}
@@ -109,8 +111,8 @@ def mark(box, kind, image_id):
         f.write(image_id + "\n")
 
 
-def deploy_good(box, sha):
-    r = run(box, sha=sha)
+def deploy_good(box, sha, **env):
+    r = run(box, sha=sha, **env)
     assert r.returncode == 0, r.stdout + r.stderr
     return r
 
@@ -227,3 +229,138 @@ def test_the_docs_record_the_csrf_acceptance_and_what_ends_it():
     section = readme.split("## Accepted risks", 1)[1].split("\n## ", 1)[0]
     assert "No CSRF protection" in section and "tailnet" in section
     assert "acceptance ends if the app is exposed beyond the" in " ".join(section.split())
+
+
+# ---------------------------------------------------------------- port moves are said out loud
+
+
+def test_a_deploy_on_another_port_says_the_port_moved(box):
+    deploy_good(box, "aaa", PORT="20004")
+    r = deploy_good(box, "bbb", PORT="20250")
+    assert "PORT MOVES: wisenotes served on 20004 and will serve on 20250" in r.stdout
+    assert (box / "state/port").read_text().strip() == "127.0.0.1:20250:8000"
+
+
+def test_harness_control_a_deploy_on_the_same_port_is_quiet(box):
+    deploy_good(box, "aaa", PORT="20250")
+    r = deploy_good(box, "bbb", PORT="20250")
+    assert "PORT MOVES" not in r.stdout
+    assert (box / "state/port").read_text().strip() == "127.0.0.1:20250:8000"
+
+
+# ---------------------------------------------------------------- 20261019-002: the loop runs the tip's scripts
+#
+# These use real git: an origin repo, and a loop checkout cloned from it, as the
+# preview unit has. podman, curl, systemctl, tar and sleep stay stubbed.
+
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@example.invalid",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@example.invalid",
+}
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args],
+        env={**os.environ, **GIT_ENV, "GIT_CONFIG_GLOBAL": "/dev/null"},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def commit(work, message, edit=None):
+    """Commit the current deploy/ scripts, after inserting a line into one of them."""
+    if edit:
+        name, line = edit
+        f = work / "deploy" / name
+        lines = f.read_text().splitlines(keepends=True)
+        at = next(i for i, x in enumerate(lines) if x.startswith("set -euo pipefail")) + 1
+        f.write_text("".join([*lines[:at], line + "\n", *lines[at:]]))
+    git(work, "add", "-A")
+    git(work, "commit", "-q", "--allow-empty", "-m", message)
+    git(work, "push", "-q", "origin", "HEAD:develop")
+    return git(work, "rev-parse", "--short", "HEAD")
+
+
+@pytest.fixture()
+def loop(box):
+    """origin (bare) <- author's clone; the loop checkout is a second clone at commit A."""
+    (box / "bin/git").unlink()  # real git from here on
+    origin, work, checkout = box / "origin.git", box / "author", box / "loop"
+    git(box, "init", "-q", "--bare", "-b", "develop", str(origin))
+    git(box, "clone", "-q", str(origin), str(work))
+    git(work, "checkout", "-q", "-b", "develop")
+    (work / "deploy").mkdir()
+    for script in ("deploy.sh", "preview.sh"):
+        shutil.copy(REPO / "deploy" / script, work / "deploy" / script)
+    (work / ".gitignore").write_text(".env\n.preview-last-tried\n")
+    (work / "Dockerfile").write_text("FROM scratch\n")
+    a = commit(work, "A")
+    git(box, "clone", "-q", "-b", "develop", str(origin), str(checkout))
+    return {"origin": origin, "work": work, "checkout": checkout, "a": a}
+
+
+def preview(box, checkout, *args):
+    environ = {
+        "PATH": f"{box / 'bin'}:/usr/bin:/bin",
+        "HOME": str(box / "home"),
+        "XDG_CONFIG_HOME": str(box / "home/.config"),
+        "STUB_STATE": str(box / "state"),
+        "WISENOTES_DATA": str(box / "data"),
+        "WISENOTES_SMOKE_SECONDS": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        **GIT_ENV,
+    }
+    return subprocess.run(
+        ["bash", str(checkout / "deploy/preview.sh"), *args],
+        env=environ,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_preview_deploys_with_the_deploy_script_of_the_tip(box, loop):
+    # The bug: the loop checkout stayed at the commit it was cloned at, so every
+    # deploy ran that commit's deploy.sh, whatever develop's said.
+    b = commit(loop["work"], "B", edit=("deploy.sh", 'echo "deploy.sh of commit B"'))
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "deploy.sh of commit B" in r.stdout
+    assert git(loop["checkout"], "rev-parse", "--short", "HEAD") == b
+    assert serving(box) == f"id-wisenotes:{b}"
+
+
+def test_preview_runs_its_own_new_version_when_preview_sh_changed(box, loop):
+    b = commit(loop["work"], "B", edit=("preview.sh", 'echo "preview.sh of commit B"'))
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "preview.sh changed at" in r.stdout
+    assert r.stdout.count("preview.sh of commit B") == 1  # restarted once, not in a loop
+    assert serving(box) == f"id-wisenotes:{b}"
+
+
+def test_preview_never_moves_or_deploys_from_an_edited_checkout(box, loop):
+    commit(loop["work"], "B", edit=("deploy.sh", 'echo "deploy.sh of commit B"'))
+    script = loop["checkout"] / "deploy/deploy.sh"
+    script.write_text(script.read_text() + "# a hand edit\n")
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "has edits to tracked files" in r.stdout
+    assert "deploy.sh of commit B" not in r.stdout
+    assert git(loop["checkout"], "rev-parse", "--short", "HEAD") == loop["a"]
+    assert serving(box) is None
+
+
+def test_harness_control_gitignored_files_do_not_count_as_edits(box, loop):
+    # deploy/.env and the last-tried marker live in the checkout and must not block it.
+    (loop["checkout"] / "deploy/.env").write_text("WISENOTES_SMOKE_SECONDS=1\n")
+    b = commit(loop["work"], "B")
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "has edits" not in r.stdout
+    assert serving(box) == f"id-wisenotes:{b}"
+    assert (loop["checkout"] / "deploy/.env").exists()
