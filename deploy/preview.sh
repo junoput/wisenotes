@@ -35,6 +35,9 @@ esac
 # with nothing up. A running one can be deaf too: on 2026-10-19 a restart of
 # the preview unit killed the container's port forwarder (pasta) while podman
 # restarted the container itself, and every pass said "already serving".
+# One slow answer is not deafness: treating it as down removes a working
+# container from the live notes, so only the second failed pass in a row does.
+# `serving_sha --judge` is the one call per pass that counts towards that.
 serving_sha() {
   local sha addr code
   sha=$(podman inspect -f '{{if .State.Running}}{{index .Config.Labels "wisenotes.sha"}}{{end}}' "$NAME" 2>/dev/null || true)
@@ -42,15 +45,27 @@ serving_sha() {
   addr=$(podman port "$NAME" 8000/tcp 2>/dev/null || true)
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$addr/health" || true)
   if [ "$code" = 200 ]; then
+    rm -f "$deaf_file"
     echo "$sha"
+  elif [ "${1:-}" != --judge ]; then
+    echo "$sha"
+  elif [ -f "$deaf_file" ]; then
+    rm -f "$deaf_file"
+    echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}, the second pass in a row; treating it as down" >&2
   else
-    echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}; treating it as down" >&2
+    : >"$deaf_file"
+    echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}; checking again next pass before treating it as down" >&2
+    echo "$sha"
   fi
 }
 last_tried_file="$here/.preview-last-tried"   # gitignored; a tip that failed smoke is not retried every pass
+deaf_file="$here/.preview-deaf"               # gitignored; set by one failed /health pass
 
 # Move the checkout to $1, so the deploy below is the tip's own deploy.sh.
-# Returns 1 (deploy nothing) if tracked files were edited here.
+# Returns 1 (deploy nothing) if tracked files were edited here, or if the
+# checkout did not end up at $1: deploying then would run the old deploy.sh
+# under a log line naming the tip, and re-executing would run the old
+# preview.sh again, with no sleep, for as long as the checkout keeps failing.
 checkout_tip() {
   local tip=$1 before
   if ! git -C "$repo" diff --quiet HEAD --; then
@@ -59,7 +74,14 @@ checkout_tip() {
     return 1
   fi
   before=$(git -C "$repo" rev-parse HEAD)
-  git -C "$repo" checkout -q --detach "$tip"
+  if ! git -C "$repo" checkout -q --detach "$tip"; then
+    echo "preview: could not move $repo to $tip; not deploying"
+    return 1
+  fi
+  if [ "$(git -C "$repo" rev-parse HEAD)" != "$(git -C "$repo" rev-parse "$tip^{commit}")" ]; then
+    echo "preview: $repo is at $(git -C "$repo" rev-parse --short HEAD), not $tip; not deploying"
+    return 1
+  fi
   if [ "$(git -C "$repo" rev-parse "$before:deploy/preview.sh")" != "$(git -C "$repo" rev-parse "$tip:deploy/preview.sh")" ]; then
     # bash keeps reading the old file; run the tip's preview.sh instead
     echo "preview: preview.sh changed at $tip; restarting it"
@@ -71,7 +93,7 @@ pass() {
   local tip serving tried
   git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping $(serving_sha)"; return 0; }
   tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
-  serving=$(serving_sha)
+  serving=$(serving_sha --judge)
   tried=$(cat "$last_tried_file" 2>/dev/null || true)
   if [ -z "$serving" ] && podman image exists "$NAME:current"; then
     # nothing running (a reboot, or a removed container) but a good image exists: serve it

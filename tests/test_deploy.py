@@ -299,14 +299,14 @@ def loop(box):
     (work / "deploy").mkdir()
     for script in ("deploy.sh", "preview.sh"):
         shutil.copy(REPO / "deploy" / script, work / "deploy" / script)
-    (work / ".gitignore").write_text(".env\n.preview-last-tried\n")
+    (work / ".gitignore").write_text(".env\n.preview-last-tried\n.preview-deaf\n")
     (work / "Dockerfile").write_text("FROM scratch\n")
     a = commit(work, "A")
     git(box, "clone", "-q", "-b", "develop", str(origin), str(checkout))
     return {"origin": origin, "work": work, "checkout": checkout, "a": a}
 
 
-def preview(box, checkout, *args):
+def preview(box, checkout, *args, timeout=60):
     environ = {
         "PATH": f"{box / 'bin'}:/usr/bin:/bin",
         "HOME": str(box / "home"),
@@ -323,6 +323,7 @@ def preview(box, checkout, *args):
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
 
 
@@ -369,14 +370,98 @@ def test_harness_control_gitignored_files_do_not_count_as_edits(box, loop):
     assert (loop["checkout"] / "deploy/.env").exists()
 
 
-def test_preview_restarts_a_running_container_that_does_not_answer(box):
-    # 2026-10-19: the unit restart killed pasta; the container kept State.Running.
+def block_checkout(loop, tip_edit):
+    """A tip that adds notes.txt, over an untracked notes.txt in the loop checkout.
+
+    git refuses that checkout ("untracked working tree files would be
+    overwritten"), and the tracked-edits check cannot see an untracked file.
+    """
+    (loop["checkout"] / "notes.txt").write_text("the loop's own\n")
+    (loop["work"] / "notes.txt").write_text("the tip's\n")
+    return commit(loop["work"], "B", edit=tip_edit)
+
+
+def test_preview_does_not_restart_itself_when_the_checkout_fails(box, loop):
+    # 20261019-068 F1: the failed checkout left the old preview.sh, whose blob
+    # still differed from the tip's, so it re-executed itself with no sleep.
+    block_checkout(loop, ("preview.sh", 'echo "preview.sh of commit B"'))
+    r = preview(box, loop["checkout"], timeout=20)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "could not move" in r.stdout
+    assert "restarting it" not in r.stdout
+    assert git(loop["checkout"], "rev-parse", "--short", "HEAD") == loop["a"]
+    assert serving(box) is None
+
+
+def test_preview_does_not_deploy_with_old_scripts_when_the_checkout_fails(box, loop):
+    # F1, the quiet half: preview.sh unchanged, so the old deploy.sh ran the deploy
+    # under a log line naming the tip's scripts.
+    block_checkout(loop, ("deploy.sh", 'echo "deploy.sh of commit B"'))
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "could not move" in r.stdout
+    assert serving(box) is None
+
+
+def test_preview_does_not_deploy_when_head_is_not_the_tip(box, loop):
+    # The second guard, on its own: a checkout that claims success and moves nothing.
+    real = shutil.which("git")
+    shim = box / "bin/git"
+    shim.write_text(
+        f'#!/usr/bin/env bash\ncase " $* " in *" checkout "*) exit 0 ;; esac\nexec {real} "$@"\n'
+    )
+    shim.chmod(0o755)
+    b = commit(loop["work"], "B", edit=("deploy.sh", 'echo "deploy.sh of commit B"'))
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"is at {loop['a']}, not {b}; not deploying" in r.stdout
+    assert serving(box) is None
+
+
+def test_harness_control_a_clean_checkout_still_moves_with_an_untracked_file(box, loop):
+    # An untracked file the tip does not add does not block the move.
+    (loop["checkout"] / "notes.txt").write_text("the loop's own\n")
+    b = commit(loop["work"], "B")
+    r = preview(box, loop["checkout"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert git(loop["checkout"], "rev-parse", "--short", "HEAD") == b
+    assert serving(box) == f"id-wisenotes:{b}"
+
+
+def test_one_failed_health_check_does_not_restart_the_container(box):
+    # 20261019-068 F2: one slow answer made the loop remove a working container.
     deploy_good(box, "aaa")
+    before = serving(box)
     (box / "state/deaf").touch()
     r = run(box, script="preview.sh", sha="aaa")
     assert r.returncode == 0, r.stderr
+    assert "checking again next pass" in r.stderr
+    assert "already serving" in r.stdout
+    assert (box / "state/deaf").exists() and serving(box) == before
+
+
+def test_harness_control_a_healthy_pass_between_failures_resets_the_count(box):
+    deploy_good(box, "aaa")
+    (box / "state/deaf").touch()
+    run(box, script="preview.sh", sha="aaa")
+    (box / "state/deaf").unlink()
+    run(box, script="preview.sh", sha="aaa")
+    (box / "state/deaf").touch()
+    r = run(box, script="preview.sh", sha="aaa")
+    assert "checking again next pass" in r.stderr and "second pass in a row" not in r.stderr
+    assert (box / "state/deaf").exists()
+
+
+def test_preview_restarts_a_running_container_that_does_not_answer(box):
+    # 2026-10-19: the unit restart killed pasta; the container kept State.Running.
+    # Two failed passes in a row (F2) before it counts as down.
+    deploy_good(box, "aaa")
+    (box / "state/deaf").touch()
+    run(box, script="preview.sh", sha="aaa")
+    r = run(box, script="preview.sh", sha="aaa")
+    assert r.returncode == 0, r.stderr
     assert "already serving" not in r.stdout.splitlines()[0]
-    assert "treating it as down" in r.stderr
+    assert "the second pass in a row; treating it as down" in r.stderr
     assert "starting the current image" in r.stdout
     assert not (box / "state/deaf").exists() and serving(box) == "id-wisenotes:aaa"
 
