@@ -92,6 +92,15 @@ start_container() { # $1 image
     "$1" >/dev/null
 }
 
+port_move_warning() { # say so when the container about to be replaced published another host port
+  local old
+  # from the container's config, not `podman port`, which says nothing once it stopped
+  old=$(podman inspect -f '{{range (index .HostConfig.PortBindings "8000/tcp")}}{{.HostPort}}{{end}}' "$NAME" 2>/dev/null || true)
+  if [ -n "$old" ] && [ "$old" != "$PORT" ]; then
+    say "PORT MOVES: $NAME served on $old and will serve on $PORT. Anything proxying to $old (a tailscale serve slot) must be repointed. The port comes from WISENOTES_PORT, else \$PORT from the supervisor."
+  fi
+}
+
 stop_container() {
   if have_container "$NAME"; then run podman rm -f "$NAME" >/dev/null; fi
 }
@@ -156,6 +165,7 @@ case "$MODE" in
     have_image "$NAME:current" || { say "no $NAME:current image; run a deploy first"; exit 1; }
     [ -d "$DATA" ] || { say "creating data dir $DATA"; run mkdir -p "$DATA"; }
     say "starting $NAME from the current image"
+    port_move_warning
     stop_container
     if start_container "$NAME:current" && smoke; then ensure_boot_persistence; exit 0; fi
     # Never leave serving an image that fails the smoke check.
@@ -187,6 +197,7 @@ else
 fi
 
 say "replacing container $NAME (was: $(image_of_running || echo none))"
+port_move_warning
 stop_container
 if [ "$DRY" = 1 ]; then
   start_container "$NAME:$sha"
