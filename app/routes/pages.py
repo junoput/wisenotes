@@ -1,8 +1,16 @@
-import json
-from uuid import uuid4
+"""HTML routes.
+
+Every page works without JavaScript; htmx enhances it. Two conventions make that
+hold: a mutating POST answers a plain browser with a redirect to the page
+(Post/Redirect/Get) and an htmx request with the out-of-band fragment, and every
+element carrying an hx-* attribute is also a real <form action method> or
+<a href>.
+"""
+
+import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter
-import logging
 from fastapi import Depends
 from fastapi import Form
 from fastapi import HTTPException
@@ -10,251 +18,182 @@ from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
-from typing import Optional
+from starlette.concurrency import run_in_threadpool
 
 from app.blocks import get_all_blocks
-from app.blocks import get_block
-from app.editor.mixed_content import build_editor_json
-from app.editor.mixed_content import split_mixed_content
 from app.schemas import Chapter
+from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
+from app.services.bundle import BundleError
+from app.services.bundle import export_zip
+from app.services.bundle import import_bundle
+from app.services.image_processing import UnsupportedImage
+from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
-from app.web.dependencies import get_note_service
-from app.config import get_accessibility_bindings
+from app.services.notes import get_note_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 logger = logging.getLogger(__name__)
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# htmx appends the add-note and settings overlays to <body>, outside what the
+# out-of-band refresh replaces; this event tells app.js to remove them.
+CLOSE_OVERLAY = {"HX-Trigger": "close-note-settings"}
 
-def _template_context(request: Request, **kwargs) -> dict:
-    """Build template context with block types configuration."""
-    ctx = {"request": request, "block_types": get_all_blocks(), "get_block": get_block, **kwargs}
-    # Include accessibility keybindings for templates and client JS
-    try:
-        ctx["accessibility"] = get_accessibility_bindings()
-    except Exception:
-        ctx["accessibility"] = {}
+
+def _is_htmx(request: Request) -> bool:
+    return request.headers.get("hx-request", "").lower() == "true"
+
+
+def _ctx(request: Request, **kwargs) -> dict:
+    ctx = {
+        "request": request,
+        "block_types": get_all_blocks(),
+        "editing": None,
+        "settings": False,
+        "new_note": False,
+    }
+    ctx.update(kwargs)
     return ctx
 
 
-def _normalize_source_multi(value) -> Optional[str]:
-    """Normalize a semicolon-separated source string.
+def _page(request: Request, service: NoteService, note: Note | None, **extra) -> Response:
+    """Full page, or the out-of-band fragment for htmx."""
+    template = "partials/hx_refresh.html" if _is_htmx(request) else "index.html"
+    return templates.TemplateResponse(
+        request, template, _ctx(request, notes=service.list_notes(), active=note, **extra)
+    )
 
-    - Accepts None or string
-    - Splits on ';', trims whitespace
-    - Removes empty entries
-    - Joins with '; ' for consistent storage
-    - Returns None if nothing remains
-    """
-    if value is None:
-        return None
-    # If an array is provided from JSON editor, join it
-    if isinstance(value, list):
-        parts = [str(p).strip() for p in value]
-        parts = [p for p in parts if p]
-        return "; ".join(parts) if parts else None
-    if not isinstance(value, str):
-        return None
-    parts = [p.strip() for p in value.split(";")]
+
+def _after_change(
+    request: Request, service: NoteService, note: Note | None, headers: dict | None = None
+) -> Response:
+    """Answer a mutating POST: fragment for htmx, 303 to the page otherwise."""
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/hx_refresh.html",
+            _ctx(request, notes=service.list_notes(), active=note),
+            headers=headers,
+        )
+    return RedirectResponse(url=f"/notes/{note.id}" if note else "/", status_code=303)
+
+
+def _attachment(filename: str) -> str:
+    """RFC 6266: an ASCII fallback, and the real name as UTF-8 in filename*.
+
+    Headers are latin-1, so a raw non-ASCII name was a UnicodeEncodeError (500)."""
+    fallback = "".join(
+        c if c.isascii() and c.isprintable() and c not in '"\\' else "_" for c in filename
+    )
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
+def _note_or_404(service: NoteService, note_id: str) -> Note:
+    note = service.get_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return note
+
+
+def _chapter_or_404(note: Note, chapter_id: str) -> Chapter:
+    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return chapter
+
+
+def _normalize_source(value: str | None) -> str | None:
+    """'a; b ;; c' -> 'a; b; c'; empty -> None."""
+    parts = [p.strip() for p in (value or "").split(";")]
     parts = [p for p in parts if p]
-    if not parts:
-        return None
-    return "; ".join(parts)
+    return "; ".join(parts) if parts else None
+
+
+# ---------------------------------------------------------------- notes
 
 
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, service: NoteService = Depends(get_note_service)):
-    notes = service.list_notes()
-    # Render shell with no active note; main pane stays empty until user picks a note
-    return templates.TemplateResponse(
-        "index.html", _template_context(request, notes=notes, active=None)
-    )
+    return _page(request, service, None)
 
 
-@router.post("/notes", response_class=HTMLResponse)
-async def create_note(
+@router.get("/notes/new", response_class=HTMLResponse)
+async def new_note_chooser(request: Request, service: NoteService = Depends(get_note_service)):
+    """Add a note: empty, or from a .json / .zip file. Overlay for htmx, page otherwise."""
+    if _is_htmx(request):
+        return templates.TemplateResponse(request, "partials/note_new.html", _ctx(request))
+    return _page(request, service, None, new_note=True)
+
+
+@router.post("/notes/import")
+async def import_notes(
     request: Request,
-    title: str = Form(...),
+    file: UploadFile,
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.create_note(
-        NoteCreate(
-            title=title,
-            chapters=[Chapter(id=str(uuid4()), title="Chapter 1", content="", order=0, parent_id=None)],
-        )
+    """Create new notes from an export .json or a .zip (notes.json + media/). Never merges."""
+    content = await file.read()
+    try:
+        # Decoding images is CPU-bound; off the event loop so one import cannot stall every request.
+        result = await run_in_threadpool(import_bundle, service, file.filename or "", content)
+    except BundleError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not result.notes:
+        raise HTTPException(status_code=400, detail="The file contained no notes")
+    for line in result.skipped:
+        logger.info("import skipped %s", line)
+    return _after_change(request, service, result.notes[0], headers=CLOSE_OVERLAY)
+
+
+@router.get("/notes/{note_id}/export.zip")
+async def export_note_zip(note_id: str, service: NoteService = Depends(get_note_service)):
+    note = _note_or_404(service, note_id)
+    return Response(
+        export_zip(service, [note.id]),
+        media_type="application/zip",
+        headers={"Content-Disposition": _attachment(f"{note.name}.zip")},
     )
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
+
+
+@router.post("/notes")
+async def create_note(
+    request: Request,
+    title: str = Form("Untitled note"),
+    service: NoteService = Depends(get_note_service),
+):
+    note = service.create_note(NoteCreate(title=title))
+    note = service.add_chapter(note.id, title="Chapter 1") or note
+    return _after_change(request, service, note, headers=CLOSE_OVERLAY)
 
 
 @router.get("/notes/{note_id}", response_class=HTMLResponse)
 async def fetch_note(
-    note_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
+    note_id: str, request: Request, service: NoteService = Depends(get_note_service)
 ):
-    # Some clients/extensions can accidentally include a trailing ';' in copied URLs.
-    # Canonicalize and redirect so the browser address bar doesn't keep the malformed URL.
-    raw_note_id = note_id
-    note_id = note_id.strip().rstrip(";")
-    is_htmx = (request.headers.get("HX-Request") or "").lower() == "true"
-
-    if note_id != raw_note_id:
-        logger.info("Canonicalizing note_id from %r to %r", raw_note_id, note_id)
-        if is_htmx:
-            # Tell htmx to navigate to the canonical URL.
-            return HTMLResponse("", status_code=204, headers={"HX-Redirect": f"/notes/{note_id}"})
-        return RedirectResponse(url=f"/notes/{note_id}", status_code=307)
-
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    # HTMX should receive fragments; full-page navigation should receive the full shell.
-    template = "partials/hx_refresh.html" if is_htmx else "index.html"
-    return templates.TemplateResponse(template, _template_context(request, active=note, notes=notes))
-
-
-@router.post("/notes/{note_id}/chapters", response_class=HTMLResponse)
-async def add_chapter(
-    note_id: str,
-    request: Request,
-    parent_id: str = Form(None),
-    block_type: str = Form("chapter"),
-    service: NoteService = Depends(get_note_service),
-):
-    note = service.add_chapter(note_id, parent_id=parent_id, block_type=block_type)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/after", response_class=HTMLResponse)
-async def add_chapter_after(
-    note_id: str,
-    request: Request,
-    prev_id: str = Form(...),
-    block_type: str = Form("chapter"),
-    service: NoteService = Depends(get_note_service),
-):
-    note = service.add_chapter_after(note_id, prev_id=prev_id, block_type=block_type)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/before", response_class=HTMLResponse)
-async def add_chapter_before(
-    note_id: str,
-    request: Request,
-    next_id: str = Form(...),
-    block_type: str = Form("chapter"),
-    service: NoteService = Depends(get_note_service),
-):
-    note = service.add_chapter_before(note_id, next_id=next_id, block_type=block_type)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/child", response_class=HTMLResponse)
-async def add_chapter_child(
-    note_id: str,
-    request: Request,
-    parent_id: str = Form(...),
-    block_type: str = Form("chapter"),
-    service: NoteService = Depends(get_note_service),
-):
-    note = service.add_chapter_child(note_id, parent_id=parent_id, block_type=block_type)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/move", response_class=HTMLResponse)
-async def move_chapter(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    target_id: str = Form(""),
-    parent_id: str = Form(""),
-    service: NoteService = Depends(get_note_service),
-):
-    try:
-        note = service.move_chapter(note_id, chapter_id, target_id, parent_id or None)
-        if not note:
-            raise HTTPException(status_code=404, detail="Note not found")
-        notes = service.list_notes()
-        return templates.TemplateResponse(
-            "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/notes/{note_id}/chapters/{chapter_id}/edit", response_class=HTMLResponse)
-async def edit_chapter(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    mode: str = "graphical",
-    service: NoteService = Depends(get_note_service),
-):
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-
-    chapter_dict = build_editor_json(chapter, note.chapters, 0, max_depth=3)
-    chapter_json = json.dumps(chapter_dict, indent=2)
-
-    # Use JSON editor template for "JSON Editor" mode, graphical template for "Graphical Editor" mode
-    template = "partials/chapter_edit_json.html" if mode == "json" else "partials/chapter_edit_form.html"
-    
-    return templates.TemplateResponse(
-        template, 
-        _template_context(request, note=note, chapter=chapter, chapter_json=chapter_json)
-    )
+    return _page(request, service, _note_or_404(service, note_id))
 
 
 @router.get("/notes/{note_id}/settings", response_class=HTMLResponse)
 async def note_settings(
-    note_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
+    note_id: str, request: Request, service: NoteService = Depends(get_note_service)
 ):
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    # Collect existing folder names for autocomplete
-    all_notes = service.list_notes()
-    existing_folders = sorted({n.folder for n in all_notes if n.folder})
-    return templates.TemplateResponse(
-        "partials/note_settings.html",
-        _template_context(request, note=note, existing_folders=existing_folders),
-    )
+    note = _note_or_404(service, note_id)
+    folders = sorted({n.folder for n in service.list_notes() if n.folder})
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/note_settings.html",
+            _ctx(request, note=note, existing_folders=folders),
+        )
+    return _page(request, service, note, settings=True, existing_folders=folders)
 
 
-@router.post("/notes/{note_id}/title", response_class=HTMLResponse)
+@router.post("/notes/{note_id}/title")
 async def update_note_title(
     note_id: str,
     request: Request,
@@ -264,336 +203,210 @@ async def update_note_title(
     note = service.update_note(note_id, NoteUpdate(title=title))
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
+    return _after_change(request, service, note)
 
 
-@router.post("/notes/{note_id}/folder", response_class=HTMLResponse)
+@router.post("/notes/{note_id}/folder")
 async def update_note_folder(
     note_id: str,
     request: Request,
     folder: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    """Move a note into a folder (empty string = root / ungrouped)."""
-    folder_val = folder.strip() or None
-    note = service.update_note(note_id, NoteUpdate(folder=folder_val))
+    note = service.update_note(note_id, NoteUpdate(folder=folder.strip() or None))
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.post("/notes/{note_id}/delete")
+async def delete_note(
+    note_id: str, request: Request, service: NoteService = Depends(get_note_service)
+):
+    if not service.delete_note(note_id):
+        raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
+    return _after_change(request, service, notes[0] if notes else None, headers=CLOSE_OVERLAY)
+
+
+# ---------------------------------------------------------------- blocks
+
+
+@router.post("/notes/{note_id}/chapters")
+async def add_block(
+    note_id: str,
+    request: Request,
+    block_type: str = Form("chapter"),
+    position: str = Form("end"),
+    ref_id: str = Form(""),
+    service: NoteService = Depends(get_note_service),
+):
+    """position: end (root), after/before (sibling of ref_id), child (last child of ref_id)."""
+    if position == "after":
+        note = service.add_chapter_after(note_id, prev_id=ref_id, block_type=block_type)
+    elif position == "before":
+        note = service.add_chapter_before(note_id, next_id=ref_id, block_type=block_type)
+    elif position == "child":
+        note = service.add_chapter_child(note_id, parent_id=ref_id, block_type=block_type)
+    else:
+        note = service.add_chapter(note_id, block_type=block_type)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.get("/notes/{note_id}/chapters/{chapter_id}/edit", response_class=HTMLResponse)
+async def edit_chapter(
+    note_id: str,
+    chapter_id: str,
+    request: Request,
+    service: NoteService = Depends(get_note_service),
+):
+    note = _note_or_404(service, note_id)
+    chapter = _chapter_or_404(note, chapter_id)
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/chapter_edit_form.html",
+            _ctx(
+                request, note=note, chapter=chapter, media_files=service.repo.list_media(note.name)
+            ),
+        )
+    return _page(
+        request, service, note, editing=chapter, media_files=service.repo.list_media(note.name)
     )
 
 
-def _process_chapter_children(
-    note_id: str,
-    parent_chapter_id: str,
-    children_data: list[dict],
-    service: NoteService,
-    existing_chapters: list[Chapter],
-    depth: int = 0,
-) -> list[str]:
-    if depth >= 3:
-        return []
-
-    processed_ids = []
-
-    for child_data in children_data:
-        if "title" not in child_data:
-            continue
-        
-        child_id = child_data.get("id")
-        child_title = child_data["title"]
-        child_language = child_data.get("language")
-        child_source = _normalize_source_multi(child_data.get("source"))
-
-        child_content, child_children = split_mixed_content(child_data.get("content"))
-        
-        if child_id:
-            existing_child = next((c for c in existing_chapters if c.id == child_id), None)
-            if existing_child:
-                service.update_chapter(note_id, child_id, child_title, child_content, child_language, child_source)
-                processed_ids.append(child_id)
-            else:
-                continue
-        else:
-            note = service.add_chapter_child(note_id, parent_id=parent_chapter_id)
-            if note and note.chapters:
-                new_child = next(
-                    (c for c in reversed(note.chapters) if c.parent_id == parent_chapter_id),
-                    None
-                )
-                if new_child:
-                    child_id = new_child.id
-                    service.update_chapter(note_id, child_id, child_title, child_content, child_language, child_source)
-                    processed_ids.append(child_id)
-                    note = service.get_note(note_id)
-                    if note:
-                        existing_chapters[:] = note.chapters
-        
-        if child_children and child_id:
-            note = service.get_note(note_id)
-            if note:
-                existing_chapters[:] = note.chapters
-            grandchild_ids = _process_chapter_children(
-                note_id, child_id, child_children, service, existing_chapters, depth + 1
-            )
-            processed_ids.extend(grandchild_ids)
-    
-    return processed_ids
-
-
-def _get_all_descendant_ids(chapters: list[Chapter], parent_id: str) -> list[str]:
-    descendant_ids = []
-    direct_children = [c for c in chapters if c.parent_id == parent_id]
-    for child in direct_children:
-        descendant_ids.append(child.id)
-        descendant_ids.extend(_get_all_descendant_ids(chapters, child.id))
-    return descendant_ids
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/edit", response_class=HTMLResponse)
+@router.post("/notes/{note_id}/chapters/{chapter_id}/edit")
 async def update_chapter(
     note_id: str,
     chapter_id: str,
     request: Request,
-    content: str = Form(""),
+    title: str = Form(""),
+    content_text: str = Form(""),
+    language: str = Form(""),
+    source: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    # Parse JSON from the form content with mixed content array
+    note = service.update_chapter(
+        note_id, chapter_id, title, content_text, language or None, _normalize_source(source)
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.post("/notes/{note_id}/chapters/{chapter_id}/delete")
+async def delete_chapter(
+    note_id: str,
+    chapter_id: str,
+    request: Request,
+    service: NoteService = Depends(get_note_service),
+):
+    note = service.delete_chapter(note_id, chapter_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.post("/notes/{note_id}/chapters/{chapter_id}/reorder")
+async def reorder_chapter(
+    note_id: str,
+    chapter_id: str,
+    request: Request,
+    op: str = Form(...),
+    service: NoteService = Depends(get_note_service),
+):
+    ops = {
+        "up": service.move_chapter_up,
+        "down": service.move_chapter_down,
+        "indent": service.indent_chapter,
+        "outdent": service.outdent_chapter,
+    }
+    if op not in ops:
+        raise HTTPException(status_code=400, detail="op must be up, down, indent or outdent")
+    note = ops[op](note_id, chapter_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.post("/notes/{note_id}/chapters/{chapter_id}/move")
+async def move_chapter(
+    note_id: str,
+    chapter_id: str,
+    request: Request,
+    target_id: str = Form(""),
+    parent_id: str = Form(""),
+    service: NoteService = Depends(get_note_service),
+):
+    """Drag-and-drop target (drag-drop.js); the buttons use /reorder."""
     try:
-        chapter_data = json.loads(content)
-        if "title" not in chapter_data:
-            raise ValueError("JSON must contain 'title' field")
-        title = chapter_data["title"]
-        content_text, children_data = split_mixed_content(chapter_data.get("content"))
-        language = chapter_data.get("language")
-        source = _normalize_source_multi(chapter_data.get("source"))
-
-    except (json.JSONDecodeError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
-    
-    # Update the main chapter
-    note = service.update_chapter(note_id, chapter_id, title, content_text, language, source)
+        note = service.move_chapter(note_id, chapter_id, target_id, parent_id or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    
-    # Process children recursively
-    existing_chapters = list(note.chapters)
-    processed_ids = _process_chapter_children(
-        note_id, chapter_id, children_data, service, existing_chapters, 0
-    )
-    
-    # Delete children that were not in the JSON (removed by user)
-    note = service.get_note(note_id)  # Refresh to get latest state
-    if note:
-        # Get all descendants of this chapter
-        all_descendant_ids = _get_all_descendant_ids(note.chapters, chapter_id)
-        # Delete any descendants that weren't processed
-        for desc_id in all_descendant_ids:
-            if desc_id not in processed_ids:
-                service.delete_chapter(note_id, desc_id)
-    
-    # Final refresh
-    note = service.get_note(note_id)
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=note)
-    )
+    return _after_change(request, service, note)
 
 
-@router.post("/notes/{note_id}/chapters/{chapter_id}/delete", response_class=HTMLResponse)
-async def delete_chapter_route(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    deleted_note = service.delete_chapter(note_id, chapter_id)
-    if deleted_note is None:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    # Keep the current note active (deleted_note) if it still exists
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html", _template_context(request, notes=notes, active=deleted_note)
-    )
+# ---------------------------------------------------------------- media
 
 
-@router.delete("/notes/{note_id}", response_class=HTMLResponse)
-async def delete_note(
-    note_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    deleted = service.delete_note(note_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    active = notes[0] if notes else None
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, notes=notes, active=active),
-        headers={"HX-Trigger": "close-note-settings"},
-    )
-
-
-@router.get("/{note_name}", response_class=HTMLResponse)
-async def fetch_note_by_name(
-    note_name: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    # Look up note by its unique name (stored by the repository)
-    notes = service.list_notes()
-    note = next((n for n in notes if n.name == note_name), None)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    # Serve full page for direct navigation, partial for HTMX swaps
-    if request.headers.get("hx-request") == "true":
+def _media_reply(request: Request, service: NoteService, note: Note, chapter_id: str) -> Response:
+    """Gallery fragment for htmx; back to the block's edit page otherwise."""
+    if _is_htmx(request):
         return templates.TemplateResponse(
-            "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
+            request,
+            "partials/media_gallery.html",
+            _ctx(
+                request,
+                active=note,
+                chapter_id=chapter_id,
+                media_files=service.repo.list_media(note.name),
+            ),
         )
-    return templates.TemplateResponse(
-        "index.html", _template_context(request, active=note, notes=notes)
-    )
+    return RedirectResponse(url=f"/notes/{note.id}/chapters/{chapter_id}/edit", status_code=303)
 
 
-@router.get("/{note_name}/{chapter_id}", response_class=HTMLResponse)
-async def fetch_chapter_by_id(
-    note_name: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    # Look up note by name
-    notes = service.list_notes()
-    note = next((n for n in notes if n.name == note_name), None)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    # Verify chapter exists in this note
-    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-    
-    # Serve full page for direct navigation, partial for HTMX swaps
-    if request.headers.get("hx-request") == "true":
-        return templates.TemplateResponse(
-            "partials/hx_refresh.html", _template_context(request, active=note, notes=notes)
-        )
-    return templates.TemplateResponse(
-        "index.html", _template_context(request, active=note, notes=notes)
-    )
-
-
-@router.post("/notes/{note_id}/media/upload", response_class=HTMLResponse)
-async def upload_media_form(
+@router.post("/notes/{note_id}/media/upload")
+async def upload_media(
     note_id: str,
+    request: Request,
     file: UploadFile,
-    request: Request,
+    chapter_id: str = Form(""),
     service: NoteService = Depends(get_note_service),
-) -> None:
-    """Upload media file and return updated gallery."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    
+):
+    note = _note_or_404(service, note_id)
     content = await file.read()
-    if len(content) > 10 * 1024 * 1024:
+    if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
-    
-    # Process image (resize, reformat, rename)
-    from app.services.image_processing import process_uploaded_image
-    new_filename, processed_content, metadata = process_uploaded_image(
-        file.filename, content
-    )
-    
-    # Save processed media
-    relative_path = service.save_media_file(note_id, new_filename, processed_content)
-    if relative_path is None:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    # Store metadata in note JSON
+    try:
+        new_filename, processed, metadata = await run_in_threadpool(
+            process_uploaded_image, file.filename or "upload", content
+        )
+    except UnsupportedImage as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    service.save_media_file(note_id, new_filename, processed)
     service.save_module_metadata(note_id, "media", new_filename, metadata.to_dict())
-    
-    # Get updated media list
-    media_files = service.repo.list_media(note.name)
-    
-    # Return updated gallery
-    return templates.TemplateResponse(
-        "partials/media_gallery.html",
-        _template_context(
-            request,
-            active=note,
-            media_files=media_files
-        )
-    )
+    return _media_reply(request, service, note, chapter_id)
 
 
-@router.get("/notes/{note_id}/chapters/{chapter_id}/media/browser", response_class=HTMLResponse)
-async def media_browser(
+@router.post("/notes/{note_id}/media/{filename}/delete")
+async def delete_media(
     note_id: str,
-    chapter_id: str,
+    filename: str,
     request: Request,
+    chapter_id: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    """Render media browser panel for a chapter."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    
-    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-    
-    # Get list of media files
-    media_files = service.repo.list_media(note.name)
-    
-    return templates.TemplateResponse(
-        "partials/media_browser_panel.html",
-        _template_context(
-            request,
-            active=note,
-            chapter=chapter,
-            chapter_id=chapter_id,
-            media_files=media_files
-        )
-    )
+    note = _note_or_404(service, note_id)
+    if not service.repo.delete_media(note.name, filename):
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return _media_reply(request, service, note, chapter_id)
 
 
-@router.get("/notes/{note_id}/chapters/{chapter_id}/media/picker", response_class=HTMLResponse)
-async def media_picker_inline(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    """Render inline media picker inside the editor pane."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-
-    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-
-    media_files = service.repo.list_media(note.name)
-
-    return templates.TemplateResponse(
-        "partials/media_picker_inline.html",
-        _template_context(
-            request,
-            active=note,
-            chapter=chapter,
-            chapter_id=chapter_id,
-            media_files=media_files,
-        ),
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/media/select", response_class=HTMLResponse)
+@router.post("/notes/{note_id}/chapters/{chapter_id}/media/select")
 async def select_media(
     note_id: str,
     chapter_id: str,
@@ -601,102 +414,9 @@ async def select_media(
     url: str = Form(...),
     service: NoteService = Depends(get_note_service),
 ):
-    """Handle media selection and update chapter."""
-    note = service.get_note(note_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    
-    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
-    if not chapter:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-    
-    # Update chapter content with media URL
-    service.update_chapter(
-        note_id, 
-        chapter_id, 
-        title=chapter.title,
-        content=url,
-        language=chapter.language,
-        source=chapter.source
+    note = _note_or_404(service, note_id)
+    chapter = _chapter_or_404(note, chapter_id)
+    note = service.update_chapter(
+        note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
     )
-    
-    # Return updated note
-    note = service.get_note(note_id)
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, active=note, notes=service.list_notes())
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/move-up", response_class=HTMLResponse)
-async def move_chapter_up(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    """Move a chapter up within its siblings."""
-    note = service.move_chapter_up(note_id, chapter_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, active=note, notes=notes)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/move-down", response_class=HTMLResponse)
-async def move_chapter_down(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    """Move a chapter down within its siblings."""
-    note = service.move_chapter_down(note_id, chapter_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, active=note, notes=notes)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/indent", response_class=HTMLResponse)
-async def indent_chapter(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    """Indent a chapter (nest inside previous sibling)."""
-    note = service.indent_chapter(note_id, chapter_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, active=note, notes=notes)
-    )
-
-
-@router.post("/notes/{note_id}/chapters/{chapter_id}/outdent", response_class=HTMLResponse)
-async def outdent_chapter(
-    note_id: str,
-    chapter_id: str,
-    request: Request,
-    service: NoteService = Depends(get_note_service),
-):
-    """Outdent a chapter (move out of parent)."""
-    note = service.outdent_chapter(note_id, chapter_id)
-    if not note:
-        raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
-    return templates.TemplateResponse(
-        "partials/hx_refresh.html",
-        _template_context(request, active=note, notes=notes)
-    )
-
-
+    return _after_change(request, service, note)

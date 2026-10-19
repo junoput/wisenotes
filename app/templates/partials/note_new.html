@@ -1,0 +1,31 @@
+{# Add a note: empty, or from a file. Overlay when appended by htmx; inline in the page otherwise. #}
+<div class="note-settings-overlay" id="note-new">
+  <div class="note-settings-panel">
+    <div class="note-settings-header">
+      <h3>Add a note</h3>
+      <a class="btn icon-btn" aria-label="Close" href="/" data-close-settings>&times;</a>
+    </div>
+    <div class="note-settings-body">
+      <div class="note-settings-section">
+        <strong>New empty note</strong>
+        <form class="row new-note-form" action="/notes" method="post" hx-post="/notes" hx-target="body" hx-swap="none">
+          <input name="title" value="Untitled note" placeholder="Title" required aria-label="Title">
+          <button type="submit" class="btn">Create</button>
+        </form>
+      </div>
+      <div class="note-settings-section">
+        <strong>Import from a file</strong>
+        <form class="row import-note-form" action="/notes/import" method="post" enctype="multipart/form-data"
+              hx-post="/notes/import" hx-encoding="multipart/form-data" hx-target="body" hx-swap="none">
+          <input type="file" name="file" accept=".json,.zip,application/json,application/zip" required aria-label="Notes file">
+          <button type="submit" class="btn">Import</button>
+        </form>
+        <p class="muted">A <code>.json</code> export, or a <code>.zip</code> with <code>notes.json</code> and <code>media/&lt;note&gt;/&lt;image&gt;</code>
+          (what "Download this note" produces). Imported notes get new ids; images are re-encoded; anything else in the file is ignored.</p>
+      </div>
+    </div>
+    <div class="note-settings-actions">
+      <a class="btn" href="/" data-close-settings>Close</a>
+    </div>
+  </div>
+</div>

@@ -1,12 +1,18 @@
 """Image processing pipeline for uploaded media.
 
-Handles:
-- Raster images (JPEG, PNG, BMP, TIFF, etc.) → converted to WebP
-- SVG files → kept as-is (vector graphics)
-- GIF files → kept as-is (animated graphics)
-- Automatic resizing of oversized images
-- Unique filename generation to avoid conflicts
-- Metadata extraction for storage in note JSON
+Every upload is decided by its CONTENT, never by its filename:
+
+- Pillow must open it as one of ALLOWED_FORMATS, with at most MAX_PIXELS
+  pixels (read from the header, before any decoding). Anything else, and
+  anything that fails to decode later, is refused (UnsupportedImage).
+- GIF (Pillow says so) is kept byte-for-byte to preserve animation; a GIF is
+  a binary format with no script surface.
+- Everything else Pillow decodes is re-encoded to WebP, resized to a maximum
+  side, which also strips metadata and any payload hidden behind the pixels.
+- SVG is refused: it is XML that can carry scripts and is served from the
+  app's own origin. Unknown types are refused rather than stored as-is.
+
+Filenames are minted here; the caller's name is only kept in the metadata.
 """
 
 from __future__ import annotations
@@ -16,31 +22,36 @@ import io
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
+
+from PIL import Image
+from PIL import UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
 # Maximum dimensions (longest side)
 MAX_IMAGE_DIMENSION = 2048
-# Maximum file size in bytes (5 MB for processed output)
-MAX_OUTPUT_BYTES = 5 * 1024 * 1024
 # WebP quality (0-100)
 WEBP_QUALITY = 82
+# Formats Pillow may open. Without this list Image.open tries every plugin it
+# has, EPS among them, which hands the file to Ghostscript.
+ALLOWED_FORMATS = ("PNG", "JPEG", "WEBP", "GIF")
+# The byte caps do not bound pixels: a 20 KB PNG can declare 13000x13000 and
+# cost a gigabyte to decode. Checked on the header's size, before decoding.
+MAX_PIXELS = 50_000_000
+# Everything Pillow raises for a file it cannot finish reading.
+_DECODE_ERRORS = (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError)
+# What a stored media file may be, and how it is served
+STORED_MEDIA_TYPES = {".webp": "image/webp", ".gif": "image/gif"}
 
-# File extensions that are kept as-is
-VECTOR_EXTENSIONS = {".svg", ".svgz"}
-ANIMATED_EXTENSIONS = {".gif"}
-# Raster image extensions that will be converted
-RASTER_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif",
-    ".webp", ".ico", ".ppm", ".pgm", ".pbm",
-}
+
+class UnsupportedImage(ValueError):
+    """The upload is not an image this app stores; the message is safe to show."""
 
 
 @dataclass
 class ImageMetadata:
     """Metadata about a processed image, intended for storage in note JSON."""
+
     original_filename: str
     stored_filename: str
     mime_type: str
@@ -71,76 +82,44 @@ def _generate_unique_name(original: str, ext: str) -> str:
     return f"{ts}_{digest}{ext}"
 
 
-def _classify_file(filename: str) -> str:
-    """Classify file as 'vector', 'animated', 'raster', or 'unknown'."""
-    ext = Path(filename).suffix.lower()
-    if ext in VECTOR_EXTENSIONS:
-        return "vector"
-    if ext in ANIMATED_EXTENSIONS:
-        return "animated"
-    if ext in RASTER_EXTENSIONS:
-        return "raster"
-    return "unknown"
-
-
-def process_uploaded_image(
-    filename: str,
-    content: bytes,
-) -> tuple[str, bytes, ImageMetadata]:
-    """Process an uploaded image file.
-
-    Returns:
-        (new_filename, processed_bytes, metadata)
-    """
-    classification = _classify_file(filename)
-
-    if classification == "vector":
-        return _process_vector(filename, content)
-    if classification == "animated":
-        return _process_animated(filename, content)
-    if classification == "raster":
-        return _process_raster(filename, content)
-
-    # Unknown type — attempt raster processing, fall back to pass-through
+def process_uploaded_image(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
+    """Decide by content. Returns (stored_filename, bytes_to_store, metadata) or raises UnsupportedImage."""
+    if filename.lower().rsplit(".", 1)[-1] in ("svg", "svgz") or content.lstrip()[:5].lower() in (
+        b"<?xml",
+        b"<svg ",
+    ):
+        raise UnsupportedImage("SVG is not accepted; upload a raster image (PNG, JPEG, WebP, GIF)")
     try:
+        with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as probe:
+            fmt = probe.format
+            width, height = probe.size
+            if width * height > MAX_PIXELS:
+                raise UnsupportedImage(
+                    f"Image is too large ({width}x{height}; at most {MAX_PIXELS:,} pixels)"
+                )
+            probe.verify()  # structural check on the whole file before decoding pixels
+    except UnsupportedImage:
+        raise  # a ValueError, so it must pass before the decode-error clause below
+    except UnidentifiedImageError as e:
+        raise UnsupportedImage("Not a readable image (PNG, JPEG, WebP or GIF)") from e
+    except _DECODE_ERRORS as e:
+        raise UnsupportedImage("Not a readable image") from e
+    # verify() does not decode pixels, so a truncated JPEG passes it and fails
+    # here; that is a refused upload, not a server error.
+    try:
+        if fmt == "GIF":
+            return _process_gif(filename, content)
         return _process_raster(filename, content)
-    except Exception:
-        logger.warning("Unknown image type for %s, storing as-is", filename)
-        new_name = _generate_unique_name(filename, Path(filename).suffix.lower())
-        meta = ImageMetadata(
-            original_filename=filename,
-            stored_filename=new_name,
-            mime_type="application/octet-stream",
-            file_size=len(content),
-        )
-        return new_name, content, meta
+    except _DECODE_ERRORS as e:
+        raise UnsupportedImage("Not a readable image") from e
 
 
-def _process_vector(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
-    """SVG files are kept as-is."""
-    ext = Path(filename).suffix.lower()
-    new_name = _generate_unique_name(filename, ext)
-    meta = ImageMetadata(
-        original_filename=filename,
-        stored_filename=new_name,
-        mime_type="image/svg+xml",
-        file_size=len(content),
-        is_vector=True,
-    )
-    return new_name, content, meta
-
-
-def _process_animated(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
-    """GIF files are kept as-is to preserve animation."""
+def _process_gif(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
+    """GIF is kept as received (verified above) so animation survives."""
+    with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as img:
+        width, height = img.size
+        animated = getattr(img, "n_frames", 1) > 1
     new_name = _generate_unique_name(filename, ".gif")
-    # Try to get dimensions
-    width, height = None, None
-    try:
-        from PIL import Image
-        with Image.open(io.BytesIO(content)) as img:
-            width, height = img.size
-    except Exception:
-        pass
     meta = ImageMetadata(
         original_filename=filename,
         stored_filename=new_name,
@@ -148,16 +127,15 @@ def _process_animated(filename: str, content: bytes) -> tuple[str, bytes, ImageM
         width=width,
         height=height,
         file_size=len(content),
-        is_animated=True,
+        is_animated=animated,
     )
     return new_name, content, meta
 
 
 def _process_raster(filename: str, content: bytes) -> tuple[str, bytes, ImageMetadata]:
     """Convert raster image to WebP with resizing."""
-    from PIL import Image
 
-    with Image.open(io.BytesIO(content)) as img:
+    with Image.open(io.BytesIO(content), formats=ALLOWED_FORMATS) as img:
         # Preserve transparency (convert to RGBA if palette with transparency)
         if img.mode == "P" and "transparency" in img.info:
             img = img.convert("RGBA")

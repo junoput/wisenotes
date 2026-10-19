@@ -6,22 +6,21 @@ A fast, server-rendered note-taking web app. Each note contains chapters with ty
 
 - **Notes & chapters** — create, edit, delete, reorder; drag-and-drop chapter ordering
 - **Block types** — paragraph, code (syntax-highlighted), math (LaTeX/AsciiMath), media (images), nested chapters
-- **Modular block system** — add new block types by dropping a folder into `app/blocks/` (auto-discovered)
-- **Export / import** — full JSON export and import of all notes
-- **Keyboard-friendly** — configurable accessibility keybindings
-- **Light / dark theme** — toggle via UI
-- **Strict security** — per-request CSP nonce, secure headers, atomic file writes, path traversal protection
-- **Plugin hooks** — extensible server-side lifecycle events
+- **Export / import** — JSON export of everything; zip export per note or of all notes with images; import a `.json` or `.zip` from the "+" chooser (new ids, images re-encoded, archive inspected before anything is read)
+- **Keyboard-friendly** — arrow-key navigation between notes and blocks
+- **Strict security** — CSP, secure headers, atomic file writes, path traversal protection
+- **Self-contained** — every asset the app needs is served by the app; only KaTeX (math rendering) comes from a CDN and math falls back to its source text without it
 
 ## Quickstart
 
-### Docker (recommended)
+### Container (how it is deployed)
 
 ```bash
-docker compose up --build
+deploy/deploy.sh --ref HEAD     # builds the image with podman, starts it on :8000, smoke-tests it
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:8000>. `deploy/README.md` has the production layout,
+the data path and what happens on a bad deploy.
 
 ### Native
 
@@ -39,26 +38,28 @@ uvicorn app.main:app --reload --port 8000
 pytest tests/
 ```
 
+Needs Python 3.12; see [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) for a clean-shell
+recipe and [CONTRIBUTING.md](CONTRIBUTING.md) for the browser journey driver.
+
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
 | `app/routes/` | FastAPI route handlers (pages + API) |
 | `app/services/` | Business logic (`NoteService`) and file storage |
-| `app/blocks/` | Modular block type definitions (auto-discovered) |
+| `app/blocks.py` | Block type catalogue |
 | `app/templates/` | Jinja2 templates and HTMX partials |
-| `app/plugins/` | Server-side plugin hooks |
-| `app/web/` | Dependency injection wiring |
 | `data/` | File-based note storage (one folder per note) |
 | `tests/` | Pytest test suite |
 
 ## Deployment
 
-- **Docker**: multi-stage build, non-root user, health check at `/health`
+- **Container**: multi-stage image, non-root user, one `podman run` per host via `deploy/deploy.sh`, smoke-tested (`/health` and `GET /`), rolled back if the new image does not answer
 - **Volumes**: mount `/data` for persistent note storage
 - **Config**: environment variables prefixed `WISENOTES_` (e.g. `WISENOTES_DATA_DIR`)
-- **Dev override**: `docker-compose.override.yml` adds hot-reload and source mounting
 
 ## Documentation
 
-- [Block System](docs/BLOCKS_SYSTEM.md) — how blocks work and how to add new types
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (start here, the no-JavaScript rule), [docs/BRANCHING.md](docs/BRANCHING.md) and [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) (commits, gates, review).

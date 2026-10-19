@@ -9,7 +9,7 @@ Wisenotes is a FastAPI + Jinja2 note-taking app using server-rendered HTML and H
 ```
 app/
 ├── main.py                  # FastAPI app, middleware, CSP, router mounting
-├── config.py                # Settings (pydantic-settings) + accessibility config
+├── config.py                # Settings (pydantic-settings)
 ├── schemas.py               # Pydantic models: Note, Chapter, NoteCreate, NoteUpdate, NoteDocument
 ├── routes/
 │   ├── pages.py             # HTML/HTMX page endpoints (server-rendered)
@@ -18,19 +18,9 @@ app/
 │   ├── notes.py             # NoteService — all business logic
 │   ├── storage.py           # JsonNoteRepository — file-based persistence
 │   └── image_processing.py  # Pillow-based media processing
-├── blocks/                  # Modular block system (auto-discovered)
-│   ├── base.py              # BaseBlock dataclass
-│   ├── registry.py          # Auto-discovery + registry
-│   └── <type>/block.py      # chapter, code, math, media, paragraph, text
-├── editor/
-│   └── mixed_content.py     # Mixed-content editor helpers
-├── plugins/
-│   ├── base.py              # PluginBase hooks interface
-│   └── registry.py          # Plugin lifecycle management
+├── blocks.py                # Block type catalogue (chapter, paragraph, code, math, media, text)
 ├── templates/               # Jinja2 (base, index, partials/, components/)
-├── static/                  # CSS, JS, vendor libs
-└── web/
-    └── dependencies.py      # FastAPI dependency injection wiring
+└── static/                  # CSS, JS, vendor libs
 tests/                       # Pytest test suite
 data/                        # Runtime note storage (one folder per note)
 ```
@@ -42,25 +32,25 @@ data/                        # Runtime note storage (one folder per note)
 3. **NoteService** calls `JsonNoteRepository` for persistence
 4. **Response**: pages return HTML fragments (HTMX) or full pages; API returns JSON
 
-### Router Ordering (Critical)
+### Routers
 
-In `app/main.py`, routers are included in this order:
-1. `api.router` (prefix `/api`) — must come first
-2. `pages.router` — has a catch-all `/{note_name}` route
-
-**Never add new catch-all GET routes to `pages.py`.** The existing `/{note_name}` already catches unmatched paths. New API endpoints go in `api.py` under the `/api` prefix.
+`api.router` (prefix `/api`, JSON) and `pages.router` (HTML). Pages have no
+catch-all route: an unknown path is a 404, and a note's only URL is `/notes/{id}`.
+Everything a form or link needs lives in `pages.py`; `/api` is for scripts and
+export/import, and must not duplicate a page route.
 
 ---
 
 ## Strict Rules
 
-### HTMX Endpoints Return HTML, Not JSON
+### Page POSTs Redirect; htmx Gets the Fragment
 
-```python
-@router.post("/notes", response_class=HTMLResponse)
-async def create_note(...):
-    return templates.TemplateResponse("partials/hx_refresh.html", {...})
-```
+Every page handler that changes state ends with `_after_change(request, service, note)`:
+a plain browser (no `HX-Request` header) gets `303 See Other` to the note page,
+htmx gets `partials/hx_refresh.html`. Page GETs use `_page(...)`, which picks
+`index.html` or the fragment the same way. Never return a fragment to a request
+without the header, and never put an `hx-*` attribute on an element that is not
+also a `<form action method>` or an `<a href>`; `tests/test_pages.py` checks both.
 
 ### Service Boundary
 
@@ -94,34 +84,14 @@ service: NoteService = Depends(get_note_service)
 
 ## Block System
 
-Blocks live in `app/blocks/<name>/` and are auto-discovered at startup.
+Block types are a catalogue in `app/blocks.py` (`BLOCKS`, `get_block`,
+`get_all_blocks`). A chapter's `type` names one entry; unknown types fall back
+to `text`. Rendering and editing branch on the type inside two templates:
+`components/editor_chapters.html` (display) and `partials/chapter_edit_form.html`
+(edit form). To add a type: add a `Block` entry, then a branch in each template.
 
-### Adding a New Block
-
-1. Create `app/blocks/myblock/block.py`:
-   ```python
-   from dataclasses import dataclass
-   from app.blocks.base import BaseBlock
-
-   @dataclass
-   class MyBlock(BaseBlock):
-       name: str = "myblock"
-       display_name: str = "My Block"
-       emoji: str = "🎯"
-       color: str = "#10b981"
-       can_nest: bool = False
-       editor: str = "textarea"
-
-   block = MyBlock()  # Required — registry looks for this
-   ```
-2. Create `app/blocks/myblock/templates/display.html` and `edit.html`
-3. Restart — auto-discovered, no registration code needed
-
-### Block Rules
-
-- `chapter` is the only block allowed at root level and the only container (`can_nest=True`)
-- `text` is the fallback for unknown types — `get_block("nonexistent")` returns text
-- Block API: `get_block(name)`, `get_all_blocks()`, `get_block_choices()`
+- `chapter` is the only block allowed at root level and the only container
+- `text` is hidden from the picker (`show_in_picker=False`) and is the fallback
 
 ---
 
@@ -146,10 +116,19 @@ Settings are loaded via `app/config.py` using pydantic-settings with `lru_cache`
 
 ## Security
 
-- **CSP**: strict per-request nonce set in `app/main.py` middleware. When adding CDNs or inline scripts, update the CSP header
+- **CSP**: set in `app/main.py` middleware; no inline scripts. When adding CDNs, update the CSP header
 - **Headers**: X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy
 - **Storage**: path traversal protection on media endpoints, size limits on uploads (10MB)
 - **Imports**: max payload size enforced (`max_payload_bytes` setting)
+
+---
+
+## Git and review
+
+Branch policy is in [`docs/BRANCHING.md`](../docs/BRANCHING.md), commit format,
+quality gates and review in [`docs/GIT_WORKFLOW.md`](../docs/GIT_WORKFLOW.md), and
+the no-JavaScript rule in [`CONTRIBUTING.md`](../CONTRIBUTING.md). CI runs `ruff check`, `ruff format --check`
+and `pytest` on every push and pull request.
 
 ---
 
@@ -172,8 +151,8 @@ Tests live in `tests/` using pytest + FastAPI TestClient. Fixtures in `tests/con
 ## Run
 
 ```bash
-# Docker
-docker compose up --build
+# Container (same path as production; see deploy/README.md)
+deploy/deploy.sh --ref HEAD
 
 # Native (Python 3.12+)
 python -m venv .venv && source .venv/bin/activate
@@ -208,8 +187,7 @@ pytest tests/
 | Service | `app/services/notes.py` |
 | Storage | `app/services/storage.py` |
 | Schemas | `app/schemas.py` |
-| Blocks | `app/blocks/` (see `docs/BLOCKS_SYSTEM.md`) |
-| DI | `app/web/dependencies.py` |
+| Blocks | `app/blocks.py` |
+| DI | `get_note_service` in `app/services/notes.py` |
 | Config | `app/config.py` |
-| Plugins | `app/plugins/base.py`, `app/plugins/registry.py` |
 | Tests | `tests/conftest.py`, `tests/test_*.py` |

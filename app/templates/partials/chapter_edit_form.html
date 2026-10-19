@@ -1,134 +1,61 @@
-{% set block_type = chapter.type %}
-{% set is_code = block_type == 'code' %}
-{% set is_math = block_type == 'math' %}
-{% set is_media = block_type == 'media' %}
-{% set is_table = block_type == 'table' %}
-{% set is_paragraph = block_type == 'paragraph' %}
-{% set lang = chapter.language or 'python' %}
-{% set mode_map = {
-  'python': 'python',
-  'javascript': 'javascript',
-  'typescript': 'javascript',
-  'go': 'go',
-  'rust': 'rust',
-  'java': 'clike'
-} %}
-
-<div class="chapter-edit-mode"
-     data-editor="{{ 'code-block' if is_code else 'textarea' }}"
-     data-chapter-type="{{ block_type }}"
-     data-note-id="{{ note.id }}"
-     {% if is_code %}data-codemirror-mode="{{ mode_map.get(lang, 'javascript') }}" data-language="{{ lang }}"{% endif %}>
-  <form hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/edit" 
-        hx-target="body" 
-        hx-swap="none"
-        class="chapter-edit-form">
-    <input type="hidden" name="content" class="chapter-json-payload">
-    <input type="hidden" name="original_chapter_json" class="original-chapter-json" value='{{ chapter_json }}'>
-    <input type="hidden" name="chapter_type" value="{{ block_type }}">
-
+{# Edit one block. Included inline on the full page and returned alone to htmx. Plain fields; no JSON. #}
+{% set edit_url = '/notes/' ~ note.id ~ '/chapters/' ~ chapter.id %}
+<div class="chapter-edit-mode" data-chapter-type="{{ chapter.type }}" data-note-id="{{ note.id }}"
+     {% if chapter.type == 'code' %}data-language="{{ chapter.language or 'python' }}"{% endif %}>
+  <form class="chapter-edit-form" action="{{ edit_url }}/edit" method="post" hx-post="{{ edit_url }}/edit" hx-target="body" hx-swap="none">
     <div class="field">
-      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" placeholder="add title" {% if block_type == 'chapter' %}required{% endif %}>
+      <input type="text" name="title" value="{{ chapter.title }}" placeholder="{% if chapter.type == 'media' %}caption{% else %}add title{% endif %}" {% if chapter.type == 'chapter' %}required{% endif %} aria-label="Title">
     </div>
-
     <div class="field">
-      <div class="token-field" data-token-input data-name="source">
-        <div class="token-list" aria-label="Sources"></div>
-        <input type="text" class="token-input-text" id="source-{{ chapter.id }}" placeholder='add sources, separate them with a ";"'>
-        <input type="hidden" name="source" value="{{ chapter.source or '' }}">
-      </div>
+      <input type="text" name="source" value="{{ chapter.source or '' }}" placeholder='sources, separated by ";"' aria-label="Sources">
     </div>
-
-    {% if block_type != 'chapter' %}
-    <div class="field">
-      {% if is_code %}
-        <select id="language-{{ chapter.id }}" name="language" aria-label="Language">
-          {% set lang = chapter.language or 'python' %}
-          <option value="python" {{ 'selected' if lang == 'python' else '' }}>Python</option>
-          <option value="javascript" {{ 'selected' if lang == 'javascript' else '' }}>JavaScript</option>
-          <option value="typescript" {{ 'selected' if lang == 'typescript' else '' }}>TypeScript</option>
-          <option value="java" {{ 'selected' if lang == 'java' else '' }}>Java</option>
-          <option value="go" {{ 'selected' if lang == 'go' else '' }}>Go</option>
-          <option value="rust" {{ 'selected' if lang == 'rust' else '' }}>Rust</option>
+    {% if chapter.type == 'code' %}
+      {% set lang = chapter.language or 'python' %}
+      <div class="field">
+        <select name="language" aria-label="Language">
+          {% for v, label in [('python','Python'),('javascript','JavaScript'),('typescript','TypeScript'),('java','Java'),('go','Go'),('rust','Rust')] %}
+            <option value="{{ v }}" {% if lang == v %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
         </select>
-      {% elif is_math %}
-        <select id="language-{{ chapter.id }}" name="language">
-          {% set lang = chapter.language or 'latex' %}
-          <option value="latex" {{ 'selected' if lang == 'latex' else '' }}>LaTeX</option>
-          <option value="asciimath" {{ 'selected' if lang == 'asciimath' else '' }}>AsciiMath</option>
-        </select>
-      {% elif is_media %}
-        <input type="hidden" name="language" value="">
-        <div class="muted">URL-based media</div>
-      {% elif is_table %}
-        <input type="hidden" name="language" value="">
-        <div class="muted">CSV-like table. First row is headers.</div>
-      {% else %}
-        <input type="hidden" name="language" value="{{ chapter.language or '' }}">
-        <div class="muted">Plain text block</div>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {% if is_media %}
-    <div class="field">
-      <label for="title-{{ chapter.id }}">Title / Caption</label>
-      <input type="text" id="title-{{ chapter.id }}" name="title" value="{{ chapter.title }}" placeholder="Image caption (optional)">
-    </div>
-
-    <div class="field">
-      <label for="source-media-{{ chapter.id }}">Source / Credit</label>
-      <input type="text" id="source-media-{{ chapter.id }}" name="source" value="{{ chapter.source or '' }}" placeholder="Image source or credit">
-    </div>
-
-    <div class="field">
-      {% if chapter.content %}
-        <label>Image Preview</label>
-        <div id="media-preview-{{ chapter.id }}" style="width: fit-content; background: transparent; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: visible; margin-bottom: 8px;">
-          <img src="{{ chapter.content }}" alt="preview" style="width: auto; height: auto; max-width: 100%; max-height: 400px; object-fit: contain;">
-        </div>
-      {% endif %}
-      <input type="hidden" id="content-{{ chapter.id }}" name="content_text" value="{{ chapter.content or '' }}">
-      <div id="media-picker-container-{{ chapter.id }}"
-           hx-get="/notes/{{ note.id }}/chapters/{{ chapter.id }}/media/picker"
-           hx-trigger="load"
-           hx-target="#media-picker-container-{{ chapter.id }}"
-           hx-swap="innerHTML"
-           style="margin-top: 8px;">
-        <div style="padding: 12px; background: #f0f0f0; border-radius: 4px; text-align: center; color: #666;">Loading media gallery...</div>
       </div>
-    </div>
+    {% elif chapter.type == 'math' %}
+      {% set lang = chapter.language or 'latex' %}
+      <div class="field">
+        <select name="language" aria-label="Notation">
+          <option value="latex" {% if lang == 'latex' %}selected{% endif %}>LaTeX</option>
+          <option value="asciimath" {% if lang == 'asciimath' %}selected{% endif %}>AsciiMath</option>
+        </select>
+      </div>
     {% else %}
-    <div class="field">
-      <textarea id="content-{{ chapter.id }}"
-                name="content_text"
-                rows="14"
-                data-editor-target
-                class="chapter-content-input"
-                style="{% if is_code %}display: none;{% endif %}"
-                autofocus
-                placeholder="{% if is_code %}add code{% elif is_math %}add formula{% elif is_table %}add CSV-like rows (first row headers){% else %}add text{% endif %}">{{ chapter.content }}</textarea>
-    </div>
+      <input type="hidden" name="language" value="{{ chapter.language or '' }}">
     {% endif %}
 
-    <div style="display: flex; gap: 8px; margin-top: 8px;">
+    {% if chapter.type == 'media' %}
+      {% if chapter.content %}
+        <div class="field media-preview"><img src="{{ chapter.content }}" alt="preview"></div>
+      {% endif %}
+      <input type="hidden" name="content_text" value="{{ chapter.content or '' }}">
+    {% else %}
+      <div class="field">
+        <textarea name="content_text" rows="14" class="chapter-content-input" autofocus
+                  placeholder="{% if chapter.type == 'code' %}add code{% elif chapter.type == 'math' %}add formula{% else %}add text{% endif %}">{{ chapter.content }}</textarea>
+      </div>
+    {% endif %}
+
+    <div class="edit-actions">
       <button type="submit" class="btn">Save</button>
-      <button type="button" 
-              class="btn ghost" 
-              hx-get="/notes/{{ note.id }}" 
-              hx-target="body" 
-              hx-swap="none">
-        Cancel
-      </button>
-      <button type="button"
-          class="btn danger"
-          hx-post="/notes/{{ note.id }}/chapters/{{ chapter.id }}/delete"
-          hx-target="body"
-          hx-swap="none"
-          style="margin-left: auto;"
-          onclick="if(!confirm('Delete this block and all its child blocks?')){event.stopImmediatePropagation(); event.preventDefault(); return false;}">
-        Delete
-      </button>
+      <a class="btn ghost" href="/notes/{{ note.id }}" hx-get="/notes/{{ note.id }}" hx-target="body" hx-swap="none">Cancel</a>
     </div>
   </form>
+  <div class="edit-actions">
+    <form action="{{ edit_url }}/delete" method="post" hx-post="{{ edit_url }}/delete" hx-target="body" hx-swap="none"
+          data-confirm="Delete this block and all its child blocks?">
+      <button type="submit" class="btn danger">Delete</button>
+    </form>
+  </div>
+  {% if chapter.type == 'media' %}
+    <div class="media-picker" id="media-gallery-{{ chapter.id }}">
+      {% with active=note, chapter_id=chapter.id %}{% include "partials/media_gallery.html" %}{% endwith %}
+    </div>
+  {% endif %}
 </div>

@@ -1,8 +1,7 @@
 """Tests for NoteService business logic."""
 
-import pytest
-
-from app.schemas import NoteCreate, NoteUpdate
+from app.schemas import NoteCreate
+from app.schemas import NoteUpdate
 
 
 class TestNoteServiceCRUD:
@@ -193,3 +192,52 @@ class TestExportImport:
 
         service.import_document(doc)
         assert len(service.list_notes()) == 2
+
+
+class TestTitleIsKeptAsTyped:
+    """20260916-004: the folder name is derived from the title; the title is not rewritten from it."""
+
+    def test_create_keeps_punctuation(self, service):
+        note = service.create_note(NoteCreate(title="Hello, World!"))
+        assert note.title == "Hello, World!"
+        assert note.name == "Hello-World"
+        assert service.get_note(note.id).title == "Hello, World!"  # survives the read path too
+
+    def test_rename_keeps_punctuation_and_earns_no_suffix(self, service):
+        note = service.create_note(NoteCreate(title="Old"))
+        renamed = service.update_note(note.id, NoteUpdate(title="C++ notes"))
+        assert renamed.title == "C++ notes"
+        assert renamed.name == "C-notes"
+        assert [n.title for n in service.list_notes()] == ["C++ notes"]
+
+    def test_rename_to_same_slug_keeps_folder(self, service):
+        note = service.create_note(NoteCreate(title="Hello World"))
+        renamed = service.update_note(note.id, NoteUpdate(title="Hello, World!"))
+        assert renamed.name == note.name == "Hello-World"
+        assert renamed.title == "Hello, World!"
+
+    def test_rename_onto_another_notes_slug_gets_a_suffix(self, service):
+        service.create_note(NoteCreate(title="Taken"))
+        other = service.create_note(NoteCreate(title="Free"))
+        renamed = service.update_note(other.id, NoteUpdate(title="Taken"))
+        assert renamed.name == "Taken-2"
+        assert renamed.title == "Taken"
+
+    def test_two_notes_may_share_a_title(self, service):
+        a = service.create_note(NoteCreate(title="Untitled note"))
+        b = service.create_note(NoteCreate(title="Untitled note"))
+        assert (a.title, b.title) == ("Untitled note", "Untitled note")
+        assert (a.name, b.name) == ("Untitled-note", "Untitled-note-2")
+
+
+class TestNameIsKeptOnUpdate:
+    def test_a_suffixed_note_keeps_its_name_on_a_folder_only_update(self, service, data_dir):
+        # Pins babf60a's `name != keep` guard in ensure_unique_name. "X-2" exists
+        # because "X" did; its title still derives "X", which is taken, so without
+        # the guard the search skips its own folder and renames it to "X-3".
+        service.create_note(NoteCreate(title="X"))
+        second = service.create_note(NoteCreate(title="X"))
+        assert second.name == "X-2"  # precondition
+        updated = service.update_note(second.id, NoteUpdate(folder="Course"))
+        assert updated.name == "X-2" and updated.folder == "Course"
+        assert sorted(p.name for p in data_dir.iterdir() if p.is_dir()) == ["X", "X-2"]

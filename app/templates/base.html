@@ -10,42 +10,14 @@
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
   <script src="/static/js/init-layout.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
-  <script nonce="{{ request.state.csp_nonce }}">
-    // Accessibility keybindings exposed to client JS
-    window.WISENOTES_ACCESSIBILITY = {{ accessibility|tojson | safe }};
-    console.log('[inline] WISENOTES_ACCESSIBILITY', window.WISENOTES_ACCESSIBILITY);
-  </script>
-  <script type="module" src="/static/js/app.js?v=16" defer></script>
-  <script src="/static/js/media-drop.js" defer></script>
-  <script src="/static/js/image-editor.js" defer></script>
+  <script src="/static/vendor/htmx/htmx.min.js" defer></script>
+  <script type="module" src="/static/js/app.js"></script>
 </head>
 <body class="page">
   <header class="topbar">
     <div class="brand">Wisenotes</div>
-    <nav class="actions">
-      <div class="toolbar-control">
-        <select id="editor-mode-select" class="toolbar-select" aria-label="Editor mode">
-          <option value="graphical">JSON Editor</option>
-          <option value="json">Raw Code</option>
-          <option value="graphical-2">Graphical Editor</option>
-        </select>
-      </div>
-      <button
-        class="icon-btn settings-btn"
-        title="Settings"
-        aria-label="Settings"
-        hx-get="/settings"
-        hx-target="body"
-        hx-swap="beforeend"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m3.08 3.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m-3.08-3.08l4.24-4.24M19.78 19.78l-4.24-4.24m-3.08-3.08l-4.24-4.24"></path>
-        </svg>
-      </button>
-    </nav>
   </header>
+  <noscript><div class="noscript-note">Scripts are off: everything works, but blocks reorder with the arrow buttons instead of dragging, code is shown without colouring, and formulas as their source.</div></noscript>
   <main class="layout">
     {% block content %}{% endblock %}
   </main>

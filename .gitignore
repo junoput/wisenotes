@@ -21,3 +21,11 @@ node_modules/
 data/*.json
 data/*.lock
 data/
+
+# lane-local scratch and tool venvs
+.scratch/
+.venv-uv/
+
+# per-host deploy settings (see deploy/env.example)
+deploy/.env
+deploy/.preview-last-tried
