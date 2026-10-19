@@ -1073,6 +1073,8 @@ body.add-expanded .add-block-icon {
 pre.code-block-display { margin: 0; padding: 10px 12px; background: #282a36; color: #f8f8f2; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
 .media-block-display img { max-width: 100%; max-height: 400px; border-radius: 4px; }
 .media-empty { padding: 20px; text-align: center; border: 1px dashed var(--border); border-radius: 4px; color: #999; }
+.media-missing { border-color: var(--danger); color: var(--danger); }
+.import-missing { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; color: var(--danger); font-size: 13px; }
 .media-preview img { max-width: 100%; max-height: 400px; object-fit: contain; }
 .edit-actions { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 .edit-actions form { display: inline; margin-left: auto; }

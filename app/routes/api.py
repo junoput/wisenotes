@@ -90,6 +90,7 @@ async def import_notes(
             "imported": [n.id for n in result.notes],
             "images": result.images,
             "skipped": result.skipped,
+            "missing": result.missing,
         }
     )
 
