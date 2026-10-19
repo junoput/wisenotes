@@ -13,6 +13,16 @@
     </a>
   </div>
 </div>
+{% set ns = namespace(missing=[]) %}
+{% for c in active.chapters if c.type == 'media' and c.content and c.content.startswith('missing:') %}
+  {% set ns.missing = ns.missing + [c.content[8:]] %}
+{% endfor %}
+{% if ns.missing %}
+<div class="import-missing" role="status">
+  {{ ns.missing|length }} image{{ 's' if ns.missing|length != 1 }} could not be imported and {{ 'are' if ns.missing|length != 1 else 'is' }} not in this note:
+  {{ ns.missing|join(', ') }}. Open each marked block to upload or pick a replacement.
+</div>
+{% endif %}
 <div class="editor-body">
   <div class="chapters-display">
     {% if active.chapters %}

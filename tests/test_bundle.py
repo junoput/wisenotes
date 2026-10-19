@@ -187,6 +187,19 @@ class TestZip:
         r = import_bundle(service, "whatever.bin", z)
         assert r.images == 1
 
+    def test_note_folder_zipped_from_the_data_dir(self, service):
+        # The on-disk layout: <name>/<name>.json, images in <name>/media/, blocks
+        # pointing at the original note's /api/notes/<id>/media/<file>.
+        n = _note(name="Trip")
+        n["chapters"][2]["content"] = "/api/notes/n1/media/pic.png"
+        z = _zip({"Trip/Trip.json": json.dumps(n).encode(), "Trip/media/pic.png": _png()})
+        r = import_bundle(service, "Trip.zip", z)
+        [note] = r.notes
+        assert r.images == 1 and r.skipped == []
+        media = next(c for c in note.chapters if c.type == "media")
+        [stored] = service.repo.list_media(note.name)
+        assert media.content == f"/api/notes/{note.id}/media/{stored}"
+
     @pytest.mark.parametrize(
         "bad", ["../notes.json", "/abs/notes.json", "a\\b.json", "c:/x.json", "media/../../x.png"]
     )
@@ -217,7 +230,11 @@ class TestZip:
         )
         r = import_bundle(service, "b.zip", z)
         assert r.images == 0
-        assert next(c for c in r.notes[0].chapters if c.type == "media").content == ""
+        # 20261019-011: not an empty block (silent loss) but a placeholder naming the file
+        assert (
+            next(c for c in r.notes[0].chapters if c.type == "media").content == "missing:pic.png"
+        )
+        assert r.missing == ["pic.png"]
         assert service.repo.list_media(r.notes[0].name) == []
         assert any("pic.png" in s for s in r.skipped) and any("evil.svg" in s for s in r.skipped)
         assert any("run.sh" in s for s in r.skipped) and any("x.exe" in s for s in r.skipped)
@@ -311,3 +328,56 @@ class TestAllOrNothing:
         assert [n.title for n in service.list_notes()] == ["Already here"]
         # and no folder left on disk either (media included)
         assert [p.name for p in data_dir.iterdir() if p.is_dir()] == [service.list_notes()[0].name]
+
+
+APPLEDOUBLE = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x02"  # what ._<file> holds
+
+
+def _finder_zip(note: dict, images: dict[str, bytes]) -> bytes:
+    """A note folder zipped in macOS Finder, junk FIRST so it cannot win by order."""
+    entries = {
+        "__MACOSX/._Trip": APPLEDOUBLE,
+        "__MACOSX/Trip/._Trip.json": APPLEDOUBLE,  # ends in .json: must not be read as the note
+        "Trip/.DS_Store": b"\x00\x00\x00\x01Bud1",
+        "__MACOSX/Trip/._.DS_Store": APPLEDOUBLE,
+    }
+    for name in images:
+        entries[f"__MACOSX/Trip/media/._{name}"] = APPLEDOUBLE  # ends in .png: must not be an image
+    entries["Trip/Trip.json"] = json.dumps(note).encode()
+    entries.update({f"Trip/media/{name}": data for name, data in images.items()})
+    return _zip(entries)
+
+
+class TestFinderZip:
+    """20261019-011: the operator's SWEN1.zip, a note folder zipped in Finder."""
+
+    def test_finder_metadata_is_ignored_and_never_stored(self, service):
+        n = _note(name="Trip")
+        n["chapters"][2]["content"] = "/api/notes/n1/media/pic.png"
+        r = import_bundle(service, "Trip.zip", _finder_zip(n, {"pic.png": _png()}))
+        [note] = r.notes
+        assert r.images == 1 and r.missing == [] and r.ignored == 5
+        assert not [s for s in r.skipped if "__MACOSX" in s or ".DS_Store" in s], r.skipped
+        [stored] = service.repo.list_media(note.name)
+        assert next(c for c in note.chapters if c.type == "media").content.endswith(stored)
+
+    def test_a_referenced_image_absent_from_the_zip_stays_visible(self, service):
+        n = _note(name="Trip")
+        media = n["chapters"][2]
+        n["chapters"].append(
+            {**media, "id": "c9", "order": 9, "content": "/api/notes/n1/media/gone.png"}
+        )
+        media["content"] = "/api/notes/n1/media/pic.png"
+        r = import_bundle(service, "Trip.zip", _finder_zip(n, {"pic.png": _png()}))
+        [note] = r.notes
+        assert r.images == 1 and r.missing == ["gone.png"]
+        contents = sorted(c.content for c in note.chapters if c.type == "media")
+        assert contents[0].startswith("/api/notes/") and contents[1] == "missing:gone.png"
+
+    def test_a_placeholder_survives_export_and_reimport(self, service):
+        n = _note(name="Trip")
+        n["chapters"][2]["content"] = "/api/notes/n1/media/gone.png"
+        [first] = import_bundle(service, "Trip.zip", _finder_zip(n, {})).notes
+        again = import_bundle(service, "x.zip", export_zip(service, [first.id]))
+        [note] = again.notes
+        assert next(c for c in note.chapters if c.type == "media").content == "missing:gone.png"

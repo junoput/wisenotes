@@ -24,6 +24,18 @@ Bundle layout (what export_zip writes and import_bundle reads):
 
     notes.json                 a NoteDocument; media blocks reference media/<note-name>/<file>
     media/<note-name>/<file>   the images of that note
+
+import_bundle also reads a note folder zipped straight from the data directory:
+
+    <note-name>/<note-name>.json   one note; media blocks reference /api/notes/<id>/media/<file>
+    <note-name>/media/<file>       its images
+
+Entries under __MACOSX/ and dot-files (.DS_Store, ._* AppleDouble forks), which
+macOS Finder adds to every zip, are dropped before anything reads them.
+
+A media block whose image cannot be stored (not in the bundle, or not a
+readable image) keeps a visible placeholder, MISSING_PREFIX + the file name,
+rather than becoming an empty block. The note page lists every such block.
 """
 
 from __future__ import annotations
@@ -62,9 +74,11 @@ MAX_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100  # above this for a large entry, treat as a bomb
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 _MEDIA_ENTRY = re.compile(r"^(?:.*/)?media/([^/]+)/([^/]+)$")
+_FOLDER_MEDIA_ENTRY = re.compile(r"^(?:.*/)?([^/]+)/media/([^/]+)$")  # data-dir layout
 _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+MISSING_PREFIX = "missing:"  # media block content for an image the import could not store
 
 
 class BundleError(ValueError):
@@ -76,6 +90,10 @@ class ImportResult:
     notes: list[Note] = field(default_factory=list)
     images: int = 0
     skipped: list[str] = field(default_factory=list)  # entry names dropped, with the reason
+    missing: list[str] = field(
+        default_factory=list
+    )  # images media blocks referenced and did not get
+    ignored: int = 0  # __MACOSX/ and dot-file entries, dropped unread
 
 
 # ---------------------------------------------------------------- export
@@ -134,7 +152,7 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
     except zipfile.BadZipFile as e:
         raise BundleError("Not a valid zip file") from e
     with zf:
-        json_entry, media_entries, skipped = _inspect_zip(zf)
+        json_entry, media_entries, skipped, ignored = _inspect_zip(zf)
         if zf.testzip() is not None:
             raise BundleError("Zip file is corrupt")
         notes = _parse_notes(zf.read(json_entry))
@@ -143,6 +161,7 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
             media[(note_name, fname)] = zf.read(info)  # size already bounded by _inspect_zip
     result = _create_notes(service, notes, media)
     result.skipped.extend(skipped)
+    result.ignored = ignored
     return result
 
 
@@ -155,6 +174,7 @@ def _inspect_zip(zf: zipfile.ZipFile):
     json_entry: str | None = None
     media_entries: list[tuple[zipfile.ZipInfo, str, str]] = []
     skipped: list[str] = []
+    ignored = 0
     for info in infos:
         name = info.filename
         if info.is_dir():
@@ -175,13 +195,16 @@ def _inspect_zip(zf: zipfile.ZipFile):
         ):
             raise BundleError(f"Suspicious compression ratio: {name!r}")
         base = PurePosixPath(name).name
+        if _is_os_junk(name):
+            ignored += 1
+            continue
         if base == "notes.json" or (
             json_entry is None and base.endswith(".json") and "media/" not in name
         ):
             if json_entry is None or base == "notes.json":
                 json_entry = name
             continue
-        m = _MEDIA_ENTRY.match(name)
+        m = _MEDIA_ENTRY.match(name) or _FOLDER_MEDIA_ENTRY.match(name)
         if m and PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS:
             media_entries.append((info, m.group(1), base))
         else:
@@ -190,7 +213,13 @@ def _inspect_zip(zf: zipfile.ZipFile):
         raise BundleError("Zip contains no notes.json")
     if zf.getinfo(json_entry).file_size > MAX_JSON_BYTES:
         raise BundleError("notes.json too large")
-    return json_entry, media_entries, skipped
+    return json_entry, media_entries, skipped, ignored
+
+
+def _is_os_junk(name: str) -> bool:
+    """macOS Finder metadata: anything under __MACOSX/, and dot-files (.DS_Store, ._<file>)."""
+    parts = PurePosixPath(name).parts
+    return "__MACOSX" in parts or any(p.startswith(".") for p in parts)
 
 
 def _safe_name(name: str) -> bool:
@@ -294,14 +323,17 @@ def _import_media_ref(service, note_id, src_name, content, media, media_urls, re
     """Resolve a media block's reference to a stored image, importing it once."""
     if content in media_urls:
         return media_urls[content]
+    if content.startswith(MISSING_PREFIX):
+        return content  # already a placeholder (a re-import of an export); keep it visible
     m = _MEDIA_REF.match(content) or _API_MEDIA_REF.match(content)
     if m:
         key = (m.group(1), m.group(2)) if _MEDIA_REF.match(content) else (src_name, m.group(2))
         raw = media.get(key)
         if raw is None:
             result.skipped.append(f"{content}: image not in bundle")
-            return ""
-        url = _store_image(service, note_id, key[1], raw, result)
+            url = _missing(key[1], result)
+        else:
+            url = _store_image(service, note_id, key[1], raw, result)
         media_urls[content] = url
         return url
     if content.startswith(("http://", "https://")):
@@ -316,8 +348,13 @@ def _store_image(service, note_id, filename, raw, result) -> str:
         )  # content-based; refuses SVG/unknown
     except UnsupportedImage as e:
         result.skipped.append(f"{filename}: {e}")
-        return ""
+        return _missing(filename, result)
     service.save_media_file(note_id, new_name, data)
     service.save_module_metadata(note_id, "media", new_name, meta.to_dict())
     result.images += 1
     return f"/api/notes/{note_id}/media/{new_name}"
+
+
+def _missing(filename: str, result: ImportResult) -> str:
+    result.missing.append(filename)
+    return MISSING_PREFIX + filename

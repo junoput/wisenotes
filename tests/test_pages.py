@@ -3,7 +3,9 @@ plain form POSTs with no HX-Request header must redirect to a full page, and
 the same POSTs with the header must return the htmx fragment."""
 
 import asyncio
+import json
 import re
+import zipfile
 from io import BytesIO
 from urllib.parse import quote
 
@@ -372,3 +374,33 @@ def test_stray_non_ascii_media_downloads_with_its_name(client, service):
     resp = client.get(f"/api/notes/{note['id']}/media/{quote('файл.bin')}")
     assert resp.status_code == 200
     assert "filename*=utf-8''" + quote("файл.bin") in resp.headers["content-disposition"]
+
+
+def test_an_import_with_a_missing_image_says_so_on_the_note_page(client):
+    # 20261019-011: skipped images went to the log only; the user saw a clean import.
+    note = {
+        "id": "n1", "name": "Trip", "title": "Trip", "tags": [],
+        "created_at": "2026-01-01T00:00:00", "updated_at": "2026-01-01T00:00:00",
+        "chapters": [
+            {"id": "c1", "title": "Ch", "content": "", "order": 0, "parent_id": None, "type": "chapter"},
+            {"id": "c2", "title": "", "content": "/api/notes/n1/media/gone.png", "order": 1, "parent_id": "c1", "type": "media"},
+        ],
+    }  # fmt: skip
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Trip/Trip.json", json.dumps(note))
+    files = {"file": ("Trip.zip", buf.getvalue(), "application/zip")}
+    resp = client.post("/notes/import", files=files, follow_redirects=False)
+    assert resp.status_code == 303
+    page = client.get(resp.headers["location"]).text
+    assert 'class="import-missing"' in page and "gone.png" in page
+    assert "Image missing from the import: gone.png" in page
+    fragment = client.post("/notes/import", files=files, headers={"hx-request": "true"}).text
+    assert 'class="import-missing"' in fragment  # the htmx path re-renders the editor with it
+    api_resp = client.post("/api/import", files=files).json()
+    assert api_resp["missing"] == ["gone.png"]
+
+
+def test_harness_control_a_complete_note_shows_no_missing_notice(client):
+    nid = _create(client, "Complete")["id"]
+    assert "import-missing" not in client.get(f"/notes/{nid}").text
