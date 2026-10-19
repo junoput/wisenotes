@@ -1,0 +1,2 @@
+{# Why an import was refused. In the add-note form; sent alone, out of band, to an htmx request. #}
+<p id="import-error" class="import-missing import-error" role="alert"{% if oob %} hx-swap-oob="true"{% endif %}{% if not import_error %} hidden{% endif %}>{{ import_error or "" }}</p>

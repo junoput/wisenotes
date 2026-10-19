@@ -83,6 +83,21 @@ def _after_change(
     return RedirectResponse(url=f"/notes/{note.id}" if note else "/", status_code=303)
 
 
+def _import_refused(request: Request, service: NoteService, message: str) -> Response:
+    """A refused import says why, on the import form: the add-note page without
+    scripts, an out-of-band swap into the open overlay with htmx. Both are 400s."""
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/import_error.html",
+            {"request": request, "import_error": message, "oob": True},
+            status_code=400,
+        )
+    resp = _page(request, service, None, new_note=True, import_error=message)
+    resp.status_code = 400
+    return resp
+
+
 def _attachment(filename: str) -> str:
     """RFC 6266: an ASCII fallback, and the real name as UTF-8 in filename*.
 
@@ -142,9 +157,9 @@ async def import_notes(
         # Decoding images is CPU-bound; off the event loop so one import cannot stall every request.
         result = await run_in_threadpool(import_bundle, service, file.filename or "", content)
     except BundleError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        return _import_refused(request, service, str(e))
     if not result.notes:
-        raise HTTPException(status_code=400, detail="The file contained no notes")
+        return _import_refused(request, service, "The file contained no notes")
     for line in result.skipped:
         logger.info("import skipped %s", line)
     return _after_change(request, service, result.notes[0], headers=CLOSE_OVERLAY)

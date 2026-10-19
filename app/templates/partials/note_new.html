@@ -15,13 +15,14 @@
       </div>
       <div class="note-settings-section">
         <strong>Import from a file</strong>
+        {% include "partials/import_error.html" %}
         <form class="row import-note-form" action="/notes/import" method="post" enctype="multipart/form-data"
               hx-post="/notes/import" hx-encoding="multipart/form-data" hx-target="body" hx-swap="none">
           <input type="file" name="file" accept=".json,.zip,application/json,application/zip" required aria-label="Notes file">
           <button type="submit" class="btn">Import</button>
         </form>
-        <p class="muted">A <code>.json</code> export, or a <code>.zip</code> with <code>notes.json</code> and <code>media/&lt;note&gt;/&lt;image&gt;</code>
-          (what "Download this note" produces). Imported notes get new ids; images are re-encoded; anything else in the file is ignored.</p>
+        <p class="muted">A <code>.json</code> export, a <code>.zip</code> with <code>notes.json</code> and <code>media/&lt;note&gt;/&lt;image&gt;</code>
+          (what "Download this note" produces), or a <code>.zip</code> of note folders from the data directory; every folder becomes a note. Imported notes get new ids; images are re-encoded; anything else in the file is ignored.</p>
       </div>
     </div>
     <div class="note-settings-actions">
