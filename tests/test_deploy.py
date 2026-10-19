@@ -29,7 +29,8 @@ case "$1" in
        grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "run failed" >&2; exit 126; }
        printf '%s running\n' "$id" >"$S/container"; rm -f "$S/deaf"
        while [ $# -gt 0 ]; do [ "$1" = -p ] && echo "$2" >"$S/port"; shift; done ;;
-  port) [ -f "$S/container" ] && read -r p <"$S/port" && echo "${p%:*}" ;;  # real: "127.0.0.1:20004"
+  port) [ -f "$S/container" ] && read -r _ st <"$S/container" && [ "$st" = running ] \
+          && read -r p <"$S/port" && echo "${p%:*}" ;;  # real: "127.0.0.1:20004", and nothing once stopped
   rm) rm -f "$S/container" ;;
   inspect) [ -f "$S/container" ] || exit 125; read -r id st <"$S/container"
            sha=${id#id-wisenotes:}
