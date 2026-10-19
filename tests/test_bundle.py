@@ -381,3 +381,53 @@ class TestFinderZip:
         again = import_bundle(service, "x.zip", export_zip(service, [first.id]))
         [note] = again.notes
         assert next(c for c in note.chapters if c.type == "media").content == "missing:gone.png"
+
+
+def _folder_note(name: str, image: str) -> dict:
+    n = _note(id=f"id-{name}", name=name, title=name)
+    n["chapters"][2]["content"] = f"/api/notes/id-{name}/media/{image}"
+    return n
+
+
+class TestSeveralNoteFolders:
+    """20261019-069: two note folders in one zip imported only the first, silently."""
+
+    def _zip_of_folders(self, *names: str, extra: dict[str, bytes] | None = None) -> bytes:
+        entries: dict[str, bytes] = {}
+        for i, name in enumerate(names):
+            entries[f"{name}/{name}.json"] = json.dumps(_folder_note(name, f"{name}.png")).encode()
+            entries[f"{name}/media/{name}.png"] = _png(("red", "blue", "green")[i % 3])
+        entries.update(extra or {})
+        return _zip(entries)
+
+    def test_every_note_folder_is_imported_with_its_own_images(self, service):
+        r = import_bundle(service, "two.zip", self._zip_of_folders("Bravo", "Alpha"))
+        assert [n.title for n in r.notes] == ["Alpha", "Bravo"]  # sorted, so stable
+        assert r.images == 2 and r.missing == [] and r.skipped == []
+        for note in r.notes:
+            [stored] = service.repo.list_media(note.name)
+            media = next(c for c in note.chapters if c.type == "media")
+            assert media.content == f"/api/notes/{note.id}/media/{stored}"
+
+    def test_harness_control_one_folder_still_imports_one_note(self, service):
+        r = import_bundle(service, "one.zip", self._zip_of_folders("Alpha"))
+        assert [n.title for n in r.notes] == ["Alpha"] and r.images == 1
+
+    def test_an_export_mixed_with_a_note_folder_is_refused_whole(self, service):
+        z = self._zip_of_folders("Alpha", extra={"notes.json": _doc(_note())})
+        with pytest.raises(BundleError, match=r"notes\.json and also Alpha/Alpha\.json"):
+            import_bundle(service, "mixed.zip", z)
+        assert service.list_notes() == []
+
+    def test_two_exports_in_one_zip_are_refused(self, service):
+        z = _zip({"a/notes.json": _doc(_note()), "b/notes.json": _doc(_note())})
+        with pytest.raises(BundleError, match=r"more than one notes\.json"):
+            import_bundle(service, "two-exports.zip", z)
+        assert service.list_notes() == []
+
+    def test_the_json_size_cap_counts_every_note_file(self, service, monkeypatch):
+        z = self._zip_of_folders("Alpha", "Bravo")
+        one = len(json.dumps(_folder_note("Alpha", "Alpha.png")))
+        monkeypatch.setattr(bundle, "MAX_JSON_BYTES", one + 10)  # each fits, both do not
+        with pytest.raises(BundleError, match="too large together"):
+            import_bundle(service, "big.zip", z)
