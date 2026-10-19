@@ -439,6 +439,7 @@ def test_theme_ignores_unknown_values_and_foreign_targets(client):
     for target in (
         "https://evil.example/phish",
         "//evil.example/x",
+        "////evil.example/x",  # no netloc, but the path left is //evil.example/x
         "/\\evil.example/x",
         "/\t/evil.example/x",  # browsers drop the tab and read //evil.example
         "javascript:alert(1)",
