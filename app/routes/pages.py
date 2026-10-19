@@ -125,14 +125,15 @@ async def home(request: Request, service: NoteService = Depends(get_note_service
 
 
 @router.post("/theme")
-async def set_theme(request: Request, theme: str = Form("system")):
-    """Remember light/dark in a cookie (base.html reads it); "system" forgets it."""
-    back = urlsplit(request.headers.get("referer", ""))
-    path = (
-        back.path if back.netloc in ("", request.url.netloc) and back.path.startswith("/") else "/"
-    )
-    if path != "/" and back.query:
-        path += "?" + back.query
+async def set_theme(request: Request, theme: str = Form("system"), next: str = Form("/")):
+    """Remember light/dark in a cookie (base.html reads it); "system" forgets it.
+
+    The form names the page to return to in `next`. The Referer cannot do it:
+    every page is sent with Referrer-Policy: no-referrer. Only a local path is
+    followed; anything else goes to "/"."""
+    back = urlsplit(next)
+    local = not back.scheme and not back.netloc and next.startswith("/") and "\\" not in next
+    path = (back.path + ("?" + back.query if back.query else "")) if local else "/"
     resp = RedirectResponse(url=path, status_code=303)
     if theme in ("light", "dark"):
         resp.set_cookie("theme", theme, max_age=THEME_COOKIE_AGE, samesite="lax", httponly=True)

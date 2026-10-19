@@ -411,10 +411,7 @@ def test_theme_is_a_cookie_the_page_reads(client):
     # no cookie: no data-theme, so the CSS follows the system preference
     assert "data-theme=" not in client.get("/").text
     resp = client.post(
-        "/theme",
-        data={"theme": "light"},
-        headers={"referer": f"http://testserver/notes/{nid}"},
-        follow_redirects=False,
+        "/theme", data={"theme": "light", "next": f"/notes/{nid}"}, follow_redirects=False
     )
     assert resp.status_code == 303 and resp.headers["location"] == f"/notes/{nid}"
     assert client.cookies.get("theme") == "light"
@@ -423,18 +420,30 @@ def test_theme_is_a_cookie_the_page_reads(client):
     assert "data-theme=" not in client.get("/").text
 
 
-def test_theme_ignores_unknown_values_and_foreign_referers(client):
+def test_the_theme_switch_returns_to_the_page_it_was_on(client):
+    # Every page is sent with Referrer-Policy: no-referrer, so a browser posts
+    # /theme with no Referer; the form itself names the page to return to.
+    nid = _create(client, "Back here")["id"]
+    page = client.get(f"/notes/{nid}?x=1")
+    assert page.headers["referrer-policy"] == "no-referrer"  # the premise
+    assert f'name="next" value="/notes/{nid}?x=1"' in page.text
+    resp = client.post(
+        "/theme", data={"theme": "dark", "next": f"/notes/{nid}?x=1"}, follow_redirects=False
+    )
+    assert resp.headers["location"] == f"/notes/{nid}?x=1"
+
+
+def test_theme_ignores_unknown_values_and_foreign_targets(client):
     client.cookies.set("theme", 'x" onload="alert(1)')
     assert "data-theme=" not in client.get("/").text  # only light/dark are echoed
-    resp = client.post(
-        "/theme",
-        data={"theme": "dark"},
-        headers={"referer": "https://evil.example/phish"},
-        follow_redirects=False,
-    )
-    assert resp.headers["location"] == "/"
-    for ref in ("//evil.example/x", "javascript:alert(1)"):
-        resp = client.post(
-            "/theme", data={"theme": "dark"}, headers={"referer": ref}, follow_redirects=False
-        )
-        assert resp.headers["location"] == "/", ref
+    for target in (
+        "https://evil.example/phish",
+        "//evil.example/x",
+        "/\\evil.example/x",
+        "/\t/evil.example/x",  # browsers drop the tab and read //evil.example
+        "javascript:alert(1)",
+        "notes/relative",
+        "",
+    ):
+        resp = client.post("/theme", data={"theme": "dark", "next": target}, follow_redirects=False)
+        assert resp.headers["location"] == "/", target
