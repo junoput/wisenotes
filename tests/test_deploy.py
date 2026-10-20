@@ -57,7 +57,8 @@ case "$2" in
   is-system-running) cat "$S/systemd" 2>/dev/null || echo running ;;
   is-active) [ ! -f "$S/unit_inactive" ] ;;
   start|restart) podman start "${3%-container.service}" ;;  # the unit's ExecStart, in short
-  stop) [ -f "$S/container" ] && podman stop "${3%-container.service}" ;;
+  stop) [ -f "$S/no_unit" ] && { echo "Unit $3 not loaded." >&2; exit 5; }
+        [ -f "$S/container" ] && podman stop "${3%-container.service}" ;;
   is-enabled) grep -qx "$3" "$S/enabled" 2>/dev/null ;;
   enable) shift 2; for u in "$@"; do [ "$u" = --now ] || echo "$u" >>"$S/enabled"; done ;;
 esac
@@ -598,9 +599,24 @@ def test_the_unit_is_stopped_before_removal_even_while_the_manager_is_stopping(b
     assert stop < next(i for i, x in enumerate(log) if x.startswith("podman rm"))
 
 
-def test_harness_control_an_inactive_unit_is_not_stopped(box):
+def test_the_unit_is_stopped_before_removal_while_it_is_activating(box):
+    # 20261020-087: is-active is false for activating/deactivating (RestartSec=2), so
+    # the stop was skipped and podman rm -f ran under a pending start.
     deploy_good(box, "aaa")
-    (box / "state/unit_inactive").touch()
+    (box / "state/unit_inactive").touch()  # is-active answers no, as while activating
     (box / "state/log").write_text("")
     deploy_good(box, "bbb")
-    assert "systemctl --user stop" not in (box / "state/log").read_text()
+    log = (box / "state/log").read_text().splitlines()
+    stop = log.index("systemctl --user stop wisenotes-container.service")
+    assert stop < next(i for i, x in enumerate(log) if x.startswith("podman rm"))
+
+
+def test_harness_control_the_unconditional_stop_is_harmless_when_there_is_no_unit(box):
+    # The harm an unconditional stop could do is fail the deploy where there is
+    # nothing to stop. It does not: an unloaded unit (exit 5) still deploys.
+    deploy_good(box, "aaa")
+    (box / "state/no_unit").touch()
+    (box / "state/log").write_text("")
+    deploy_good(box, "bbb")
+    assert "systemctl --user stop wisenotes-container.service" in (box / "state/log").read_text()
+    assert serving(box) == "id-wisenotes:bbb"
