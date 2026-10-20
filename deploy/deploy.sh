@@ -80,18 +80,6 @@ smoke() { # wait until both probes answer 200; return 1 on timeout
   return 1
 }
 
-start_container() { # $1 image
-  # keep-id: the process runs as the host user, so it can write the bind-mounted
-  # data dir; without it rootless podman maps the image user to a subuid and
-  # every write to /app/data is EACCES (found in rehearsal).
-  run podman run -d --name "$NAME" --restart=always \
-    --userns=keep-id --user "$(id -u):$(id -g)" \
-    -p "$BIND:$PORT:8000" \
-    -v "$DATA:/app/data:Z" \
-    -e WISENOTES_DATA_DIR=/app/data \
-    "$1" >/dev/null
-}
-
 port_move_warning() { # say so when the container about to be replaced published another host port
   local old
   # from the container's config, not `podman port`, which says nothing once it stopped
@@ -101,51 +89,88 @@ port_move_warning() { # say so when the container about to be replaced published
   fi
 }
 
-stop_container() {
-  if have_container "$NAME"; then run podman rm -f "$NAME" >/dev/null; fi
+UNIT_NAME="$NAME-container.service"
+
+have_systemd() {
+  # is-system-running exits non-zero for "degraded" (a failed unit somewhere), which is
+  # still a running user manager; only offline/unknown/missing mean no systemd
+  local state
+  state=$(systemctl --user is-system-running 2>/dev/null || true)
+  [ "$state" = running ] || [ "$state" = degraded ] || [ "$state" = starting ]
 }
 
-boot_unit() { # the unit text: start this one container at boot, nothing else
+container_unit() { # the unit text: run this one container, restart it if it dies, nothing else
+  # --attach keeps `podman start` in the foreground, so the unit sees the
+  # container exit, and conmon and the port forwarder start in this unit's
+  # cgroup rather than in the caller's. A crash exits non-zero and is
+  # restarted; `systemctl stop` (ExecStop) is a clean stop and is not.
+  # The attached output is dropped: conmon already sends the container's
+  # output to the journal, and keeping both doubles every log line.
+  local podman
+  podman=$(command -v podman)
   cat <<UNIT
-# Written by wisenotes deploy/deploy.sh. Starts only the $NAME container at boot.
+# Written by wisenotes deploy/deploy.sh. Runs only the $NAME container.
 [Unit]
 Description=wisenotes container $NAME
 Wants=network-online.target
 After=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=$(command -v podman) start $NAME
+ExecStart=$podman start --attach $NAME
+ExecStop=$podman stop -t 10 $NAME
+Restart=on-failure
+RestartSec=2
+StandardOutput=null
+StandardError=null
 
 [Install]
 WantedBy=default.target
 UNIT
 }
 
-ensure_boot_persistence() {
+ensure_unit() {
   # Rootless containers do not come back after a reboot by themselves. The
   # box-wide answer, podman-restart.service, starts EVERY restart=always
   # container of this user, so it is not ours to enable (operator, 2026-10-14).
-  # is-system-running exits non-zero for "degraded" (a failed unit somewhere), which is
-  # still a running user manager; only offline/unknown/missing mean no systemd
-  local state unit dir
-  state=$(systemctl --user is-system-running 2>/dev/null || true)
-  if [ "$state" = running ] || [ "$state" = degraded ] || [ "$state" = starting ]; then
-    unit="$NAME-container.service"
-    dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-    if [ "$(cat "$dir/$unit" 2>/dev/null)" != "$(boot_unit)" ]; then
-      say "writing $dir/$unit so $NAME returns after a reboot"
-      run mkdir -p "$dir"
-      if [ "$DRY" = 1 ]; then printf '  + write %s\n' "$dir/$unit"; else boot_unit >"$dir/$unit"; fi
-      run systemctl --user daemon-reload || true
-    fi
-    if ! systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
-      run systemctl --user enable "$unit" || say "could not enable $unit; run: systemctl --user enable $unit"
-    fi
-  else
-    say "no user systemd here: the container will not return after a reboot on this host"
+  local dir
+  dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  if [ "$(cat "$dir/$UNIT_NAME" 2>/dev/null)" != "$(container_unit)" ]; then
+    say "writing $dir/$UNIT_NAME: it runs $NAME, restarts it if it dies, and starts it at boot"
+    run mkdir -p "$dir"
+    if [ "$DRY" = 1 ]; then printf '  + write %s\n' "$dir/$UNIT_NAME"; else container_unit >"$dir/$UNIT_NAME"; fi
+    run systemctl --user daemon-reload || true
   fi
+  if ! systemctl --user is-enabled "$UNIT_NAME" >/dev/null 2>&1; then
+    run systemctl --user enable "$UNIT_NAME" || say "could not enable $UNIT_NAME; run: systemctl --user enable $UNIT_NAME"
+  fi
+}
+
+start_container() { # $1 image
+  # keep-id: the process runs as the host user, so it can write the bind-mounted
+  # data dir; without it rootless podman maps the image user to a subuid and
+  # every write to /app/data is EACCES (found in rehearsal).
+  # No --restart: the unit is the one restarter. A podman policy as well would
+  # put a second, box-wide restarter (podman-restart.service) back in play.
+  run podman create --name "$NAME" \
+    --userns=keep-id --user "$(id -u):$(id -g)" \
+    -p "$BIND:$PORT:8000" \
+    -v "$DATA:/app/data:Z" \
+    -e WISENOTES_DATA_DIR=/app/data \
+    "$1" >/dev/null || return 1
+  if have_systemd; then
+    ensure_unit
+    run systemctl --user restart "$UNIT_NAME"
+  else
+    say "no user systemd here: nothing restarts $NAME if it dies, and it will not return after a reboot"
+    run podman start "$NAME" >/dev/null
+  fi
+}
+
+stop_container() {
+  # Stop the unit first: removing the container under a running unit counts as
+  # a crash, and the unit would try to start a container that is gone.
+  if have_systemd; then run systemctl --user stop "$UNIT_NAME" 2>/dev/null || true; fi
+  if have_container "$NAME"; then run podman rm -f "$NAME" >/dev/null; fi
 }
 
 case "$MODE" in
@@ -167,7 +192,7 @@ case "$MODE" in
     say "starting $NAME from the current image"
     port_move_warning
     stop_container
-    if start_container "$NAME:current" && smoke; then ensure_boot_persistence; exit 0; fi
+    if start_container "$NAME:current" && smoke; then exit 0; fi
     # Never leave serving an image that fails the smoke check.
     say "current image failed to start or failed smoke: NOTHING IS SERVING; last log lines:"
     podman logs --tail 20 "$NAME" 2>&1 | sed 's/^/    /' || true
@@ -211,7 +236,6 @@ fi
 if start_container "$NAME:$sha" && smoke; then
   if have_image "$NAME:current"; then podman tag "$NAME:current" "$NAME:previous"; fi
   podman tag "$NAME:$sha" "$NAME:current"
-  ensure_boot_persistence
   say "deployed $NAME from $sha on http://$BIND:$PORT/ (data: $DATA)"
   exit 0
 fi

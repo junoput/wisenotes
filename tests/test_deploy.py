@@ -25,9 +25,9 @@ case "$1" in
   container) [ -f "$S/container" ] ;;
   build) while [ $# -gt 0 ]; do [ "$1" = -t ] && echo "id-$2" >"$S/images/$(img "$2")"; shift; done ;;
   tag) cp "$S/images/$(img "$2")" "$S/images/$(img "$3")" ;;
-  run) image=${!#}; id=$(cat "$S/images/$(img "$image")") || exit 125
-       grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "run failed" >&2; exit 126; }
-       printf '%s running\n' "$id" >"$S/container"; rm -f "$S/deaf"
+  create) image=${!#}; id=$(cat "$S/images/$(img "$image")") || exit 125
+       grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "create failed" >&2; exit 126; }
+       printf '%s created\n' "$id" >"$S/container"
        while [ $# -gt 0 ]; do [ "$1" = -p ] && echo "$2" >"$S/port"; shift; done ;;
   port) [ -f "$S/container" ] && read -r _ st <"$S/container" && [ "$st" = running ] \
           && read -r p <"$S/port" && echo "${p%:*}" ;;  # real: "127.0.0.1:20004", and nothing once stopped
@@ -39,7 +39,9 @@ case "$1" in
                         *PortBindings*) read -r p <"$S/port"; p=${p%:*}; echo "${p##*:}" ;;
                         *) echo "$id" ;; esac ;;
   logs) echo "stub log" ;;
-  start) [ -f "$S/container" ] && read -r id _ <"$S/container" && printf '%s running\n' "$id" >"$S/container" ;;
+  start) [ -f "$S/container" ] && read -r id _ <"$S/container" && printf '%s running\n' "$id" >"$S/container" \
+           && rm -f "$S/deaf" ;;
+  stop) [ -f "$S/container" ] && read -r id _ <"$S/container" && printf '%s stopped\n' "$id" >"$S/container" ;;
 esac
 """,
     "curl": r"""#!/usr/bin/env bash
@@ -52,7 +54,9 @@ if [ "$st" != running ] || grep -qx "$id" "$S/bad" 2>/dev/null; then printf 500;
     "systemctl": r"""#!/usr/bin/env bash
 S=$STUB_STATE; echo "systemctl $*" >>"$S/log"
 case "$2" in
-  is-system-running) echo running ;;
+  is-system-running) cat "$S/systemd" 2>/dev/null || echo running ;;
+  start|restart) podman start "${3%-container.service}" ;;  # the unit's ExecStart, in short
+  stop) [ -f "$S/container" ] && podman stop "${3%-container.service}" ;;
   is-enabled) grep -qx "$3" "$S/enabled" 2>/dev/null ;;
   enable) shift 2; for u in "$@"; do [ "$u" = --now ] || echo "$u" >>"$S/enabled"; done ;;
 esac
@@ -160,16 +164,73 @@ def test_start_never_leaves_a_failing_image_serving(box):
 # ---------------------------------------------------------------- item 8
 
 
+def unit_text(box):
+    return (box / "home/.config/systemd/user/wisenotes-container.service").read_text()
+
+
 def test_boot_persistence_is_a_wisenotes_only_unit(box):
     deploy_good(box, "aaa")
     log = (box / "state/log").read_text()
     assert "podman-restart" not in log  # never enabled, never queried
-    unit = box / "home/.config/systemd/user/wisenotes-container.service"
-    text = unit.read_text()
-    assert f"ExecStart={box / 'bin/podman'} start wisenotes\n" in text
+    text = unit_text(box)
+    assert f"ExecStart={box / 'bin/podman'} start --attach wisenotes\n" in text
+    assert f"ExecStop={box / 'bin/podman'} stop -t 10 wisenotes\n" in text
     assert (box / "state/enabled").read_text().split() == ["wisenotes-container.service"]
-    # the unit starts one container by name; nothing in it reaches other containers
-    assert "--all" not in text and "restart" not in text.lower().replace("remainafterexit", "")
+    # the unit runs one container by name; nothing in it reaches other containers
+    assert "--all" not in text and "podman-restart" not in text
+
+
+# ---------------------------------------------------------------- 20261019-054: one restarter
+
+
+def test_the_container_has_no_podman_restart_policy(box):
+    # Two restarters raced: podman's restart=always (which also enrolled the
+    # container in the box-wide podman-restart.service) and the unit.
+    deploy_good(box, "aaa")
+    log = (box / "state/log").read_text()
+    assert "podman create --name wisenotes" in log
+    assert "--restart" not in log
+    assert "podman run" not in log
+
+
+def test_the_unit_restarts_the_container_when_it_dies(box):
+    deploy_good(box, "aaa")
+    text = unit_text(box)
+    assert "\nRestart=on-failure\n" in text
+    assert "RemainAfterExit" not in text and "Type=oneshot" not in text  # a oneshot sees no exit
+
+
+def test_the_unit_is_what_starts_the_container(box):
+    # Started by the unit, conmon and the port forwarder live in the unit's
+    # cgroup, not in the preview loop's (20261019-014).
+    deploy_good(box, "aaa")
+    log = (box / "state/log").read_text().splitlines()
+    create = log.index(next(x for x in log if x.startswith("podman create")))
+    rest = log[create + 1 :]
+    assert "systemctl --user restart wisenotes-container.service" in rest
+    assert not any(
+        x.startswith("podman start")
+        for x in rest[: rest.index("systemctl --user restart wisenotes-container.service")]
+    )
+
+
+def test_the_unit_is_stopped_before_its_container_is_removed(box):
+    deploy_good(box, "aaa")
+    (box / "state/log").write_text("")
+    deploy_good(box, "bbb")
+    log = (box / "state/log").read_text().splitlines()
+    stop = log.index("systemctl --user stop wisenotes-container.service")
+    rm = next(i for i, x in enumerate(log) if x.startswith("podman rm"))
+    assert stop < rm
+
+
+def test_without_systemd_the_container_is_started_directly_and_says_what_is_missing(box):
+    (box / "state/systemd").write_text("offline\n")
+    r = deploy_good(box, "aaa")
+    assert "nothing restarts wisenotes if it dies" in r.stdout
+    log = (box / "state/log").read_text()
+    assert "podman start wisenotes" in log and "systemctl --user restart" not in log
+    assert serving(box) == "id-wisenotes:aaa"
 
 
 def test_boot_unit_is_written_once_and_enabled_once(box):
@@ -201,7 +262,7 @@ def test_harness_control_a_running_container_is_left_alone(box):
     r = run(box, script="preview.sh", sha="aaa")
     assert "already serving" in r.stdout
     after = (box / "state/log").read_text()[len(before) :]
-    assert "podman run" not in after and "podman rm" not in after
+    assert "podman create" not in after and "podman rm" not in after
 
 
 def test_stubs_are_the_ones_on_path(box):
