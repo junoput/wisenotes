@@ -37,11 +37,14 @@ esac
 # restarted the container itself, and every pass said "already serving".
 # One slow answer is not deafness: treating it as down removes a working
 # container from the live notes, so only the second failed pass in a row does.
-# `serving_sha --judge` is the one call per pass that counts towards that.
+# `serving_sha --judge` is the one call per pass that counts towards that, and
+# the marker holds the container's id, so a miss by a container that a deploy
+# has since replaced never counts against the new one (20261020-044).
 serving_sha() {
-  local sha addr code
+  local sha id addr code
   sha=$(podman inspect -f '{{if .State.Running}}{{index .Config.Labels "wisenotes.sha"}}{{end}}' "$NAME" 2>/dev/null || true)
   [ -n "$sha" ] || return 0
+  id=$(podman inspect -f '{{.Id}}' "$NAME" 2>/dev/null || true)
   addr=$(podman port "$NAME" 8000/tcp 2>/dev/null || true)
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$addr/health" || true)
   if [ "$code" = 200 ]; then
@@ -49,11 +52,11 @@ serving_sha() {
     echo "$sha"
   elif [ "${1:-}" != --judge ]; then
     echo "$sha"
-  elif [ -f "$deaf_file" ]; then
+  elif [ -n "$id" ] && [ "$(cat "$deaf_file" 2>/dev/null)" = "$id" ]; then
     rm -f "$deaf_file"
     echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}, the second pass in a row; treating it as down" >&2
   else
-    : >"$deaf_file"
+    printf '%s\n' "$id" >"$deaf_file"
     echo "preview: $NAME is running $sha but http://$addr/health answers ${code:-nothing}; checking again next pass before treating it as down" >&2
     echo "$sha"
   fi
@@ -85,22 +88,32 @@ checkout_tip() {
   if [ "$(git -C "$repo" rev-parse "$before:deploy/preview.sh")" != "$(git -C "$repo" rev-parse "$tip:deploy/preview.sh")" ]; then
     # bash keeps reading the old file; run the tip's preview.sh instead
     echo "preview: preview.sh changed at $tip; restarting it"
+    # this pass already judged the container; the new process must not judge it
+    # again seconds later and count one slow moment as two passes
+    export WISENOTES_PREVIEW_JUDGED=1
     exec "$here/preview.sh" "${ARGS[@]}"
   fi
 }
 
 pass() {
   local tip serving tried
-  git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping $(serving_sha)"; return 0; }
-  tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
-  serving=$(serving_sha --judge)
-  tried=$(cat "$last_tried_file" 2>/dev/null || true)
+  # Judged before the fetch, so a deaf container is restarted even while
+  # origin is unreachable.
+  if [ -n "${WISENOTES_PREVIEW_JUDGED:-}" ]; then
+    unset WISENOTES_PREVIEW_JUDGED
+    serving=$(serving_sha)
+  else
+    serving=$(serving_sha --judge)
+  fi
   if [ -z "$serving" ] && podman image exists "$NAME:current"; then
     # nothing running (a reboot, or a removed container) but a good image exists: serve it
     echo "preview: no container running; starting the current image"
     "$here/deploy.sh" --start || echo "preview: current image failed to start"
     serving=$(serving_sha)
   fi
+  git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping ${serving:-nothing}"; return 0; }
+  tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
+  tried=$(cat "$last_tried_file" 2>/dev/null || true)
   if [ "$tip" = "$serving" ]; then echo "preview: $BRANCH at $tip already serving"; return 0; fi
   if [ "$tip" = "$tried" ]; then echo "preview: $BRANCH at $tip failed smoke earlier; still serving ${serving:-nothing}; waiting for the tip to move"; return 0; fi
   echo "preview: $BRANCH moved ${serving:-none} -> $tip; deploying with the deploy scripts at $tip"
