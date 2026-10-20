@@ -223,11 +223,25 @@ class Arm:
         content = self.api(ctx, f"/api/notes/{mid}")["chapters"][1]["content"]
         self.rec("pick image", bool(files) and content.endswith(files[0]), content)
 
+        # The picked image is in use: it has no delete, only a marker (20261014-188).
+        # A second, unused image is the one deleted.
         page.goto(B + edit)
-        page.locator(".media-gallery-thumb").first.hover()
+        guarded = (
+            page.locator(".media-gallery .media-in-use").count() == 1
+            and page.locator(".media-gallery button.media-delete-btn").count() == 0
+        )
+        page.locator("form.media-upload input[type=file]").set_input_files(
+            {"name": "spare.png", "mimeType": "image/png", "buffer": png_bytes()}
+        )
+        if not self.js:
+            page.locator("form.media-upload button[type=submit]").click()
+        self.wait(page, 1500)
+        page.goto(B + edit)
+        page.locator(".media-gallery-thumb").last.hover()
         page.locator(".media-gallery button.media-delete-btn").first.dispatch_event("click")
         self.wait(page, 1000)
-        self.rec("delete image", self.api(ctx, f"/api/notes/{mid}/media/list")["media"] == [])
+        left = self.api(ctx, f"/api/notes/{mid}/media/list")["media"]
+        self.rec("delete image", guarded and left == files, f"guarded={guarded} left={left}")
         ctx.request.delete(f"{B}/api/notes/{mid}")
 
         r = ctx.request.get(B + "/api/export")

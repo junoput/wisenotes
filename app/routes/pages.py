@@ -268,13 +268,9 @@ async def edit_chapter(
         return templates.TemplateResponse(
             request,
             "partials/chapter_edit_form.html",
-            _ctx(
-                request, note=note, chapter=chapter, media_files=service.repo.list_media(note.name)
-            ),
+            _ctx(request, note=note, chapter=chapter, media_files=_media_files(service, note)),
         )
-    return _page(
-        request, service, note, editing=chapter, media_files=service.repo.list_media(note.name)
-    )
+    return _page(request, service, note, editing=chapter, media_files=_media_files(service, note))
 
 
 @router.post("/notes/{note_id}/chapters/{chapter_id}/edit")
@@ -353,6 +349,27 @@ async def move_chapter(
 # ---------------------------------------------------------------- media
 
 
+def _media_users(service: NoteService, note: Note, filename: str) -> list[str]:
+    """The media blocks, in any note, that show this file: "<note> / <chapter>"."""
+    url = f"/api/notes/{note.id}/media/{filename}"
+    users = []
+    for n in service.list_notes():
+        titles = {c.id: c.title for c in n.chapters}
+        for c in n.chapters:
+            if c.type == "media" and (c.content or "").strip() == url:
+                where = titles.get(c.parent_id or "") or c.title or "untitled"
+                users.append(f"{n.title} / {where}")
+    return users
+
+
+def _media_files(service: NoteService, note: Note) -> list[dict]:
+    """The gallery's files, each with the blocks that use it (a used file has no delete)."""
+    return [
+        {"name": f, "users": _media_users(service, note, f)}
+        for f in service.repo.list_media(note.name)
+    ]
+
+
 def _media_reply(request: Request, service: NoteService, note: Note, chapter_id: str) -> Response:
     """Gallery fragment for htmx; back to the block's edit page otherwise."""
     if _is_htmx(request):
@@ -363,7 +380,7 @@ def _media_reply(request: Request, service: NoteService, note: Note, chapter_id:
                 request,
                 active=note,
                 chapter_id=chapter_id,
-                media_files=service.repo.list_media(note.name),
+                media_files=_media_files(service, note),
             ),
         )
     return RedirectResponse(url=f"/notes/{note.id}/chapters/{chapter_id}/edit", status_code=303)
@@ -401,6 +418,13 @@ async def delete_media(
     service: NoteService = Depends(get_note_service),
 ):
     note = _note_or_404(service, note_id)
+    users = _media_users(service, note, filename)
+    if users:
+        # Deleting it would leave each of these blocks requesting a file that is gone.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{filename} is used by {'; '.join(users)}. Pick another image there first.",
+        )
     if not service.repo.delete_media(note.name, filename):
         raise HTTPException(status_code=404, detail="Media file not found")
     return _media_reply(request, service, note, chapter_id)

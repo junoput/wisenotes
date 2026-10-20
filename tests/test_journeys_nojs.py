@@ -212,9 +212,21 @@ def test_fourteen_journeys_without_scripts(journeys):
     assert client.get(f"/api/notes/{mid}").json()["chapters"][1]["content"].endswith(filename)
     rec("pick image")
 
+    # The picked image is in use, so the page offers no delete for it (20261014-188);
+    # a second, unused image is the one deleted.
     p = Page(client.get(edit_link).text, edit_link)
-    submit(client, p.form(action=f"/media/{filename}/delete"), edit_link)
-    assert client.get(f"/api/notes/{mid}/media/list").json()["media"] == []
+    assert not [
+        f for f in p.forms if f["attrs"].get("action", "").endswith(f"/media/{filename}/delete")
+    ]
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "blue").save(buf, format="PNG")
+    submit(client, upload, edit_link, files={"file": ("spare.png", buf.getvalue(), "image/png")})
+    [spare] = [
+        f for f in client.get(f"/api/notes/{mid}/media/list").json()["media"] if f != filename
+    ]
+    p = Page(client.get(edit_link).text, edit_link)
+    submit(client, p.form(action=f"/media/{spare}/delete"), edit_link)
+    assert client.get(f"/api/notes/{mid}/media/list").json()["media"] == [filename]
     rec("delete image")
 
     p = Page(client.get(settings_link.replace(note_id, mid)).text, "/")
