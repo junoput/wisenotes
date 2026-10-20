@@ -1,0 +1,104 @@
+{
+  "_convention": {
+    "name": "OBSERVABILITY.vocabulary",
+    "version": 6,
+    "managed": "whole-file",
+    "generated_by": "conventions render (dev-agent-tools)",
+    "edits_are_lost": "This file has no unmanaged region. Hand edits are overwritten on the next render; change the template in dev-agent-tools instead.",
+    "prose": "docs/OBSERVABILITY.md",
+    "agreement": "conventions check asserts that the event names here and in the prose are the SAME SET, in both directions."
+  },
+
+  "security_events": {
+    "closed": true,
+    "closed_means": "A producer MUST NOT invent a name. One app with its own spelling is one blind spot, and a blind spot nobody knows about.",
+
+    "common_fields": [
+      { "field": "event.name",          "required": true,  "note": "from the event list below, exactly" },
+      { "field": "event.outcome",       "required": true,  "values": ["success", "failure"] },
+      { "field": "user.id",             "required": true,  "note": "the PSEUDONYMOUS id, never a raw identifier" },
+      { "field": "client.address",      "required": true,  "note": "the source address as the app saw it" },
+      { "field": "user_agent.original", "required": false, "note": "when the client sends one" },
+      { "field": "session.id",          "required": true,  "note": "a per-session random id, never the session token itself" }
+    ],
+    "common_fields_note": "These are in addition to the required log fields every record carries.",
+
+    "events": {
+      "auth.login.success": {
+        "means": "a credential was accepted and a session began",
+        "additional_fields": []
+      },
+      "auth.login.failure": {
+        "means": "a credential was rejected",
+        "additional_fields": [
+          {
+            "field": "error.reason",
+            "required": true,
+            "kind": "code",
+            "values": ["bad_credentials", "unknown_user", "locked", "mfa_required", "mfa_failed"],
+            "note": "A CODE, not prose, because prose cannot be counted. Legitimate in the LOG; the answer to the caller must not say which half was wrong."
+          }
+        ]
+      },
+      "auth.logout": {
+        "means": "a session was ended deliberately",
+        "additional_fields": []
+      },
+      "auth.token.refused": {
+        "means": "a presented token was invalid, expired or unknown",
+        "additional_fields": [
+          {
+            "field": "error.reason",
+            "required": true,
+            "kind": "code",
+            "values": ["expired", "signature", "audience", "issuer", "revoked", "malformed"]
+          }
+        ]
+      },
+      "authz.denied": {
+        "means": "an authenticated principal was refused an action",
+        "additional_fields": [
+          { "field": "action",        "required": true },
+          { "field": "resource.type", "required": true },
+          { "field": "resource.id",   "required": true },
+          { "field": "required",      "required": true, "note": "the permission or role that was required" }
+        ]
+      },
+      "authz.role.change": {
+        "means": "a role, group or permission was granted or removed",
+        "additional_fields": [
+          { "field": "target.user.id", "required": true, "note": "the user whose roles changed, pseudonymous" },
+          { "field": "role",           "required": true },
+          { "field": "change",         "required": true, "values": ["granted", "revoked"] }
+        ]
+      },
+      "admin.action": {
+        "means": "a privileged operation was performed",
+        "additional_fields": [
+          { "field": "action",        "required": true },
+          { "field": "resource.type", "required": true },
+          { "field": "resource.id",   "required": true }
+        ]
+      },
+      "ratelimit.hit": {
+        "means": "a caller was throttled",
+        "additional_fields": [
+          { "field": "limit.name",   "required": true },
+          { "field": "limit.window", "required": true }
+        ]
+      }
+    }
+  },
+
+  "_deliberately_absent": {
+    "note": "These are NOT omissions. A consumer reading an absent key as an oversight would invent one, which is the defect this file exists to stop.",
+    "classification_rule": {
+      "absent_because": "Unsettled. fixloop classifies by family prefix; opscenter matches exact names. A rule encoded here before those two agree would be a guess that consumers delete their hand copies in favour of.",
+      "ticket": "20261013-062"
+    },
+    "reserved_namespaces": {
+      "absent_because": "Not part of this convention. The prose contains no reserved-namespace section; the only occurrence on this box is in one consumer's own release notes, which makes it that consumer's operational concern until it is written into the prose as a versioned change.",
+      "ticket": "20261013-080"
+    }
+  }
+}
