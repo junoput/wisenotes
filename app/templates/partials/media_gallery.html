@@ -1,4 +1,5 @@
-{# Media library for one block: upload, pick, delete. Every action is a form. Needs active, chapter_id, media_files. #}
+{# Media library for one block: upload, pick, delete. Every action is a form. Needs active, chapter_id,
+   media_files ({name, users}). A file a block uses has no delete: it says where it is used instead. #}
 {% set note_id = active.id %}
 <form class="media-upload" action="/notes/{{ note_id }}/media/upload" method="post" enctype="multipart/form-data"
       hx-post="/notes/{{ note_id }}/media/upload" hx-encoding="multipart/form-data" hx-trigger="submit, change"
@@ -8,7 +9,8 @@
   <button type="submit" class="btn">Upload</button>
 </form>
 <div class="media-gallery">
-  {% for filename in media_files %}
+  {% for item in media_files %}
+    {% set filename = item.name %}
     {% set url = '/api/notes/' ~ note_id ~ '/media/' ~ filename %}
     <div class="media-gallery-thumb">
       <form action="/notes/{{ note_id }}/chapters/{{ chapter_id }}/media/select" method="post"
@@ -16,12 +18,16 @@
         <input type="hidden" name="url" value="{{ url }}">
         <button type="submit" class="media-pick" title="Use {{ filename }}"><img src="{{ url }}" alt="{{ filename }}"></button>
       </form>
+      {% if item.users %}
+      <span class="media-in-use" title="Used by {{ item.users|join('; ') }}">in use</span>
+      {% else %}
       <form action="/notes/{{ note_id }}/media/{{ filename }}/delete" method="post"
             hx-post="/notes/{{ note_id }}/media/{{ filename }}/delete" hx-target="#media-gallery-{{ chapter_id }}" hx-swap="innerHTML"
             data-confirm="Delete {{ filename }}?">
         <input type="hidden" name="chapter_id" value="{{ chapter_id }}">
         <button type="submit" class="media-delete-btn" title="Delete {{ filename }}" aria-label="Delete {{ filename }}">&times;</button>
       </form>
+      {% endif %}
     </div>
   {% else %}
     <p class="muted">No media uploaded yet</p>

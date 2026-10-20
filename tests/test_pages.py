@@ -178,6 +178,9 @@ def test_media_upload_select_delete_as_forms(client):
     url = f"/api/notes/{nid}/media/{filename}"
     client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
     assert client.get(f"/api/notes/{nid}").json()["chapters"][1]["content"] == url
+    client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"}
+    )  # free it
     assert (
         client.post(
             f"/notes/{nid}/media/{filename}/delete",
@@ -482,3 +485,58 @@ def test_theme_ignores_unknown_values_and_foreign_targets(client):
     ):
         resp = client.post("/theme", data={"theme": "dark", "next": target}, follow_redirects=False)
         assert resp.headers["location"] == "/", target
+
+
+def _note_with_picked_image(client, title="Pics"):
+    note = _create(client, title)
+    nid, root = note["id"], note["chapters"][0]["id"]
+    client.post(
+        f"/notes/{nid}/chapters", data={"block_type": "media", "position": "child", "ref_id": root}
+    )
+    mcid = client.get(f"/api/notes/{nid}").json()["chapters"][1]["id"]
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "red").save(buf, format="PNG")
+    client.post(
+        f"/notes/{nid}/media/upload",
+        data={"chapter_id": mcid},
+        files={"file": ("red.png", buf.getvalue(), "image/png")},
+    )
+    [filename] = client.get(f"/api/notes/{nid}/media/list").json()["media"]
+    url = f"/api/notes/{nid}/media/{filename}"
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
+    return nid, mcid, filename, url
+
+
+def test_an_image_a_block_shows_cannot_be_deleted(client):
+    # 20261014-188: deleting it left the block requesting a file that was gone (404).
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    page = client.get(f"/notes/{nid}/chapters/{mcid}/edit").text
+    assert f"/media/{filename}/delete" not in page
+    assert 'class="media-in-use" title="Used by Pics / ' in page
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 409 and "is used by Pics / " in resp.json()["detail"]
+    assert client.get(f"/api/notes/{nid}/media/list").json()["media"] == [filename]
+
+
+def test_an_image_another_note_shows_cannot_be_deleted_either(client):
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    other = _create(client, "Elsewhere")
+    root = other["chapters"][0]["id"]
+    client.post(
+        f"/notes/{other['id']}/chapters",
+        data={"block_type": "media", "position": "child", "ref_id": root},
+    )
+    ocid = client.get(f"/api/notes/{other['id']}").json()["chapters"][1]["id"]
+    client.post(f"/notes/{other['id']}/chapters/{ocid}/media/select", data={"url": url})
+    resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+    assert resp.status_code == 409 and "Elsewhere / " in resp.json()["detail"]
+
+
+def test_harness_control_an_unused_image_keeps_its_delete(client):
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    page = client.get(f"/notes/{nid}/chapters/{mcid}/edit").text
+    assert f"/media/{filename}/delete" in page and "media-in-use" not in page
