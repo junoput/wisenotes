@@ -89,9 +89,14 @@ window.addEventListener('resize', positionDropdown);
 
 const typing = (el) => el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
 
-function focusFirstNote() {
-  (document.querySelector('[data-focus-first]') || document.querySelector('.note-list .item'))?.focus({ preventScroll: true });
+// The open note's item if there is one, else the first. Focusing the first item
+// while another note was open drew a focus ring on a note nobody had chosen
+// (20261019-010).
+function focusNote() {
+  (document.querySelector('.note-list .item.active') || document.querySelector('[data-focus-first]')
+    || document.querySelector('.note-list .item'))?.focus({ preventScroll: true });
 }
+const noteOpen = () => Boolean(document.getElementById('editor')?.dataset.noteId);
 
 // Bare Shift: first note, then cycle through blocks.
 window.addEventListener('keydown', (e) => {
@@ -99,7 +104,7 @@ window.addEventListener('keydown', (e) => {
   e.preventDefault();
   const sections = [...document.querySelectorAll('.chapter-section')];
   const idx = sections.indexOf(document.activeElement);
-  if (idx === -1 && document.querySelector('.note-list .item')) return focusFirstNote();
+  if (idx === -1 && document.querySelector('.note-list .item')) return focusNote();
   sections[(idx + 1) % sections.length]?.focus();
 }, true);
 
@@ -212,12 +217,14 @@ function enhance() {
   initDragAndDrop();
 }
 
-document.addEventListener('DOMContentLoaded', () => { enhance(); focusFirstNote(); });
+// On load, focus starts in the list only on the home page, where the list is the page;
+// with a note open it stays where the page put it, as without scripts.
+document.addEventListener('DOMContentLoaded', () => { enhance(); if (!noteOpen()) focusNote(); });
 window.addEventListener('load', renderMath); // KaTeX is deferred; it may land after DOMContentLoaded
 document.body.addEventListener('htmx:beforeSwap', () => {
   document.querySelectorAll('.chapter-edit-mode').forEach((box) => { box._cm?.toTextArea(); box._cm = null; });
 });
 document.body.addEventListener('htmx:afterSwap', (e) => {
   enhance();
-  if (e.detail?.target?.closest?.('#note-list') || e.detail?.target?.id === 'note-list') setTimeout(focusFirstNote, 0);
+  if (e.detail?.target?.closest?.('#note-list') || e.detail?.target?.id === 'note-list') setTimeout(focusNote, 0);
 });
