@@ -169,7 +169,11 @@ start_container() { # $1 image
 stop_container() {
   # Stop the unit first: removing the container under a running unit counts as
   # a crash, and the unit would try to start a container that is gone.
-  if have_systemd; then run systemctl --user stop "$UNIT_NAME" 2>/dev/null || true; fi
+  # Asked of the unit itself, not of the user manager: during a manager state
+  # such as "stopping", have_systemd says no while the unit still runs.
+  if systemctl --user is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+    run systemctl --user stop "$UNIT_NAME" 2>/dev/null || true
+  fi
   if have_container "$NAME"; then run podman rm -f "$NAME" >/dev/null; fi
 }
 

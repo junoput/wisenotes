@@ -55,6 +55,7 @@ if [ "$st" != running ] || grep -qx "$id" "$S/bad" 2>/dev/null; then printf 500;
 S=$STUB_STATE; echo "systemctl $*" >>"$S/log"
 case "$2" in
   is-system-running) cat "$S/systemd" 2>/dev/null || echo running ;;
+  is-active) [ ! -f "$S/unit_inactive" ] ;;
   start|restart) podman start "${3%-container.service}" ;;  # the unit's ExecStart, in short
   stop) [ -f "$S/container" ] && podman stop "${3%-container.service}" ;;
   is-enabled) grep -qx "$3" "$S/enabled" 2>/dev/null ;;
@@ -62,7 +63,8 @@ case "$2" in
 esac
 """,
     "git": r"""#!/usr/bin/env bash
-case "$*" in *rev-parse*) echo "$STUB_SHA" ;; esac
+case "$*" in *rev-parse*) echo "$STUB_SHA" ;;
+  *fetch*) [ ! -f "$STUB_STATE/fetch_fail" ] ;; esac
 """,
     "tar": "#!/usr/bin/env bash\ncat >/dev/null\n",
     "sleep": "#!/usr/bin/env bash\n",
@@ -536,3 +538,69 @@ def test_a_start_on_another_port_says_the_port_moved_even_when_stopped(box):
     r = run(box, script="preview.sh", sha="aaa", PORT="20250")
     assert "PORT MOVES: wisenotes served on 20004 and will serve on 20250" in r.stdout
     assert (box / "state/port").read_text().strip() == "127.0.0.1:20250:8000"
+
+
+# ---------------------------------------------------------------- 20261020-044
+
+
+def test_a_miss_by_a_replaced_container_does_not_count_against_the_new_one(box):
+    # Pass 1: aaa misses once, and the pass deploys bbb. Pass 2: bbb misses once.
+    # That is bbb's FIRST miss; the old marker made it "the second pass in a row".
+    deploy_good(box, "aaa")
+    (box / "state/deaf").touch()
+    r = run(box, script="preview.sh", sha="bbb")
+    assert "checking again next pass" in r.stderr and serving(box) == "id-wisenotes:bbb"
+    (box / "state/deaf").touch()
+    r = run(box, script="preview.sh", sha="bbb")
+    assert "checking again next pass" in r.stderr, r.stderr
+    assert "second pass in a row" not in r.stderr
+
+
+def test_a_deaf_container_is_restarted_while_origin_is_unreachable(box):
+    deploy_good(box, "aaa")
+    (box / "state/fetch_fail").touch()
+    (box / "state/deaf").touch()
+    run(box, script="preview.sh", sha="aaa")
+    r = run(box, script="preview.sh", sha="aaa")
+    assert "second pass in a row" in r.stderr
+    assert "starting the current image" in r.stdout and "fetch failed" in r.stdout
+    assert not (box / "state/deaf").exists() and serving(box) == "id-wisenotes:aaa"
+
+
+def test_harness_control_a_reachable_origin_and_a_healthy_container(box):
+    deploy_good(box, "aaa")
+    (box / "state/fetch_fail").touch()
+    r = run(box, script="preview.sh", sha="aaa")
+    assert "fetch failed; keeping aaa" in r.stdout and "starting" not in r.stdout
+
+
+def test_a_re_exec_does_not_judge_the_container_twice_in_one_pass(box, loop):
+    a = loop["a"]
+    assert serving(box) is None
+    r = preview(box, loop["checkout"])  # deploys A
+    assert serving(box) == f"id-wisenotes:{a}", r.stdout + r.stderr
+    commit(loop["work"], "B", edit=("preview.sh", 'echo "preview.sh of commit B"'))
+    (box / "state/deaf").touch()  # A is slow at both moments of this one pass
+    r = preview(box, loop["checkout"])
+    assert "preview.sh changed at" in r.stdout
+    assert r.stderr.count("checking again next pass") == 1, r.stderr
+    assert "second pass in a row" not in r.stderr and "starting the current image" not in r.stdout
+
+
+def test_the_unit_is_stopped_before_removal_even_while_the_manager_is_stopping(box):
+    # c1dd1d1 review 2a: is-system-running says "stopping", the unit still runs.
+    deploy_good(box, "aaa")
+    (box / "state/systemd").write_text("stopping\n")
+    (box / "state/log").write_text("")
+    run(box, sha="bbb")
+    log = (box / "state/log").read_text().splitlines()
+    stop = log.index("systemctl --user stop wisenotes-container.service")
+    assert stop < next(i for i, x in enumerate(log) if x.startswith("podman rm"))
+
+
+def test_harness_control_an_inactive_unit_is_not_stopped(box):
+    deploy_good(box, "aaa")
+    (box / "state/unit_inactive").touch()
+    (box / "state/log").write_text("")
+    deploy_good(box, "bbb")
+    assert "systemctl --user stop" not in (box / "state/log").read_text()
