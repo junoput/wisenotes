@@ -392,13 +392,24 @@ def _folder_note(name: str, image: str) -> dict:
 class TestSeveralNoteFolders:
     """20261019-069: two note folders in one zip imported only the first, silently."""
 
-    def _zip_of_folders(self, *names: str, extra: dict[str, bytes] | None = None) -> bytes:
+    COLORS = ("red", "blue", "green")
+
+    def _zip_of_folders(self, *paths: str, extra: dict[str, bytes] | None = None) -> bytes:
+        """One folder per path, every image named pic.png (20261020-045: a keying by
+        file name alone must not pass), each folder a different colour."""
         entries: dict[str, bytes] = {}
-        for i, name in enumerate(names):
-            entries[f"{name}/{name}.json"] = json.dumps(_folder_note(name, f"{name}.png")).encode()
-            entries[f"{name}/media/{name}.png"] = _png(("red", "blue", "green")[i % 3])
+        for i, path in enumerate(paths):
+            name = path.rsplit("/", 1)[-1]
+            entries[f"{path}/{name}.json"] = json.dumps(_folder_note(name, "pic.png")).encode()
+            entries[f"{path}/media/pic.png"] = _png(self.COLORS[i % 3])
         entries.update(extra or {})
         return _zip(entries)
+
+    @staticmethod
+    def _color_of(service, note) -> tuple[int, int, int]:
+        [stored] = service.repo.list_media(note.name)
+        with Image.open(service.repo.get_media_path(note.name, stored)) as im:
+            return im.convert("RGB").getpixel((1, 1))
 
     def test_every_note_folder_is_imported_with_its_own_images(self, service):
         r = import_bundle(service, "two.zip", self._zip_of_folders("Bravo", "Alpha"))
@@ -408,6 +419,35 @@ class TestSeveralNoteFolders:
             [stored] = service.repo.list_media(note.name)
             media = next(c for c in note.chapters if c.type == "media")
             assert media.content == f"/api/notes/{note.id}/media/{stored}"
+        alpha, bravo = r.notes
+        assert self._color_of(service, alpha)[2] > 200  # Alpha was zipped blue
+        assert self._color_of(service, bravo)[0] > 200  # Bravo red
+
+    def test_two_folders_with_the_same_name_keep_their_own_images(self, service):
+        # 20261020-045 3a: keyed by the folder directly above media/, both got y's image.
+        r = import_bundle(service, "same.zip", self._zip_of_folders("x/Alpha", "y/Alpha"))
+        assert len(r.notes) == 2 and r.images == 2 and r.missing == []
+        x_note, y_note = r.notes  # path order: x/ before y/
+        assert self._color_of(service, x_note)[0] > 200  # x zipped red
+        assert self._color_of(service, y_note)[2] > 200  # y zipped blue
+
+    def test_a_note_cannot_take_another_folders_images_by_naming_it(self, service):
+        n = _folder_note("Bravo", "pic.png")  # its JSON names Bravo, but it lives in x/
+        z = _zip({"x/x.json": json.dumps(n).encode(), "Bravo/media/pic.png": _png()})
+        r = import_bundle(service, "named.zip", z)
+        assert r.images == 0 and r.missing == ["pic.png"]
+
+    def test_a_note_titled_notes_is_a_note_not_an_export(self, service):
+        # 3b: stored as notes/notes.json, it was classified as an export by its file name.
+        z = self._zip_of_folders("notes", "Alpha")
+        r = import_bundle(service, "with-notes.zip", z)
+        assert sorted(n.title for n in r.notes) == ["Alpha", "notes"] and r.images == 2
+
+    def test_a_data_dir_with_an_old_export_beside_its_folders_is_refused_by_name(self, service):
+        z = self._zip_of_folders("data/Alpha", extra={"data/notes.json": _doc(_note())})
+        with pytest.raises(BundleError, match=r"the export data/notes\.json and also data/Alpha"):
+            import_bundle(service, "datadir.zip", z)
+        assert service.list_notes() == []
 
     def test_harness_control_one_folder_still_imports_one_note(self, service):
         r = import_bundle(service, "one.zip", self._zip_of_folders("Alpha"))
@@ -421,7 +461,9 @@ class TestSeveralNoteFolders:
 
     def test_two_exports_in_one_zip_are_refused(self, service):
         z = _zip({"a/notes.json": _doc(_note()), "b/notes.json": _doc(_note())})
-        with pytest.raises(BundleError, match=r"more than one notes\.json"):
+        with pytest.raises(
+            BundleError, match=r"more than one export: a/notes\.json, b/notes\.json"
+        ):
             import_bundle(service, "two-exports.zip", z)
         assert service.list_notes() == []
 

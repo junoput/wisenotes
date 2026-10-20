@@ -74,7 +74,9 @@ MAX_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100  # above this for a large entry, treat as a bomb
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 _MEDIA_ENTRY = re.compile(r"^(?:.*/)?media/([^/]+)/([^/]+)$")
-_FOLDER_MEDIA_ENTRY = re.compile(r"^(?:.*/)?([^/]+)/media/([^/]+)$")  # data-dir layout
+# data-dir layout: group 1 is the note folder's whole path in the zip, so x/Alpha/ and
+# y/Alpha/ keep their own images (20261020-045)
+_FOLDER_MEDIA_ENTRY = re.compile(r"^((?:.*/)?[^/]+)/media/([^/]+)$")
 _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -143,7 +145,7 @@ def _import_json(service: NoteService, content: bytes) -> ImportResult:
     if len(content) > MAX_JSON_BYTES:
         raise BundleError("JSON too large")
     notes = _parse_notes(content)
-    return _create_notes(service, notes, media={})
+    return _create_notes(service, [(n, n.name) for n in notes], media={})
 
 
 def _import_zip(service: NoteService, content: bytes) -> ImportResult:
@@ -155,10 +157,10 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
         json_entries, media_entries, skipped, ignored = _inspect_zip(zf)
         if zf.testzip() is not None:
             raise BundleError("Zip file is corrupt")
-        notes = [n for entry in json_entries for n in _parse_notes(zf.read(entry))]
+        notes = _notes_in_zip(zf, json_entries)
         media: dict[tuple[str, str], bytes] = {}
-        for info, note_name, fname in media_entries:
-            media[(note_name, fname)] = zf.read(info)  # size already bounded by _inspect_zip
+        for info, scope, fname in media_entries:
+            media[(scope, fname)] = zf.read(info)  # size already bounded by _inspect_zip
     result = _create_notes(service, notes, media)
     result.skipped.extend(skipped)
     result.ignored = ignored
@@ -168,17 +170,14 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
 def _inspect_zip(zf: zipfile.ZipFile):
     """Decide what will be read, from the central directory alone.
 
-    An export has one notes.json listing every note. Note folders zipped from
-    the data directory have one <name>/<name>.json each, and every one of them
-    is imported: taking the first and dropping the rest was a silent partial
-    import. A zip with both is ambiguous and refused, never half-read.
+    Every .json outside media/ is a candidate; _notes_in_zip decides by content
+    whether each is an export or one note.
     """
     infos = zf.infolist()
     if len(infos) > MAX_ZIP_ENTRIES:
         raise BundleError(f"Too many entries in zip (max {MAX_ZIP_ENTRIES})")
     total = 0
-    notes_json: list[str] = []
-    note_jsons: list[str] = []
+    json_entries: list[str] = []
     media_entries: list[tuple[zipfile.ZipInfo, str, str]] = []
     skipped: list[str] = []
     ignored = 0
@@ -205,32 +204,58 @@ def _inspect_zip(zf: zipfile.ZipFile):
         if _is_os_junk(name):
             ignored += 1
             continue
-        if base == "notes.json":
-            notes_json.append(name)
-            continue
         if base.endswith(".json") and "media/" not in name:
-            note_jsons.append(name)
+            json_entries.append(name)
             continue
         m = _MEDIA_ENTRY.match(name) or _FOLDER_MEDIA_ENTRY.match(name)
         if m and PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS:
             media_entries.append((info, m.group(1), base))
         else:
             skipped.append(f"{name}: not notes.json or an image under media/")
-    if len(notes_json) > 1:
-        raise BundleError(f"Zip contains more than one notes.json: {', '.join(notes_json)}")
-    if notes_json and note_jsons:
-        raise BundleError(
-            f"Zip contains notes.json and also {', '.join(note_jsons[:3])}"
-            f"{' ...' if len(note_jsons) > 3 else ''}; import an export or note folders, not both"
-        )
-    json_entries = notes_json or sorted(note_jsons)
     if not json_entries:
         raise BundleError("Zip contains no notes.json")
     if sum(zf.getinfo(e).file_size for e in json_entries) > MAX_JSON_BYTES:
+        raise BundleError("Note .json files too large together")
+    return sorted(json_entries), media_entries, skipped, ignored
+
+
+def _notes_in_zip(zf: zipfile.ZipFile, entries: list[str]) -> list[tuple[Note, str]]:
+    """Each note with the scope its images are keyed by.
+
+    An export (a document with a "notes" list, whatever its file is called)
+    lists every note, and its images are media/<note name>/<file>. A note
+    folder holds one note, and its images are <folder path>/media/<file>.
+    Deciding by content, not by the name notes.json, lets a note titled
+    "notes" (stored as notes/notes.json) import as the note it is. One export,
+    or note folders: a zip with both, or two exports, is ambiguous and refused,
+    never half-read. Note folders are imported in path order.
+    """
+    exports: list[tuple[str, bytes]] = []
+    folders: list[tuple[str, bytes]] = []
+    for entry in entries:
+        raw = zf.read(entry)
+        try:
+            data = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise BundleError(f"Invalid JSON in {entry}") from e
+        is_export = isinstance(data, dict) and "notes" in data
+        (exports if is_export else folders).append((entry, raw))
+    if len(exports) > 1:
+        names = ", ".join(e for e, _ in exports)
+        raise BundleError(f"Zip contains more than one export: {names}")
+    if exports and folders:
+        others = ", ".join(e for e, _ in folders[:3]) + (" ..." if len(folders) > 3 else "")
         raise BundleError(
-            "notes.json too large" if notes_json else "Note .json files too large together"
+            f"Zip contains the export {exports[0][0]} and also {others}; "
+            "import an export or note folders, not both"
         )
-    return json_entries, media_entries, skipped, ignored
+    if exports:
+        return [(n, n.name) for n in _parse_notes(exports[0][1])]
+    out = []
+    for entry, raw in folders:
+        folder = str(PurePosixPath(entry).parent)
+        out += [(n, n.name if folder == "." else folder) for n in _parse_notes(raw)]
+    return out
 
 
 def _is_os_junk(name: str) -> bool:
@@ -283,14 +308,17 @@ def _clean_text(s: str | None, limit: int) -> str:
 
 
 def _create_notes(
-    service: NoteService, notes: list[Note], media: dict[tuple[str, str], bytes]
+    service: NoteService, notes: list[tuple[Note, str]], media: dict[tuple[str, str], bytes]
 ) -> ImportResult:
-    """All or nothing: if anything raises part-way, the notes created so far are deleted."""
+    """All or nothing: if anything raises part-way, the notes created so far are deleted.
+
+    Each note comes with the scope its /api/notes/<id>/media/<file> references
+    resolve in: its name for an export, its folder's path for a note folder."""
     result = ImportResult()
     created_ids: list[str] = []
     try:
-        for src in notes:
-            _create_note(service, src, media, result, created_ids)
+        for src, scope in notes:
+            _create_note(service, src, scope, media, result, created_ids)
     except BaseException:
         for note_id in created_ids:
             try:
@@ -301,7 +329,9 @@ def _create_notes(
     return result
 
 
-def _create_note(service, src: Note, media, result: ImportResult, created_ids: list[str]) -> None:
+def _create_note(
+    service, src: Note, scope: str, media, result: ImportResult, created_ids: list[str]
+) -> None:
     title = _clean_text(src.title, 200).strip() or "Imported note"
     created = service.create_note(
         NoteCreate(title=title, tags=[_clean_text(t, 50) for t in src.tags][:50])
@@ -315,7 +345,7 @@ def _create_note(service, src: Note, media, result: ImportResult, created_ids: l
         content = _clean_text(ch.content, 20_000)
         if block_type == "media":
             content = _import_media_ref(
-                service, created.id, src.name, content, media, media_urls, result
+                service, created.id, scope, content, media, media_urls, result
             )
         chapters.append(
             Chapter(
@@ -336,7 +366,7 @@ def _create_note(service, src: Note, media, result: ImportResult, created_ids: l
     result.notes.append(note or created)
 
 
-def _import_media_ref(service, note_id, src_name, content, media, media_urls, result) -> str:
+def _import_media_ref(service, note_id, scope, content, media, media_urls, result) -> str:
     """Resolve a media block's reference to a stored image, importing it once."""
     if content in media_urls:
         return media_urls[content]
@@ -344,7 +374,7 @@ def _import_media_ref(service, note_id, src_name, content, media, media_urls, re
         return content  # already a placeholder (a re-import of an export); keep it visible
     m = _MEDIA_REF.match(content) or _API_MEDIA_REF.match(content)
     if m:
-        key = (m.group(1), m.group(2)) if _MEDIA_REF.match(content) else (src_name, m.group(2))
+        key = (m.group(1), m.group(2)) if _MEDIA_REF.match(content) else (scope, m.group(2))
         raw = media.get(key)
         if raw is None:
             result.skipped.append(f"{content}: image not in bundle")
