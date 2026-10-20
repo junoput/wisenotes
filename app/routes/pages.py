@@ -9,6 +9,7 @@ element carrying an hx-* attribute is also a real <form action method> or
 
 import logging
 from urllib.parse import quote
+from urllib.parse import unquote
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter
@@ -388,29 +389,52 @@ async def move_chapter(
 # ---------------------------------------------------------------- media
 
 
-def _media_users(service: NoteService, note: Note, filename: str) -> list[str]:
-    """The media blocks, in any note, that show this file: "<note> / <chapter>"."""
-    url = f"/api/notes/{note.id}/media/{filename}"
+def _shows(content: str | None, path: str) -> bool:
+    """Whether a media block's URL names this path. The host, query and fragment do
+    not change which file the server sends, so a PUT that set
+    "/api/...png?v=2" or "http://host/api/...png" still counts as a use."""
+    shown = urlsplit((content or "").strip())
+    return unquote(shown.path) == path
+
+
+def _media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
+    """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>"."""
+    path = f"/api/notes/{note.id}/media/{filename}"
     users = []
-    for n in service.list_notes():
+    for n in notes:
         titles = {c.id: c.title for c in n.chapters}
         for c in n.chapters:
-            if c.type == "media" and (c.content or "").strip() == url:
+            if c.type == "media" and _shows(c.content, path):
                 where = titles.get(c.parent_id or "") or c.title or "untitled"
                 users.append(f"{n.title} / {where}")
     return users
 
 
 def _media_files(service: NoteService, note: Note) -> list[dict]:
-    """The gallery's files, each with the blocks that use it (a used file has no delete)."""
+    """The gallery's files, each with the blocks that use it (a used file has no delete).
+    Every note is read once per render, not once per file."""
+    notes = service.list_notes()
     return [
-        {"name": f, "users": _media_users(service, note, f)}
+        {"name": f, "users": _media_users(notes, note, f)}
         for f in service.repo.list_media(note.name)
     ]
 
 
-def _media_reply(request: Request, service: NoteService, note: Note, chapter_id: str) -> Response:
-    """Gallery fragment for htmx; back to the block's edit page otherwise."""
+def _media_reply(
+    request: Request,
+    service: NoteService,
+    note: Note,
+    chapter_id: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    """Gallery fragment for htmx; back to the block's edit page otherwise.
+
+    With an error the gallery is drawn as it is now, with the reason above it:
+    the fragment for htmx (app.js swaps it in despite the status), the block's
+    edit page without scripts. Neither leaves the user looking at raw JSON or at
+    nothing."""
+    files = _media_files(service, note)
     if _is_htmx(request):
         return templates.TemplateResponse(
             request,
@@ -419,10 +443,19 @@ def _media_reply(request: Request, service: NoteService, note: Note, chapter_id:
                 request,
                 active=note,
                 chapter_id=chapter_id,
-                media_files=_media_files(service, note),
+                media_files=files,
+                media_error=error,
             ),
+            status_code=status_code,
         )
-    return RedirectResponse(url=f"/notes/{note.id}/chapters/{chapter_id}/edit", status_code=303)
+    if error is None:
+        return RedirectResponse(url=f"/notes/{note.id}/chapters/{chapter_id}/edit", status_code=303)
+    chapter = next((c for c in note.chapters if c.id == chapter_id), None)
+    if chapter is None:
+        raise HTTPException(status_code=status_code, detail=error)
+    resp = _page(request, service, note, editing=chapter, media_files=files, media_error=error)
+    resp.status_code = status_code
+    return resp
 
 
 @router.post("/notes/{note_id}/media/upload")
@@ -457,12 +490,17 @@ async def delete_media(
     service: NoteService = Depends(get_note_service),
 ):
     note = _note_or_404(service, note_id)
-    users = _media_users(service, note, filename)
+    users = _media_users(service.list_notes(), note, filename)
     if users:
         # Deleting it would leave each of these blocks requesting a file that is gone.
-        raise HTTPException(
+        # Reached from a gallery drawn before the file was picked somewhere.
+        return _media_reply(
+            request,
+            service,
+            note,
+            chapter_id,
+            error=f"{filename} is used by {'; '.join(users)}. Pick another image there first.",
             status_code=409,
-            detail=f"{filename} is used by {'; '.join(users)}. Pick another image there first.",
         )
     if not service.repo.delete_media(note.name, filename):
         raise HTTPException(status_code=404, detail="Media file not found")
