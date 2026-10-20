@@ -28,7 +28,10 @@ function setCollapsed(pane, collapsed) {
 function restorePanes() {
   const pane = document.getElementById('note-list');
   if (!pane) return;
-  const collapsed = isNarrow() || localStorage.getItem('pane:note-list:collapsed') === '1';
+  // Narrow: the list is a dropdown under an open note, but with no note open it
+  // IS the page, and nothing else on it could open it again (20261014-187).
+  const noteOpen = Boolean(document.getElementById('editor')?.dataset.noteId);
+  const collapsed = isNarrow() ? noteOpen : localStorage.getItem('pane:note-list:collapsed') === '1';
   setCollapsed(pane, collapsed);
 }
 

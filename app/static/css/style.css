@@ -314,50 +314,6 @@ a { color: var(--accent); }
   align-items: start;
 }
 
-.no-note-open #note-list {
-  position: static;
-  height: auto;
-  max-height: calc(100vh - var(--topbar-height) - 80px);
-  max-width: 600px;
-  width: 100%;
-  border-right: none;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  display: block;
-}
-
-.no-note-open #note-list .pane-content {
-  overflow-y: auto;
-  max-height: calc(100vh - var(--topbar-height) - 140px);
-}
-
-.no-note-open #note-list .pane-actions {
-  display: flex;
-}
-
-.no-note-open #note-list.collapsed {
-  padding: 16px;
-}
-
-.no-note-open #note-list.collapsed .pane-title,
-.no-note-open #note-list.collapsed .note-list,
-.no-note-open #note-list.collapsed .chapter-list,
-.no-note-open #note-list.collapsed form {
-  display: block;
-}
-
-.no-note-open #note-list.collapsed .pane-actions {
-  gap: 6px;
-}
-
-.no-note-open #editor {
-  display: none;
-}
-
-.no-note-open .sidebar-toggle-btn {
-  display: none;
-}
-
 .pane {
   padding: 16px;
   border-right: 1px solid var(--border);
@@ -1054,10 +1010,31 @@ body.add-expanded .add-block-icon {
   .layout {
     grid-template-columns: 1fr;
     position: relative;
+    align-content: start;   /* one column: the rows must not share out min-height as gaps */
   }
 
-  /* Notes pane becomes a dropdown below the editor header */
-  #note-list {
+  /* Notes pane becomes a dropdown below the editor header, with scripts only:
+     without them nothing but the summary can close it, so it stays in the
+     page flow above the note instead of covering it (20261019-019). */
+  html:not(.js) #note-list {
+    position: static;   /* not the desktop sticky column: it would ride over the note */
+    height: auto;
+    overflow: visible;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* a <details> does not clip its content, so the list scrolls inside it */
+  html:not(.js) #note-list .pane-content {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  /* The note header's notes toggle needs scripts; the summary does its job. */
+  html:not(.js) .narrow-notes-toggle {
+    display: none !important;
+  }
+
+  .js #note-list {
     position: fixed;
     top: var(--topbar-height);
     left: 0;
@@ -1073,28 +1050,25 @@ body.add-expanded .add-block-icon {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   }
 
-  /* When no note is open, show note list centered like in wide mode */
-  .no-note-open #note-list {
-    position: static;
-    transform: none;
-    max-height: none;
-    box-shadow: none;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-  }
-
   /* When collapsed in narrow mode, hide above visible area */
-  #note-list.collapsed {
+  .js #note-list.collapsed {
     transform: translateY(-100%);
     opacity: 0;
     pointer-events: none;
   }
 
-  /* Don't hide when no note is open */
-  .no-note-open #note-list.collapsed {
+  /* With no note open the list is the page: in the flow, never hidden
+     (20261014-187). Keyed on the markup, not a class someone must set: #editor
+     carries data-note-id exactly when a note is open, including after htmx
+     swaps it out of band. */
+  .layout:has(> #editor:not([data-note-id])) #note-list,
+  .layout:has(> #editor:not([data-note-id])) #note-list.collapsed {
+    position: static;
     transform: none;
     opacity: 1;
     pointer-events: auto;
+    max-height: none;
+    box-shadow: none;
   }
 
   /* Show the toggle button in narrow mode */
@@ -1110,10 +1084,6 @@ body.add-expanded .add-block-icon {
   /* Hide note-list pane-header buttons when dropdown is open */
   #note-list:not(.collapsed) .pane-header .pane-actions {
     display: none;
-  }
-
-  .no-note-open #note-list .pane-header .pane-actions {
-    display: flex;
   }
 
   .pane { border-right: none; }
