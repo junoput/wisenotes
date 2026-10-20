@@ -137,14 +137,17 @@ window.addEventListener('keydown', (e) => {
 document.body.addEventListener('htmx:beforeSwap', (e) => {
   if (e.detail.requestConfig?.path === '/notes/new') closeSettings();
 });
-// A refused import answers 400 with the reason, and a refused media delete 409 with
-// the gallery as it is now; htmx drops 4xx bodies unless told, which left the
-// overlay open, or the stale gallery in place, with nothing said.
+// A refused import answers 400 with the reason, a refused media delete 409 with
+// the gallery as it is now, and a refused note delete 409 with the reason; htmx
+// drops 4xx bodies unless told, which left the overlay open, or the stale gallery
+// in place, with nothing said.
 const MEDIA_DELETE = /^\/notes\/[^/]+\/media\/[^/]+\/delete$/;
+const NOTE_DELETE = /^\/notes\/[^/]+\/delete$/;
 document.body.addEventListener('htmx:beforeSwap', (e) => {
   const path = e.detail.requestConfig?.path || '';
   const status = e.detail.xhr.status;
-  if ((path === '/notes/import' && status === 400) || (MEDIA_DELETE.test(path) && status === 409)) {
+  if ((path === '/notes/import' && status === 400)
+      || ((MEDIA_DELETE.test(path) || NOTE_DELETE.test(path)) && status === 409)) {
     e.detail.shouldSwap = true; e.detail.isError = false;
   }
 });

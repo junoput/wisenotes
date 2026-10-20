@@ -9,7 +9,6 @@ element carrying an hx-* attribute is also a real <form action method> or
 
 import logging
 from urllib.parse import quote
-from urllib.parse import unquote
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter
@@ -36,6 +35,7 @@ from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
 from app.services.notes import get_note_service
+from app.services.notes import media_users
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -218,6 +218,33 @@ async def fetch_note(
     return _page(request, service, _note_or_404(service, note_id))
 
 
+def _delete_refused(
+    request: Request, service: NoteService, note: Note, borrowers: list[str]
+) -> Response:
+    """Deleting the note removes its media/ folder, so a block in another note
+    showing one of its images would be left requesting a file that is gone. Say
+    which, on the settings: an out-of-band swap into the open overlay with htmx,
+    the settings page without scripts. Both are 409s."""
+    message = (
+        "Other notes show images from this note: "
+        + "; ".join(borrowers)
+        + ". Pick other images there first."
+    )
+    if _is_htmx(request):
+        return templates.TemplateResponse(
+            request,
+            "partials/delete_error.html",
+            {"request": request, "delete_error": message, "oob": True},
+            status_code=409,
+        )
+    folders = sorted({n.folder for n in service.list_notes() if n.folder})
+    resp = _page(
+        request, service, note, settings=True, existing_folders=folders, delete_error=message
+    )
+    resp.status_code = 409
+    return resp
+
+
 @router.get("/notes/{note_id}/settings", response_class=HTMLResponse)
 async def note_settings(
     note_id: str, request: Request, service: NoteService = Depends(get_note_service)
@@ -263,6 +290,10 @@ async def update_note_folder(
 async def delete_note(
     note_id: str, request: Request, service: NoteService = Depends(get_note_service)
 ):
+    note = _note_or_404(service, note_id)
+    borrowers = service.media_borrowers(note)
+    if borrowers:
+        return _delete_refused(request, service, note, borrowers)
     if not service.delete_note(note_id):
         raise HTTPException(status_code=404, detail="Note not found")
     notes = service.list_notes()
@@ -389,33 +420,12 @@ async def move_chapter(
 # ---------------------------------------------------------------- media
 
 
-def _shows(content: str | None, path: str) -> bool:
-    """Whether a media block's URL names this path. The host, query and fragment do
-    not change which file the server sends, so a PUT that set
-    "/api/...png?v=2" or "http://host/api/...png" still counts as a use."""
-    shown = urlsplit((content or "").strip())
-    return unquote(shown.path) == path
-
-
-def _media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
-    """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>"."""
-    path = f"/api/notes/{note.id}/media/{filename}"
-    users = []
-    for n in notes:
-        titles = {c.id: c.title for c in n.chapters}
-        for c in n.chapters:
-            if c.type == "media" and _shows(c.content, path):
-                where = titles.get(c.parent_id or "") or c.title or "untitled"
-                users.append(f"{n.title} / {where}")
-    return users
-
-
 def _media_files(service: NoteService, note: Note) -> list[dict]:
     """The gallery's files, each with the blocks that use it (a used file has no delete).
     Every note is read once per render, not once per file."""
     notes = service.list_notes()
     return [
-        {"name": f, "users": _media_users(notes, note, f)}
+        {"name": f, "users": media_users(notes, note, f)}
         for f in service.repo.list_media(note.name)
     ]
 
@@ -490,7 +500,7 @@ async def delete_media(
     service: NoteService = Depends(get_note_service),
 ):
     note = _note_or_404(service, note_id)
-    users = _media_users(service.list_notes(), note, filename)
+    users = media_users(service.list_notes(), note, filename)
     if users:
         # Deleting it would leave each of these blocks requesting a file that is gone.
         # Reached from a gallery drawn before the file was picked somewhere.
