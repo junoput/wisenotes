@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="en">
+{% set theme = request.cookies.get('theme') %}
+<html lang="en"{% if theme in ('light', 'dark') %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ request.app.title }} - Wisenotes</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📝</text></svg>">
-  <link rel="stylesheet" href="/static/css/style.css?v=15">
+  <link rel="stylesheet" href="/static/css/style.css?v=16">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"></script>
@@ -16,6 +17,13 @@
 <body class="page">
   <header class="topbar">
     <div class="brand">Wisenotes</div>
+    <form class="theme-switch" action="/theme" method="post" aria-label="Theme">
+      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+      {% for value, label in [('light', 'Light'), ('dark', 'Dark'), ('system', 'Auto')] %}
+        <button type="submit" name="theme" value="{{ value }}"
+                aria-pressed="{{ 'true' if (theme or 'system') == value or (value == 'system' and theme not in ('light', 'dark')) else 'false' }}">{{ label }}</button>
+      {% endfor %}
+    </form>
   </header>
   <noscript><div class="noscript-note">Scripts are off: everything works, but blocks reorder with the arrow buttons instead of dragging, code is shown without colouring, and formulas as their source.</div></noscript>
   <main class="layout">

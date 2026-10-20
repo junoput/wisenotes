@@ -438,3 +438,47 @@ def test_harness_control_the_import_form_has_a_hidden_empty_error(client):
     page = client.get("/notes/new").text
     error = page[page.index('id="import-error"') :].split("</p>")[0]
     assert " hidden" in error and error.endswith(">")
+
+
+def test_theme_is_a_cookie_the_page_reads(client):
+    nid = _create(client, "Themed")["id"]
+    # no cookie: no data-theme, so the CSS follows the system preference
+    assert "data-theme=" not in client.get("/").text
+    resp = client.post(
+        "/theme", data={"theme": "light", "next": f"/notes/{nid}"}, follow_redirects=False
+    )
+    assert resp.status_code == 303 and resp.headers["location"] == f"/notes/{nid}"
+    assert client.cookies.get("theme") == "light"
+    assert '<html lang="en" data-theme="light">' in client.get("/").text
+    client.post("/theme", data={"theme": "system"}, follow_redirects=False)
+    assert "data-theme=" not in client.get("/").text
+
+
+def test_the_theme_switch_returns_to_the_page_it_was_on(client):
+    # Every page is sent with Referrer-Policy: no-referrer, so a browser posts
+    # /theme with no Referer; the form itself names the page to return to.
+    nid = _create(client, "Back here")["id"]
+    page = client.get(f"/notes/{nid}?x=1")
+    assert page.headers["referrer-policy"] == "no-referrer"  # the premise
+    assert f'name="next" value="/notes/{nid}?x=1"' in page.text
+    resp = client.post(
+        "/theme", data={"theme": "dark", "next": f"/notes/{nid}?x=1"}, follow_redirects=False
+    )
+    assert resp.headers["location"] == f"/notes/{nid}?x=1"
+
+
+def test_theme_ignores_unknown_values_and_foreign_targets(client):
+    client.cookies.set("theme", 'x" onload="alert(1)')
+    assert "data-theme=" not in client.get("/").text  # only light/dark are echoed
+    for target in (
+        "https://evil.example/phish",
+        "//evil.example/x",
+        "////evil.example/x",  # no netloc, but the path left is //evil.example/x
+        "/\\evil.example/x",
+        "/\t/evil.example/x",  # browsers drop the tab and read //evil.example
+        "javascript:alert(1)",
+        "notes/relative",
+        "",
+    ):
+        resp = client.post("/theme", data={"theme": "dark", "next": target}, follow_redirects=False)
+        assert resp.headers["location"] == "/", target

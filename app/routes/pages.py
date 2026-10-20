@@ -9,6 +9,7 @@ element carrying an hx-* attribute is also a real <form action method> or
 
 import logging
 from urllib.parse import quote
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -43,6 +44,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # htmx appends the add-note and settings overlays to <body>, outside what the
 # out-of-band refresh replaces; this event tells app.js to remove them.
 CLOSE_OVERLAY = {"HX-Trigger": "close-note-settings"}
+THEME_COOKIE_AGE = 400 * 24 * 3600  # the longest browsers keep a cookie
 
 
 def _is_htmx(request: Request) -> bool:
@@ -135,6 +137,28 @@ def _normalize_source(value: str | None) -> str | None:
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, service: NoteService = Depends(get_note_service)):
     return _page(request, service, None)
+
+
+@router.post("/theme")
+async def set_theme(request: Request, theme: str = Form("system"), next: str = Form("/")):
+    """Remember light/dark in a cookie (base.html reads it); "system" forgets it.
+
+    The form names the page to return to in `next`. The Referer cannot do it:
+    every page is sent with Referrer-Policy: no-referrer. Only a local path is
+    followed; anything else goes to "/". The check is on the path as rebuilt:
+    "////evil.example/x" splits with no netloc, but its path "//evil.example/x"
+    is protocol-relative in a Location header."""
+    back = urlsplit(next)
+    local = not back.scheme and not back.netloc and next.startswith("/") and "\\" not in next
+    path = (back.path + ("?" + back.query if back.query else "")) if local else "/"
+    if path.startswith("//"):
+        path = "/"
+    resp = RedirectResponse(url=path, status_code=303)
+    if theme in ("light", "dark"):
+        resp.set_cookie("theme", theme, max_age=THEME_COOKIE_AGE, samesite="lax", httponly=True)
+    else:
+        resp.delete_cookie("theme")
+    return resp
 
 
 @router.get("/notes/new", response_class=HTMLResponse)

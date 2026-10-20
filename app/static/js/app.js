@@ -7,6 +7,7 @@ import { initDragAndDrop } from '/static/js/drag-drop.js';
 const NARROW = '(max-width: 960px)';
 const isNarrow = () => window.matchMedia(NARROW).matches;
 const root = document.documentElement;
+const isLight = () => getComputedStyle(root).colorScheme === 'light';
 
 // ---------------------------------------------------------------- panes
 
@@ -168,7 +169,7 @@ async function mountCodeEditors() {
     try {
       await loadCodeMirror(lang);
       const cm = window.CodeMirror.fromTextArea(textarea, {
-        mode: CM_MIME[lang] || 'text/javascript', theme: 'dracula', lineNumbers: true,
+        mode: CM_MIME[lang] || 'text/javascript', theme: isLight() ? 'default' : 'dracula', lineNumbers: true,
         indentUnit: 2, tabSize: 2, lineWrapping: true, autoCloseBrackets: true,
         extraKeys: { 'Shift-Enter': (c) => c.execCommand('newlineAndIndent') },
       });
