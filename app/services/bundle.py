@@ -152,10 +152,10 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
     except zipfile.BadZipFile as e:
         raise BundleError("Not a valid zip file") from e
     with zf:
-        json_entry, media_entries, skipped, ignored = _inspect_zip(zf)
+        json_entries, media_entries, skipped, ignored = _inspect_zip(zf)
         if zf.testzip() is not None:
             raise BundleError("Zip file is corrupt")
-        notes = _parse_notes(zf.read(json_entry))
+        notes = [n for entry in json_entries for n in _parse_notes(zf.read(entry))]
         media: dict[tuple[str, str], bytes] = {}
         for info, note_name, fname in media_entries:
             media[(note_name, fname)] = zf.read(info)  # size already bounded by _inspect_zip
@@ -166,12 +166,19 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
 
 
 def _inspect_zip(zf: zipfile.ZipFile):
-    """Decide what will be read, from the central directory alone."""
+    """Decide what will be read, from the central directory alone.
+
+    An export has one notes.json listing every note. Note folders zipped from
+    the data directory have one <name>/<name>.json each, and every one of them
+    is imported: taking the first and dropping the rest was a silent partial
+    import. A zip with both is ambiguous and refused, never half-read.
+    """
     infos = zf.infolist()
     if len(infos) > MAX_ZIP_ENTRIES:
         raise BundleError(f"Too many entries in zip (max {MAX_ZIP_ENTRIES})")
     total = 0
-    json_entry: str | None = None
+    notes_json: list[str] = []
+    note_jsons: list[str] = []
     media_entries: list[tuple[zipfile.ZipInfo, str, str]] = []
     skipped: list[str] = []
     ignored = 0
@@ -198,22 +205,32 @@ def _inspect_zip(zf: zipfile.ZipFile):
         if _is_os_junk(name):
             ignored += 1
             continue
-        if base == "notes.json" or (
-            json_entry is None and base.endswith(".json") and "media/" not in name
-        ):
-            if json_entry is None or base == "notes.json":
-                json_entry = name
+        if base == "notes.json":
+            notes_json.append(name)
+            continue
+        if base.endswith(".json") and "media/" not in name:
+            note_jsons.append(name)
             continue
         m = _MEDIA_ENTRY.match(name) or _FOLDER_MEDIA_ENTRY.match(name)
         if m and PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS:
             media_entries.append((info, m.group(1), base))
         else:
             skipped.append(f"{name}: not notes.json or an image under media/")
-    if json_entry is None:
+    if len(notes_json) > 1:
+        raise BundleError(f"Zip contains more than one notes.json: {', '.join(notes_json)}")
+    if notes_json and note_jsons:
+        raise BundleError(
+            f"Zip contains notes.json and also {', '.join(note_jsons[:3])}"
+            f"{' ...' if len(note_jsons) > 3 else ''}; import an export or note folders, not both"
+        )
+    json_entries = notes_json or sorted(note_jsons)
+    if not json_entries:
         raise BundleError("Zip contains no notes.json")
-    if zf.getinfo(json_entry).file_size > MAX_JSON_BYTES:
-        raise BundleError("notes.json too large")
-    return json_entry, media_entries, skipped, ignored
+    if sum(zf.getinfo(e).file_size for e in json_entries) > MAX_JSON_BYTES:
+        raise BundleError(
+            "notes.json too large" if notes_json else "Note .json files too large together"
+        )
+    return json_entries, media_entries, skipped, ignored
 
 
 def _is_os_junk(name: str) -> bool:

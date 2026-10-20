@@ -404,3 +404,37 @@ def test_an_import_with_a_missing_image_says_so_on_the_note_page(client):
 def test_harness_control_a_complete_note_shows_no_missing_notice(client):
     nid = _create(client, "Complete")["id"]
     assert "import-missing" not in client.get(f"/notes/{nid}").text
+
+
+def _mixed_zip() -> bytes:
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("notes.json", json.dumps({"version": "1.0.0", "notes": []}))
+        zf.writestr("Alpha/Alpha.json", "{}")
+    return buf.getvalue()
+
+
+def test_a_refused_import_says_why_on_the_form_without_scripts(client):
+    # 20261019-069: the refusal was a bare JSON body without scripts, and nothing with them.
+    files = {"file": ("mixed.zip", _mixed_zip(), "application/zip")}
+    resp = client.post("/notes/import", files=files, follow_redirects=False)
+    assert resp.status_code == 400
+    page = resp.text
+    assert 'class="row import-note-form"' in page  # the form is there to try again
+    error = page[page.index('id="import-error"') :].split("</p>")[0]
+    assert "hidden" not in error and "notes.json and also Alpha/Alpha.json" in error
+
+
+def test_a_refused_import_says_why_in_the_overlay_with_htmx(client):
+    files = {"file": ("mixed.zip", _mixed_zip(), "application/zip")}
+    resp = client.post("/notes/import", files=files, headers={"hx-request": "true"})
+    assert resp.status_code == 400
+    assert 'id="import-error"' in resp.text and 'hx-swap-oob="true"' in resp.text
+    assert "notes.json and also Alpha/Alpha.json" in resp.text and "hidden" not in resp.text
+    assert client.get("/api/notes").json() == []  # nothing was imported
+
+
+def test_harness_control_the_import_form_has_a_hidden_empty_error(client):
+    page = client.get("/notes/new").text
+    error = page[page.index('id="import-error"') :].split("</p>")[0]
+    assert " hidden" in error and error.endswith(">")

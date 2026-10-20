@@ -128,6 +128,13 @@ window.addEventListener('keydown', (e) => {
 document.body.addEventListener('htmx:beforeSwap', (e) => {
   if (e.detail.requestConfig?.path === '/notes/new') closeSettings();
 });
+// A refused import answers 400 with the reason; htmx drops 4xx bodies unless told,
+// which left the overlay open with nothing said.
+document.body.addEventListener('htmx:beforeSwap', (e) => {
+  if (e.detail.requestConfig?.path === '/notes/import' && e.detail.xhr.status === 400) {
+    e.detail.shouldSwap = true; e.detail.isError = false;
+  }
+});
 
 // ---------------------------------------------------------------- code and math
 
