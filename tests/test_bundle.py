@@ -2,6 +2,7 @@
 
 import io
 import json
+import threading
 import zipfile
 from datetime import datetime
 
@@ -317,16 +318,16 @@ class TestAllOrNothing:
         self, service, data_dir, monkeypatch
     ):
         service.create_note(NoteCreate(title="Already here"))
-        real_save = service.save_media_file
+        real_save = service.repo.save_media
         calls = []
 
-        def save_then_fail(note_id, name, data):
-            calls.append(note_id)
+        def save_then_fail(note_name, name, data):
+            calls.append(note_name)
             if len(calls) == 2:
                 raise RuntimeError("disk full")
-            real_save(note_id, name, data)
+            return real_save(note_name, name, data)
 
-        monkeypatch.setattr(service, "save_media_file", save_then_fail)
+        monkeypatch.setattr(service.repo, "save_media", save_then_fail)
         with pytest.raises(RuntimeError, match="disk full"):
             import_bundle(service, "x.zip", _three_note_zip(_png()))
         assert len(calls) == 2  # precondition: the failure came after a note was created
@@ -524,3 +525,187 @@ class TestSeveralNoteFolders:
         monkeypatch.setattr(bundle, "MAX_JSON_BYTES", one + 10)  # each fits, both do not
         with pytest.raises(BundleError, match="too large together"):
             import_bundle(service, "big.zip", z)
+
+
+class TestImportRacesAMediaDelete:
+    """20261021-027: import stored a note's images, then wrote the links in a
+    separate call; a media delete between the two found the file unused."""
+
+    def test_a_delete_during_the_import_of_a_note_cannot_remove_its_image(
+        self, service, monkeypatch
+    ):
+        # Paused right after the image file is written, wherever the import writes
+        # it: a delete then must wait for the link, and refuse.
+        z = _zip({"notes.json": _doc(_note()), "media/Old-Name/pic.png": _png()})
+        paused, release = threading.Event(), threading.Event()
+        real = type(service.repo).save_media
+        seen = {}
+
+        def slow_save(self, note_name, filename, content):
+            out = real(self, note_name, filename, content)
+            if not paused.is_set():
+                seen["id"] = next(n.id for n in self.list_notes() if n.name == note_name)
+                seen["file"] = filename
+                paused.set()
+                release.wait(5)
+            return out
+
+        monkeypatch.setattr(type(service.repo), "save_media", slow_save)
+        out = {}
+        importer = threading.Thread(
+            target=lambda: out.update(r=import_bundle(service, "raced.zip", z))
+        )
+        importer.start()
+        assert paused.wait(5)
+        deleter = threading.Thread(
+            target=lambda: out.update(d=service.delete_media_unless_used(seen["id"], seen["file"]))
+        )
+        deleter.start()
+        deleter.join(0.3)
+        assert deleter.is_alive()  # waits for the import's lock hold
+        release.set()
+        importer.join(5)
+        deleter.join(5)
+        assert out["d"][1] and out["d"][2] is False  # refused: the block shows it now
+        assert service.repo.list_media(service.get_note(seen["id"]).name) == [seen["file"]]
+
+    def _two_notes_paused_in_the_second(self, monkeypatch, fail=None):
+        """A zip with A and B; the import pauses while B's image decodes, after A
+        is written and linked."""
+        notes, files = [], {}
+        for i, name in enumerate(("Alpha", "Bravo")):
+            n = _note(id=f"n{i}", name=name, title=name)
+            n["chapters"][2]["content"] = f"media/{name}/pic.png"
+            notes.append(n)
+            files[f"media/{name}/pic.png"] = _png(("red", "blue")[i])
+        files["notes.json"] = _doc(*notes)
+        decoding, release = threading.Event(), threading.Event()
+        real = bundle.process_uploaded_image
+        calls = []
+
+        def slow_process(*a):
+            calls.append(1)
+            if len(calls) == 2:  # Bravo's image
+                decoding.set()
+                release.wait(5)
+                if fail:
+                    raise BundleError(fail)
+            return real(*a)
+
+        monkeypatch.setattr(bundle, "process_uploaded_image", slow_process)
+        return _zip(files), decoding, release
+
+    def _borrow(self, service, note):
+        """Another note picks one of `note`'s images, as PUT/POST allow."""
+        [image] = service.repo.list_media(note.name)
+        url = f"/api/notes/{note.id}/media/{image}"
+        chapter = {"id": "x1", "title": "", "content": url, "order": 0, "type": "media"}
+        x, refused = service.create_note_checked(NoteCreate(title="Xray", chapters=[chapter]))
+        assert refused == [] and x is not None
+        return x, url
+
+    def test_a_note_deleted_while_its_images_are_decoded_is_skipped(self, service, monkeypatch):
+        # Review of 2375197, B1: failing the import here ran the unguarded undo, which
+        # removed Alpha although Xray already showed its image. The user deleted
+        # Bravo; honour that and keep the rest.
+        z, decoding, release = self._two_notes_paused_in_the_second(monkeypatch)
+        out = {}
+        importer = threading.Thread(
+            target=lambda: out.update(r=import_bundle(service, "deleted.zip", z))
+        )
+        importer.start()
+        assert decoding.wait(5)
+        alpha = next(n for n in service.list_notes() if n.title == "Alpha")
+        bravo = next(n for n in service.list_notes() if n.title == "Bravo")
+        self._borrow(service, alpha)
+        assert service.delete_note_unless_shown(bravo.id)[1] == []
+        release.set()
+        importer.join(5)
+        r = out["r"]
+        assert [n.title for n in r.notes] == ["Alpha"] and r.images == 1
+        assert "Bravo: deleted while it was being imported" in r.skipped
+        assert sorted(n.title for n in service.list_notes()) == ["Alpha", "Xray"]
+        assert service.repo.list_media(alpha.name)  # Xray's link still has its file
+
+    def test_the_undo_keeps_a_note_another_note_already_shows(self, service, monkeypatch):
+        # B1's other path: any failure after Alpha is linked and borrowed. The undo
+        # uses the guarded delete and the error says what it kept.
+        z, decoding, release = self._two_notes_paused_in_the_second(
+            monkeypatch, fail="Bravo cannot be stored"
+        )
+        out = {}
+
+        def run():
+            try:
+                import_bundle(service, "undo.zip", z)
+            except BundleError as e:
+                out["error"] = str(e)
+
+        importer = threading.Thread(target=run)
+        importer.start()
+        assert decoding.wait(5)
+        alpha = next(n for n in service.list_notes() if n.title == "Alpha")
+        self._borrow(service, alpha)
+        release.set()
+        importer.join(5)
+        assert out["error"] == (
+            "Bravo cannot be stored. The import was undone except for: "
+            "Alpha (other notes show its images)"
+        )
+        assert sorted(n.title for n in service.list_notes()) == ["Alpha", "Xray"]
+        assert service.repo.list_media(alpha.name)
+
+    def test_harness_control_an_undo_with_no_borrower_removes_everything(
+        self, service, monkeypatch
+    ):
+        def fail(*a):
+            raise BundleError("nothing can be stored")
+
+        monkeypatch.setattr(bundle, "process_uploaded_image", fail)
+        with pytest.raises(BundleError, match=r"^nothing can be stored$"):
+            import_bundle(service, "x.zip", _three_note_zip(_png()))
+        assert service.list_notes() == []
+
+    @pytest.mark.parametrize("images", [1, 12])
+    def test_the_hold_reads_the_library_once_whatever_the_image_count(
+        self, service, monkeypatch, images
+    ):
+        # Review of 2375197, B2: each image under the hold re-read every note
+        # (save_media_file and save_module_metadata each ran get_note); 29 s
+        # stalls were measured. Count the library reads made while the hold is
+        # held by the import's write phase, and the note-file writes.
+        for i in range(5):
+            service.create_note(NoteCreate(title=f"Library {i}"))
+        n = _note()
+        n["chapters"] = n["chapters"][:2] + [
+            {**n["chapters"][2], "id": f"m{k}", "order": k, "content": f"media/Old-Name/p{k}.png"}
+            for k in range(images)
+        ]
+        z = _zip(
+            {"notes.json": _doc(n)} | {f"media/Old-Name/p{k}.png": _png() for k in range(images)}
+        )
+        repo = type(service.repo)
+        reads, writes = [], []
+        state = {"writing": False}
+        real_list, real_meta = repo.list_notes, repo.upsert_module_metadata_many
+        real_save = repo.save_media
+
+        def counted_list(self):
+            if state["writing"]:
+                reads.append(1)
+            return real_list(self)
+
+        def first_save(self, *a):
+            state["writing"] = True  # the write phase has begun, inside the hold
+            return real_save(self, *a)
+
+        def counted_meta(self, *a):
+            writes.append(1)
+            return real_meta(self, *a)
+
+        monkeypatch.setattr(repo, "list_notes", counted_list)
+        monkeypatch.setattr(repo, "save_media", first_save)
+        monkeypatch.setattr(repo, "upsert_module_metadata_many", counted_meta)
+        r = import_bundle(service, "many.zip", z)
+        assert r.images == images
+        assert reads == [] and len(writes) == 1  # no library read once writing starts

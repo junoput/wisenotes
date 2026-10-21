@@ -16,6 +16,7 @@ from PIL import Image
 
 from app.routes import api
 from app.routes import pages
+from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services import notes as notes_mod
 
@@ -1261,7 +1262,10 @@ def test_create_through_the_api_gets_the_same_media_checks_as_put(client, servic
     for refused in (SVG_DATA, f"/api/notes/{nid}/media/gone.webp"):
         resp = _new_note(client, refused)
         assert resp.status_code == 409, refused
-        assert "m1: " in resp.json()["detail"]
+        # 20261021-027: the same words as PUT for the same block, not only its id
+        chapter = {"id": "m1", "title": "", "content": refused, "order": 0, "type": "media"}
+        put = client.put(f"/api/notes/{nid}", json={"chapters": [chapter]})
+        assert put.status_code == 409 and resp.json()["detail"] == put.json()["detail"]
     assert len(service.list_notes()) == count  # nothing created
     for allowed in (url, "", "https://example.org/a.png", "data:image/png;base64,iVBORw0KGgo="):
         assert _new_note(client, allowed).status_code == 200, allowed
@@ -1273,3 +1277,42 @@ def test_a_space_before_the_data_url_parameters_is_still_a_raster(client):
     spaced = "data:image/png ;base64,iVBORw0KGgo="
     assert _put_media(client, nid, mcid, spaced).status_code == 200
     assert f'<img src="{spaced}"' in client.get(f"/notes/{nid}").text
+
+
+def test_a_delete_waiting_on_a_create_sees_the_link_it_saved(client, service, monkeypatch):
+    # 20261021-027: the create mirror of the PUT and pick tests. The create has
+    # checked another note's image exists and not yet written; a delete of that
+    # image then waits for the create's lock hold, and refuses.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    checked, release = threading.Event(), threading.Event()
+    real = type(service)._media_exists
+
+    def slow_exists(self, *a):
+        found = real(self, *a)
+        checked.set()
+        release.wait(5)
+        return found
+
+    monkeypatch.setattr(type(service), "_media_exists", slow_exists)
+    chapter = {"id": "m1", "title": "", "content": url, "order": 0, "type": "media"}
+    out = {}
+    creator = threading.Thread(
+        target=lambda: out.update(
+            c=service.create_note_checked(NoteCreate(title="Borrower", chapters=[chapter]))
+        )
+    )
+    creator.start()
+    assert checked.wait(5)
+    deleter = threading.Thread(
+        target=lambda: out.update(d=service.delete_media_unless_used(nid, filename))
+    )
+    deleter.start()
+    deleter.join(0.3)
+    assert deleter.is_alive()  # waits for the create's lock hold
+    release.set()
+    creator.join(5)
+    deleter.join(5)
+    assert out["c"][0] is not None and out["c"][1] == []
+    assert out["d"][1] and out["d"][2] is False  # refused: the new note shows it
+    assert filename in service.repo.list_media(service.get_note(nid).name)

@@ -67,7 +67,6 @@ from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteDocument
-from app.schemas import NoteUpdate
 from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
@@ -332,6 +331,11 @@ def _create_notes(
 ) -> ImportResult:
     """All or nothing: if anything raises part-way, the notes created so far are deleted.
 
+    The undo is the guarded delete: a created note whose image another note
+    already shows (it can be picked the moment it is linked) is kept, and so is
+    one the undo could not remove. The error then says which, instead of
+    claiming nothing was imported (20261021-027 review).
+
     Each note comes with the scope its /api/notes/<id>/media/<file> references
     resolve in: its name for an export, its folder's path for a note folder."""
     result = ImportResult()
@@ -339,12 +343,22 @@ def _create_notes(
     try:
         for src, scope in notes:
             _create_note(service, src, scope, media, result, created_ids)
-    except BaseException:
+    except BaseException as e:
+        kept: list[str] = []
         for note_id in created_ids:
             try:
-                service.delete_note(note_id)
+                note, borrowers, _ = service.delete_note_unless_shown(note_id)
+                if note is not None and borrowers:
+                    kept.append(f"{note.title} (other notes show its images)")
             except Exception:
                 logger.exception("import rollback could not delete note %s", note_id)
+                kept.append(f"note {note_id} (could not be removed)")
+        if kept:
+            logger.warning("import rollback kept %s", "; ".join(kept))
+            if isinstance(e, BundleError):
+                raise BundleError(
+                    f"{e}. The import was undone except for: {'; '.join(kept)}"
+                ) from e
         raise
     return result
 
@@ -359,13 +373,14 @@ def _create_note(
     created_ids.append(created.id)
     id_map = {ch.id: str(uuid.uuid4()) for ch in src.chapters}
     media_urls: dict[str, str] = {}
+    pending: list[tuple[str, bytes, dict]] = []  # images decided, not yet written
     chapters: list[Chapter] = []
     for ch in sorted(src.chapters, key=lambda c: c.order):
         block_type = ch.type if ch.type in BLOCKS else "text"
         content = _clean_text(ch.content, 20_000)
         if block_type == "media":
             content = _import_media_ref(
-                service, created.id, scope, content, media, media_urls, result
+                service, created.id, scope, content, media, media_urls, result, pending
             )
         chapters.append(
             Chapter(
@@ -379,14 +394,39 @@ def _create_note(
                 source=_clean_text(ch.source, 500) or None,
             )
         )
-    note = service.update_note(
-        created.id,
-        NoteUpdate(folder=_clean_text(src.folder, 120) or None, chapters=chapters),
-    )
-    result.notes.append(note or created)
+    # The images are decoded above, outside the lock: that is the slow part. They
+    # are written and linked in ONE hold, so a media delete cannot find a stored
+    # image before its link exists and remove it (20261021-027). The hold reads
+    # the library once, whatever the number of images: the note is resolved once
+    # and the repository is written directly (one metadata write per note).
+    repo = service.repo
+    with repo.lock:
+        note = repo.get_note(created.id)
+        if note is None:
+            # Deleted by the user while its images were decoded: honour that and
+            # carry on; failing would undo notes that may already be in use.
+            created_ids.remove(created.id)
+            result.skipped.append(f"{title}: deleted while it was being imported")
+            return
+        for new_name, data, _ in pending:
+            repo.save_media(note.name, new_name, data)
+        repo.upsert_module_metadata_many(
+            note.name, "media", {new_name: meta for new_name, _, meta in pending}
+        )
+        saved = repo.upsert_note(
+            note.model_copy(
+                update={
+                    "folder": _clean_text(src.folder, 120) or None,
+                    "chapters": chapters,
+                    "updated_at": datetime.utcnow(),
+                }
+            )
+        )
+    result.images += len(pending)
+    result.notes.append(saved)
 
 
-def _import_media_ref(service, note_id, scope, content, media, media_urls, result) -> str:
+def _import_media_ref(service, note_id, scope, content, media, media_urls, result, pending) -> str:
     """Resolve a media block's reference to a stored image, importing it once."""
     if content in media_urls:
         return media_urls[content]
@@ -404,13 +444,13 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
             result.skipped.append(f"{content}: image not in bundle")
             url = _missing(key[1], result)
         else:
-            url = _store_image(service, note_id, key[1], raw, result)
+            url = _store_image(note_id, key[1], raw, result, pending)
         media_urls[content] = url
         return url
     if is_data_url(content):
         # any data: URL, inline or not: the pipeline decides, and a refusal is a
         # visible placeholder rather than a silently emptied block
-        return _inline_image(service, note_id, content, result)
+        return _inline_image(note_id, content, result, pending)
     if kind == "external":
         # Never fetched (no new SSRF surface). Kept as it is: the block and the
         # note's notice say it is not shown, the same way as for a URL set later
@@ -424,7 +464,7 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
 INLINE_NAME = "inline image"  # what the missing list and the placeholder call one
 
 
-def _inline_image(service, note_id, content, result) -> str:
+def _inline_image(note_id, content, result, pending) -> str:
     """A data:image/ URL is decoded and stored through the upload pipeline like
     any image in a bundle (charter R3): re-encoded, pixel-capped, SVG refused.
     It is never kept as received (20261021-013 review). What does not decode, or
@@ -441,10 +481,11 @@ def _inline_image(service, note_id, content, result) -> str:
     except (binascii.Error, ValueError):
         result.skipped.append(f"{INLINE_NAME}: data URL does not decode")
         return _missing(INLINE_NAME, result)
-    return _store_image(service, note_id, INLINE_NAME, raw, result)
+    return _store_image(note_id, INLINE_NAME, raw, result, pending)
 
 
-def _store_image(service, note_id, filename, raw, result) -> str:
+def _store_image(note_id, filename, raw, result, pending) -> str:
+    """Decide the image and give its URL; _create_note writes it with the link."""
     try:
         new_name, data, meta = process_uploaded_image(
             filename, raw
@@ -452,9 +493,7 @@ def _store_image(service, note_id, filename, raw, result) -> str:
     except UnsupportedImage as e:
         result.skipped.append(f"{filename}: {e}")
         return _missing(filename, result)
-    service.save_media_file(note_id, new_name, data)
-    service.save_module_metadata(note_id, "media", new_name, meta.to_dict())
-    result.images += 1
+    pending.append((new_name, data, meta.to_dict()))
     return f"/api/notes/{note_id}/media/{new_name}"
 
 
