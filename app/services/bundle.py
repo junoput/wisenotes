@@ -67,7 +67,6 @@ from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteDocument
-from app.schemas import NoteUpdate
 from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
@@ -332,6 +331,11 @@ def _create_notes(
 ) -> ImportResult:
     """All or nothing: if anything raises part-way, the notes created so far are deleted.
 
+    The undo is the guarded delete: a created note whose image another note
+    already shows (it can be picked the moment it is linked) is kept, and so is
+    one the undo could not remove. The error then says which, instead of
+    claiming nothing was imported (20261021-027 review).
+
     Each note comes with the scope its /api/notes/<id>/media/<file> references
     resolve in: its name for an export, its folder's path for a note folder."""
     result = ImportResult()
@@ -339,12 +343,22 @@ def _create_notes(
     try:
         for src, scope in notes:
             _create_note(service, src, scope, media, result, created_ids)
-    except BaseException:
+    except BaseException as e:
+        kept: list[str] = []
         for note_id in created_ids:
             try:
-                service.delete_note(note_id)
+                note, borrowers, _ = service.delete_note_unless_shown(note_id)
+                if note is not None and borrowers:
+                    kept.append(f"{note.title} (other notes show its images)")
             except Exception:
                 logger.exception("import rollback could not delete note %s", note_id)
+                kept.append(f"note {note_id} (could not be removed)")
+        if kept:
+            logger.warning("import rollback kept %s", "; ".join(kept))
+            if isinstance(e, BundleError):
+                raise BundleError(
+                    f"{e}. The import was undone except for: {'; '.join(kept)}"
+                ) from e
         raise
     return result
 
@@ -382,20 +396,34 @@ def _create_note(
         )
     # The images are decoded above, outside the lock: that is the slow part. They
     # are written and linked in ONE hold, so a media delete cannot find a stored
-    # image before its link exists and remove it (20261021-027).
-    with service.repo.lock:
-        if service.get_note(created.id) is None:
-            raise BundleError(
-                "A note was deleted while it was being imported; nothing was imported"
-            )
-        for new_name, data, meta in pending:
-            service.save_media_file(created.id, new_name, data)
-            service.save_module_metadata(created.id, "media", new_name, meta)
-        note = service.update_note(
-            created.id,
-            NoteUpdate(folder=_clean_text(src.folder, 120) or None, chapters=chapters),
+    # image before its link exists and remove it (20261021-027). The hold reads
+    # the library once, whatever the number of images: the note is resolved once
+    # and the repository is written directly (one metadata write per note).
+    repo = service.repo
+    with repo.lock:
+        note = repo.get_note(created.id)
+        if note is None:
+            # Deleted by the user while its images were decoded: honour that and
+            # carry on; failing would undo notes that may already be in use.
+            created_ids.remove(created.id)
+            result.skipped.append(f"{title}: deleted while it was being imported")
+            return
+        for new_name, data, _ in pending:
+            repo.save_media(note.name, new_name, data)
+        repo.upsert_module_metadata_many(
+            note.name, "media", {new_name: meta for new_name, _, meta in pending}
         )
-    result.notes.append(note or created)
+        saved = repo.upsert_note(
+            note.model_copy(
+                update={
+                    "folder": _clean_text(src.folder, 120) or None,
+                    "chapters": chapters,
+                    "updated_at": datetime.utcnow(),
+                }
+            )
+        )
+    result.images += len(pending)
+    result.notes.append(saved)
 
 
 def _import_media_ref(service, note_id, scope, content, media, media_urls, result, pending) -> str:
@@ -466,7 +494,6 @@ def _store_image(note_id, filename, raw, result, pending) -> str:
         result.skipped.append(f"{filename}: {e}")
         return _missing(filename, result)
     pending.append((new_name, data, meta.to_dict()))
-    result.images += 1
     return f"/api/notes/{note_id}/media/{new_name}"
 
 

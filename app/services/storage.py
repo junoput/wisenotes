@@ -358,6 +358,15 @@ class JsonNoteRepository:
         self, note_name: str, module_name: str, key: str, payload: dict[str, Any]
     ) -> None:
         """Persist module metadata in a note JSON under ``_module_meta``."""
+        self.upsert_module_metadata_many(note_name, module_name, {key: payload})
+
+    def upsert_module_metadata_many(
+        self, note_name: str, module_name: str, items: dict[str, dict[str, Any]]
+    ) -> None:
+        """Several keys in one read and one write of the note's JSON (an import
+        writes a note's images together, 20261021-027)."""
+        if not items:
+            return
         with self._lock:
             nfile = self._note_file(note_name)
             if not nfile.exists():
@@ -368,7 +377,7 @@ class JsonNoteRepository:
 
             raw.setdefault("_module_meta", {})
             raw["_module_meta"].setdefault(module_name, {})
-            raw["_module_meta"][module_name][key] = payload
+            raw["_module_meta"][module_name].update(items)
 
             temp_file = nfile.with_suffix(".tmp")
             with temp_file.open("w", encoding="utf-8") as f:
