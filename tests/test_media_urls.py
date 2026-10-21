@@ -4,6 +4,7 @@ import pytest
 
 from app.media_urls import media_kind
 from app.media_urls import missing_name
+from app.media_urls import our_media
 
 
 @pytest.mark.parametrize(
@@ -80,3 +81,12 @@ def test_missing_name_reads_the_placeholder_as_media_kind_does(content, name):
 def test_only_the_raster_types_the_pipeline_stores_are_drawn_inline(content, kind):
     # 20261021-023: any data:image/ was "inline", so data:image/svg+xml was drawn.
     assert media_kind(content) == kind
+
+
+@pytest.mark.parametrize("suffix", ["/", "/.", "/%2e", "//", "/./"])
+def test_our_media_reads_through_a_trailing_slash(suffix):
+    assert our_media("/api/notes/n/media/a.png" + suffix) == ("n", "a.png")
+
+
+def test_harness_control_a_parent_segment_leaves_the_file():
+    assert our_media("/api/notes/n/media/a.png/..") is None

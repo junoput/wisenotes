@@ -42,9 +42,19 @@ async def get_note(note_id: str, service: NoteService = Depends(get_note_service
     return note
 
 
+def _refused_detail(refused: list[str]) -> str:
+    return (
+        "Media blocks refused (an image of ours that does not exist, or a "
+        f"data: URL that is not PNG, JPEG, WebP or GIF): {'; '.join(refused)}"
+    )
+
+
 @router.post("/notes")
 async def create_note(payload: NoteCreate, service: NoteService = Depends(get_note_service)):
-    return service.create_note(payload)
+    note, refused = service.create_note_checked(payload)
+    if refused:
+        raise HTTPException(status_code=409, detail=_refused_detail(refused))
+    return note
 
 
 @router.put("/notes/{note_id}")
@@ -58,10 +68,7 @@ async def update_note(
         # A block would request a file that is not there (20261021-016).
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Media blocks refused (an image of ours that does not exist, or a "
-                f"data: URL that is not PNG, JPEG, WebP or GIF): {'; '.join(gone)}"
-            ),
+            detail=_refused_detail(gone),
         )
     return note
 

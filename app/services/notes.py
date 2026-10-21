@@ -251,26 +251,40 @@ class NoteService:
             existing = self.repo.get_note(note_id)
             if existing is None:
                 return None, []
-            # Keyed by chapter id, and a change of type counts: a text block turned
-            # into a media block with a dead link in it is a new link (20261021-020).
-            before = {c.id: (c.type, c.content) for c in existing.chapters}
-            changed = [
-                c
-                for c in payload.chapters or []
-                if c.type == "media" and before.get(c.id) != (c.type, c.content)
-            ]
-            gone = [
-                f"{c.id}: {c.content}"
-                for c in changed
-                if (ours := our_media(c.content)) and not self._media_exists(*ours)
-            ] + [
-                f"{c.id}: {_short(c.content)} ({NOT_RASTER})"
-                for c in changed
-                if _not_drawable_data(c.content)
-            ]
+            gone = self._refused_media(payload.chapters or [], existing.chapters)
             if gone:
                 return existing, gone
             return self.update_note(note_id, payload), []
+
+    def create_note_checked(self, payload: NoteCreate) -> tuple[Note | None, list[str]]:
+        """create_note for a client that sends chapters (POST /api/notes): every
+        media block in it is new, so every one is checked as PUT checks a changed
+        one; (None, refusals) when any is refused (20261021-025)."""
+        with self.repo.lock:
+            gone = self._refused_media(payload.chapters, [])
+            if gone:
+                return None, gone
+            return self.create_note(payload), []
+
+    def _refused_media(self, chapters: list[Chapter], stored: list[Chapter]) -> list[str]:
+        """The media blocks in `chapters` that are new or changed against `stored`
+        and name one of our images that does not exist, or a data: URL the app
+        would not draw. Keyed by chapter id, and a change of type counts: a text
+        block turned media with a dead link in it is a new link (20261021-020).
+        Called under the repository lock."""
+        before = {c.id: (c.type, c.content) for c in stored}
+        changed = [
+            c for c in chapters if c.type == "media" and before.get(c.id) != (c.type, c.content)
+        ]
+        return [
+            f"{c.id}: {c.content}"
+            for c in changed
+            if (ours := our_media(c.content)) and not self._media_exists(*ours)
+        ] + [
+            f"{c.id}: {_short(c.content)} ({NOT_RASTER})"
+            for c in changed
+            if _not_drawable_data(c.content)
+        ]
 
     def delete_note(self, note_id: str) -> bool:
         if not self.repo.get_note(note_id):

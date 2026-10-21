@@ -1223,3 +1223,53 @@ def test_a_stored_svg_data_url_is_a_placeholder_not_an_image(client, service):
     assert "Image not shown: data:image/svg+xml" in page
     form = client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX).text
     assert 'src="data:image/svg' not in form
+
+
+def test_the_premise_a_trailing_slash_still_loads_the_image(client):
+    # 20261021-025: FastAPI's redirect_slashes sends <file>/ to <file>.
+    _, _, _, url = _note_with_picked_image(client)
+    resp = client.get(url + "/", follow_redirects=False)
+    assert resp.status_code == 307 and resp.headers["location"].endswith(url)
+
+
+@pytest.mark.parametrize("suffix", ["/", "/.", "/%2e", "//"])
+def test_a_trailing_slash_counts_as_a_use_and_as_ours(client, service, suffix):
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url + suffix})
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 409
+    assert filename in service.repo.list_media(service.get_note(nid).name)
+    dead = f"/api/notes/{nid}/media/gone.webp{suffix}"
+    assert _put_media(client, nid, mcid, dead).status_code == 409
+    picked = client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": dead}, follow_redirects=False
+    )
+    assert picked.status_code == 409
+
+
+def _new_note(client, content):
+    chapter = {"id": "m1", "title": "", "content": content, "order": 0, "type": "media"}
+    return client.post("/api/notes", json={"title": "Created", "chapters": [chapter]})
+
+
+def test_create_through_the_api_gets_the_same_media_checks_as_put(client, service):
+    # 20261021-025: POST /api/notes stored NoteCreate.chapters unchecked.
+    nid, _, _, url = _note_with_picked_image(client)
+    count = len(service.list_notes())
+    for refused in (SVG_DATA, f"/api/notes/{nid}/media/gone.webp"):
+        resp = _new_note(client, refused)
+        assert resp.status_code == 409, refused
+        assert "m1: " in resp.json()["detail"]
+    assert len(service.list_notes()) == count  # nothing created
+    for allowed in (url, "", "https://example.org/a.png", "data:image/png;base64,iVBORw0KGgo="):
+        assert _new_note(client, allowed).status_code == 200, allowed
+
+
+def test_a_space_before_the_data_url_parameters_is_still_a_raster(client):
+    # 20261021-025 nit: PUT refused "data:image/png ;base64," that browsers draw.
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    spaced = "data:image/png ;base64,iVBORw0KGgo="
+    assert _put_media(client, nid, mcid, spaced).status_code == 200
+    assert f'<img src="{spaced}"' in client.get(f"/notes/{nid}").text
