@@ -23,6 +23,10 @@ async def set_security_headers(request: Request, call_next):
 
     if request.url.path.endswith(".js"):
         response.headers["Content-Type"] = "application/javascript; charset=utf-8"
+    if request.url.path.startswith("/static/"):
+        # Revalidate every time (a 304 when unchanged): a module app.js imports has no
+        # version query, and a heuristically cached copy hid deploys (20261021-011).
+        response.headers["Cache-Control"] = "no-cache"
 
     csp = (
         "default-src 'self'; "
