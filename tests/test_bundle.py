@@ -2,6 +2,7 @@
 
 import io
 import json
+import threading
 import zipfile
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from app.services import bundle
 from app.services.bundle import BundleError
 from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
+from app.services.notes import NoteService
 
 
 def _png(color="red", size=(4, 4)) -> bytes:
@@ -524,3 +526,78 @@ class TestSeveralNoteFolders:
         monkeypatch.setattr(bundle, "MAX_JSON_BYTES", one + 10)  # each fits, both do not
         with pytest.raises(BundleError, match="too large together"):
             import_bundle(service, "big.zip", z)
+
+
+class TestImportRacesAMediaDelete:
+    """20261021-027: import stored a note's images, then wrote the links in a
+    separate call; a media delete between the two found the file unused."""
+
+    def test_a_delete_during_the_import_of_a_note_cannot_remove_its_image(
+        self, service, monkeypatch
+    ):
+        z = _zip({"notes.json": _doc(_note()), "media/Old-Name/pic.png": _png()})
+        paused, release = threading.Event(), threading.Event()
+        real = NoteService.update_note
+        seen = {}
+
+        def slow_update(self, note_id, payload):
+            if payload.chapters and not paused.is_set():
+                seen["id"] = note_id
+                seen["files"] = list(self.repo.list_media(self.repo.get_note(note_id).name))
+                paused.set()  # images stored, links not yet written
+                release.wait(5)
+            return real(self, note_id, payload)
+
+        monkeypatch.setattr(NoteService, "update_note", slow_update)
+        out = {}
+        importer = threading.Thread(
+            target=lambda: out.update(r=import_bundle(service, "raced.zip", z))
+        )
+        importer.start()
+        assert paused.wait(5)
+        [stored] = seen["files"]
+        deleter = threading.Thread(
+            target=lambda: out.update(d=service.delete_media_unless_used(seen["id"], stored))
+        )
+        deleter.start()
+        deleter.join(0.3)
+        assert deleter.is_alive()  # waits for the import's lock hold
+        release.set()
+        importer.join(5)
+        deleter.join(5)
+        assert out["d"][1] and out["d"][2] is False  # refused: the block shows it now
+        assert service.repo.list_media(service.get_note(seen["id"]).name) == [stored]
+
+    def test_a_note_deleted_while_its_images_are_decoded_fails_the_import_whole(
+        self, service, monkeypatch
+    ):
+        # The other window: the note was created, its images are being decoded (no
+        # lock), and someone deletes it. The import refuses instead of writing
+        # images for a note that is gone, and rolls back.
+        z = _zip({"notes.json": _doc(_note()), "media/Old-Name/pic.png": _png()})
+        decoding, release = threading.Event(), threading.Event()
+        real = bundle.process_uploaded_image
+
+        def slow_process(*a):
+            decoding.set()
+            release.wait(5)
+            return real(*a)
+
+        monkeypatch.setattr(bundle, "process_uploaded_image", slow_process)
+        out = {}
+
+        def run():
+            try:
+                import_bundle(service, "deleted.zip", z)
+            except BundleError as e:
+                out["error"] = str(e)
+
+        importer = threading.Thread(target=run)
+        importer.start()
+        assert decoding.wait(5)
+        [created] = service.list_notes()
+        assert service.delete_note_unless_shown(created.id)[1] == []
+        release.set()
+        importer.join(5)
+        assert out["error"].startswith("A note was deleted while it was being imported")
+        assert service.list_notes() == []
