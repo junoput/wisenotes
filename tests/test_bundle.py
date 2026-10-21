@@ -147,9 +147,14 @@ class TestJson:
                 },
             ]
         )
-        [imported] = import_bundle(service, "n.json", _doc(n)).notes
+        r = import_bundle(service, "n.json", _doc(n))
+        [imported] = r.notes
         by_order = sorted((c for c in imported.chapters if c.parent_id), key=lambda c: c.order)
-        assert [c.content for c in by_order[:2]] == ["", "https://example.org/a.png"]
+        # 20261014-140: an external URL is a visible placeholder, never fetched; kept,
+        # it was a broken image (CSP img-src 'self').
+        assert [c.content for c in by_order[:2]] == ["", "missing:https://example.org/a.png"]
+        assert r.missing == ["https://example.org/a.png"]
+        assert "https://example.org/a.png: external image, not fetched" in r.skipped
         assert by_order[2].type == "text"
 
     @pytest.mark.parametrize("body", [b"", b"not json", b"[1,2]", b'{"notes": "x"}', b'{"a":1}'])

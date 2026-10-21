@@ -679,3 +679,30 @@ def test_app_js_swaps_the_refused_note_delete(client):
     [action] = re.findall(r'hx-post="(/notes/[^"]+/delete)"', page)
     assert re.fullmatch(m.group(1), action)
     assert not re.fullmatch(m.group(1), f"/notes/{note['id']}/media/x.png/delete")
+
+
+def test_an_imported_external_image_is_a_visible_placeholder_not_a_broken_image(client):
+    # 20261014-140: the URL was kept, and img-src 'self' blocked it without a word.
+    note = {
+        "id": "x1",
+        "name": "Ext",
+        "title": "Ext",
+        "chapters": [
+            {"id": "c1", "title": "Pics", "content": "", "order": 0, "type": "chapter"},
+            {
+                "id": "c2",
+                "title": "",
+                "content": "https://example.org/a.png",
+                "order": 0,
+                "parent_id": "c1",
+                "type": "media",
+            },
+        ],
+    }
+    body = json.dumps(note).encode()
+    resp = client.post("/notes/import", files={"file": ("ext.json", body, "application/json")})
+    assert resp.status_code == 200 and _doc(resp)
+    assert "1 image could not be imported and is not in this note" in resp.text
+    assert "Image missing from the import: https://example.org/a.png" in resp.text
+    assert 'src="https://example.org' not in resp.text
+    assert "img-src 'self' data:" in resp.headers["content-security-policy"]  # unchanged

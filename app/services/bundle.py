@@ -400,7 +400,11 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
         media_urls[content] = url
         return url
     if content.startswith(("http://", "https://")):
-        return content  # an external image the note already pointed at; served by its own host
+        # Never fetched (no new SSRF surface), and the CSP's img-src 'self' would
+        # block it in the browser, a broken image with no word why (20261014-140).
+        # A visible placeholder naming the URL, like an image absent from the zip.
+        result.skipped.append(f"{content}: external image, not fetched")
+        return _missing(content, result)
     return ""
 
 
