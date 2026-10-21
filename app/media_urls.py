@@ -32,7 +32,9 @@ def missing_name(content: str | None) -> str:
 
 # The inline images the app draws: the raster types the upload pipeline stores
 # (charter R3). data:image/svg+xml and every other data: URL are not drawn.
-_RASTER_DATA = re.compile(r"^data:image/(png|jpeg|webp|gif)[;,]", re.IGNORECASE)
+# Spaces around the type are allowed, as browsers and bundle._inline_image allow them
+# ("data:image/png ;base64,...", 20261021-025).
+_RASTER_DATA = re.compile(r"^data:\s*image/(png|jpeg|webp|gif)\s*[;,]", re.IGNORECASE)
 
 
 def is_data_url(content: str | None) -> bool:
@@ -75,7 +77,10 @@ def our_media(content: str | None) -> tuple[str, str] | None:
     images, read the way a browser reads it; None otherwise. The one parser for
     the in-use check, the existence check and media_kind (20261021-020)."""
     path = local_path(content)
-    m = _OUR_MEDIA.match(path) if path is not None else None
+    # The app answers <file>/ with a redirect to <file> (FastAPI redirect_slashes),
+    # so a browser loads the image through any trailing slash; /. and /%2e have
+    # already become a trailing slash above (20261021-025).
+    m = _OUR_MEDIA.match(path.rstrip("/")) if path is not None else None
     return (m.group(1), m.group(2)) if m else None
 
 
