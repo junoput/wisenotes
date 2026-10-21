@@ -64,11 +64,19 @@ def _ctx(request: Request, **kwargs) -> dict:
     return ctx
 
 
-def _page(request: Request, service: NoteService, note: Note | None, **extra) -> Response:
-    """Full page, or the out-of-band fragment for htmx."""
+def _page(
+    request: Request,
+    service: NoteService,
+    note: Note | None,
+    notes: list[Note] | None = None,
+    **extra,
+) -> Response:
+    """Full page, or the out-of-band fragment for htmx. `notes`, when the caller
+    already read them, saves reading them again."""
     template = "partials/hx_refresh.html" if _is_htmx(request) else "index.html"
+    notes = service.list_notes() if notes is None else notes
     return templates.TemplateResponse(
-        request, template, _ctx(request, notes=service.list_notes(), active=note, **extra)
+        request, template, _ctx(request, notes=notes, active=note, **extra)
     )
 
 
@@ -219,7 +227,7 @@ async def fetch_note(
 
 
 def _delete_refused(
-    request: Request, service: NoteService, note: Note, borrowers: list[str]
+    request: Request, service: NoteService, note: Note, borrowers: list[str], notes: list[Note]
 ) -> Response:
     """Deleting the note removes its media/ folder, so a block in another note
     showing one of its images would be left requesting a file that is gone. Say
@@ -237,11 +245,12 @@ def _delete_refused(
             {"request": request, "delete_error": message, "oob": True},
             status_code=409,
         )
-    folders = sorted({n.folder for n in service.list_notes() if n.folder})
+    folders = sorted({n.folder for n in notes if n.folder})
     resp = _page(
         request,
         service,
         note,
+        notes,
         settings=True,
         existing_folders=folders,
         delete_error=message,
@@ -296,13 +305,11 @@ async def update_note_folder(
 async def delete_note(
     note_id: str, request: Request, service: NoteService = Depends(get_note_service)
 ):
-    note = _note_or_404(service, note_id)
-    borrowers = service.media_borrowers(note)
-    if borrowers:
-        return _delete_refused(request, service, note, borrowers)
-    if not service.delete_note(note_id):
+    note, borrowers, notes = service.delete_note_unless_shown(note_id)
+    if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
-    notes = service.list_notes()
+    if borrowers:
+        return _delete_refused(request, service, note, borrowers, notes)
     return _after_change(request, service, notes[0] if notes else None, headers=CLOSE_OVERLAY)
 
 
@@ -426,10 +433,10 @@ async def move_chapter(
 # ---------------------------------------------------------------- media
 
 
-def _media_files(service: NoteService, note: Note) -> list[dict]:
+def _media_files(service: NoteService, note: Note, notes: list[Note] | None = None) -> list[dict]:
     """The gallery's files, each with the blocks that use it (a used file has no delete).
     Every note is read once per render, not once per file."""
-    notes = service.list_notes()
+    notes = service.list_notes() if notes is None else notes
     return [
         {"name": f, "users": media_users(notes, note, f)}
         for f in service.repo.list_media(note.name)
@@ -443,6 +450,7 @@ def _media_reply(
     chapter_id: str,
     error: str | None = None,
     status_code: int = 200,
+    notes: list[Note] | None = None,
 ) -> Response:
     """Gallery fragment for htmx; back to the block's edit page otherwise.
 
@@ -450,7 +458,7 @@ def _media_reply(
     the fragment for htmx (app.js swaps it in despite the status), the block's
     edit page without scripts. Neither leaves the user looking at raw JSON or at
     nothing."""
-    files = _media_files(service, note)
+    files = _media_files(service, note, notes)
     if _is_htmx(request):
         return templates.TemplateResponse(
             request,
@@ -473,6 +481,7 @@ def _media_reply(
         request,
         service,
         note,
+        notes,
         editing=chapter,
         media_files=files,
         media_error=error,
@@ -513,8 +522,9 @@ async def delete_media(
     chapter_id: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    note = _note_or_404(service, note_id)
-    users = media_users(service.list_notes(), note, filename)
+    note, users, deleted, notes = service.delete_media_unless_used(note_id, filename)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note not found")
     if users:
         # Deleting it would leave each of these blocks requesting a file that is gone.
         # Reached from a gallery drawn before the file was picked somewhere.
@@ -525,8 +535,9 @@ async def delete_media(
             chapter_id,
             error=f"{filename} is used by {'; '.join(users)}. Pick another image there first.",
             status_code=409,
+            notes=notes,
         )
-    if not service.repo.delete_media(note.name, filename):
+    if not deleted:
         raise HTTPException(status_code=404, detail="Media file not found")
     return _media_reply(request, service, note, chapter_id)
 
@@ -539,9 +550,21 @@ async def select_media(
     url: str = Form(...),
     service: NoteService = Depends(get_note_service),
 ):
-    note = _note_or_404(service, note_id)
-    chapter = _chapter_or_404(note, chapter_id)
-    note = service.update_chapter(
-        note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
-    )
+    note, exists = service.pick_media(note_id, chapter_id, url)
+    if note is None:
+        raise HTTPException(status_code=404, detail="Note or block not found")
+    if not exists:
+        # The gallery was drawn before the file was deleted (20261021-010). Answer
+        # with the gallery as it is now, into the gallery, not the page.
+        resp = _media_reply(
+            request,
+            service,
+            note,
+            chapter_id,
+            error="That image was deleted. Pick another or upload one.",
+            status_code=409,
+        )
+        resp.headers["HX-Retarget"] = f"#media-gallery-{chapter_id}"
+        resp.headers["HX-Reswap"] = "innerHTML"
+        return resp
     return _after_change(request, service, note)

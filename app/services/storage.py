@@ -118,6 +118,12 @@ class JsonNoteRepository:
         # Optionally keep a backup; do not delete legacy file
         # The repository will ignore it going forward.
 
+    @property
+    def lock(self) -> FileLock:
+        """The repository lock, for a caller whose check and write must be one hold.
+        Reentrant: list_notes, delete_note and the rest take it again inside."""
+        return self._lock
+
     def list_notes(self) -> list[Note]:
         notes: list[Note] = []
         with self._lock:
@@ -333,9 +339,10 @@ class JsonNoteRepository:
         # Sanitize filename
         filename = Path(filename).name
         filepath = self._media_dir(note_name) / filename
-        if filepath.exists():
-            filepath.unlink()
-            return True
+        with self._lock:
+            if filepath.exists():
+                filepath.unlink()
+                return True
         return False
 
     def get_media_path(self, note_name: str, filename: str) -> Path | None:

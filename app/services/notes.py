@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import unquote
@@ -27,6 +28,15 @@ def _shows(content: str | None, path: str) -> bool:
     "/api/...png?v=2" or "http://host/api/...png" still counts as a use."""
     shown = urlsplit((content or "").strip())
     return unquote(shown.path) == path
+
+
+_OUR_MEDIA = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
+
+
+def _our_media(content: str | None) -> tuple[str, str] | None:
+    """(note id, file name) when a media block's URL names one of our stored images."""
+    m = _OUR_MEDIA.match(unquote(urlsplit((content or "").strip()).path))
+    return (m.group(1), m.group(2)) if m else None
 
 
 def media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
@@ -139,15 +149,69 @@ class NoteService:
         saved = self.repo.upsert_note(updated, old_name=existing.name)
         return saved
 
-    def media_borrowers(self, note: Note) -> list[str]:
+    def media_borrowers(self, note: Note, notes: list[Note] | None = None) -> list[str]:
         """Blocks in OTHER notes that show one of this note's images, which deleting
         the note would remove with its folder: "<file>: <note> / <chapter>"."""
-        others = [n for n in self.list_notes() if n.id != note.id]
+        others = [n for n in (self.list_notes() if notes is None else notes) if n.id != note.id]
         return [
             f"{f}: {user}"
             for f in self.repo.list_media(note.name)
             for user in media_users(others, note, f)
         ]
+
+    # The two guarded deletes below check and delete in ONE hold of the repository
+    # lock. Taken separately, a pick saved in another tab between the check and
+    # the delete was deleted anyway (20261021-010). Each returns the notes it read,
+    # so a caller drawing the answer does not read them again.
+
+    def delete_note_unless_shown(self, note_id: str) -> tuple[Note | None, list[str], list[Note]]:
+        """(the note, or None if there is none; the blocks elsewhere that refused the
+        delete, empty if it was deleted; every note as it is now)."""
+        with self.repo.lock:
+            notes = self.repo.list_notes()
+            note = next((n for n in notes if n.id == note_id), None)
+            if note is None:
+                return None, [], notes
+            borrowers = self.media_borrowers(note, notes)
+            if not borrowers:
+                self.repo.delete_note(note_id)
+                notes = [n for n in notes if n.id != note_id]
+            return note, borrowers, notes
+
+    def delete_media_unless_used(
+        self, note_id: str, filename: str
+    ) -> tuple[Note | None, list[str], bool, list[Note]]:
+        """(the note, or None; the blocks that use the file and refused the delete;
+        whether a file was deleted; every note as it is now)."""
+        with self.repo.lock:
+            notes = self.repo.list_notes()
+            note = next((n for n in notes if n.id == note_id), None)
+            if note is None:
+                return None, [], False, notes
+            users = media_users(notes, note, filename)
+            if users:
+                return note, users, False, notes
+            return note, [], self.repo.delete_media(note.name, filename), notes
+
+    def pick_media(self, note_id: str, chapter_id: str, url: str) -> tuple[Note | None, bool]:
+        """Point a media block at `url`: (the note, or None if note or block is gone;
+        False when url names one of our images that no longer exists). Checked in
+        the same lock hold as the guarded deletes, so a pick that waited for a
+        delete does not save a link to the file it removed."""
+        with self.repo.lock:
+            note = self.repo.get_note(note_id)
+            chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
+            if chapter is None:
+                return None, True
+            ours = _our_media(url)
+            if ours:
+                owner = self.repo.get_note(ours[0])
+                if owner is None or ours[1] not in self.repo.list_media(owner.name):
+                    return note, False
+            saved = self.update_chapter(
+                note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
+            )
+            return saved, True
 
     def delete_note(self, note_id: str) -> bool:
         if not self.repo.get_note(note_id):
