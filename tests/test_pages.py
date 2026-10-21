@@ -587,11 +587,20 @@ def test_app_js_swaps_the_refused_media_delete(client):
     assert not re.fullmatch(m.group(1), f"/notes/{nid}/media/upload")
 
 
-def test_a_url_with_a_query_or_a_host_still_counts_as_a_use(client):
+def test_every_spelling_a_browser_draws_counts_as_a_use(client):
     # 20261020-084: the match was exact, so a PUT-set variant displayed the file
-    # but did not protect it.
+    # but did not protect it. 20261021-020: dot segments and a backslash too.
     nid, mcid, filename, url = _note_with_picked_image(client)
-    for shown in (url + "?v=2", "http://127.0.0.1:8000" + url, url.replace(".", "%2E")):
+    tail = url.removeprefix("/")
+    for shown in (
+        url + "?v=2",
+        url.replace(".", "%2E"),
+        "/./" + tail,
+        "/api/../" + tail,
+        "/%2e/" + tail,
+        "\\" + tail,
+        "  " + url,
+    ):
         client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": shown})
         resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
         assert resp.status_code == 409, shown
@@ -1050,3 +1059,126 @@ def test_the_page_names_a_placeholder_the_way_media_kind_reads_it(client):
     page = client.get(f"/notes/{nid}").text
     assert "Image missing from the import: a.png<" in page
     assert "could not be imported and is not in this note:\n  a.png." in page
+
+
+def test_a_url_on_another_host_is_not_a_use_since_it_is_never_drawn(client):
+    # 20261021-020: one parser. media_kind reads http://host/api/... as external and
+    # draws a placeholder, so it does not hold the file either.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "http://127.0.0.1:8000" + url}
+    )
+    assert "Image not shown: http://127.0.0.1:8000" in client.get(f"/notes/{nid}").text
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+
+def test_put_reads_our_media_the_way_a_browser_does(client):
+    # 20261021-020 item 2: another host is external (saved, never drawn); dot segments
+    # and a backslash name our file, so a dead one is refused.
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    gone = f"api/notes/{nid}/media/gone.webp"
+    assert _put_media(client, nid, mcid, f"https://example.org/{gone}").status_code == 200
+    for dead in (f"/./{gone}", f"\\{gone}", f"/x/../{gone}"):
+        assert _put_media(client, nid, mcid, dead).status_code == 409, dead
+
+
+def test_put_checks_a_block_whose_type_changes_to_media(client, service):
+    # 20261021-020 item 3: the comparison ignored type, so a text block holding a dead
+    # /api/... link could become a media block unchecked.
+    nid, _, _, _ = _note_with_picked_image(client)
+    dead = f"/api/notes/{nid}/media/gone.webp"
+    chapters = client.get(f"/api/notes/{nid}").json()["chapters"]
+    text = {**chapters[0], "id": "t-1", "type": "text", "content": dead, "parent_id": None}
+    service.update_note(nid, NoteUpdate(chapters=[*chapters, text]))
+    chapters = client.get(f"/api/notes/{nid}").json()["chapters"]
+    for c in chapters:
+        if c["content"] == dead:
+            c["type"] = "media"
+    resp = client.put(f"/api/notes/{nid}", json={"chapters": chapters})
+    assert resp.status_code == 409 and dead in resp.json()["detail"]
+
+
+def test_put_compares_by_chapter_id_not_by_position(client, service):
+    # 20261021-020 item 3: no test pinned id-keying. Two media blocks, one with a link
+    # already dead; a PUT that only reorders them changes no link and is saved.
+    nid, _, _, _ = _note_with_picked_image(client)
+    note = client.get(f"/api/notes/{nid}").json()
+    dead = f"/api/notes/{nid}/media/gone.webp"
+    second = {**note["chapters"][1], "id": "m-2", "order": 1, "content": dead}
+    service.update_note(nid, NoteUpdate(chapters=[*note["chapters"], second]))
+    chapters = client.get(f"/api/notes/{nid}").json()["chapters"]
+    chapters[1], chapters[2] = chapters[2], chapters[1]
+    resp = client.put(f"/api/notes/{nid}", json={"chapters": chapters})
+    assert resp.status_code == 200, resp.text
+
+
+def test_an_edit_form_saved_late_does_not_put_back_a_replaced_link(client, service):
+    # 20261021-020 item 4: the edit form posted the block's URL as it was when drawn.
+    # Tab 1 opens the form on A; tab 2 picks B and deletes A; tab 1 saves a caption.
+    nid, mcid, a_name, a_url = _note_with_picked_image(client)
+    form = client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX).text
+    assert 'name="content_text"' not in form.split('class="media-gallery"')[0]
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "blue").save(buf, format="PNG")
+    client.post(
+        f"/notes/{nid}/media/upload",
+        data={"chapter_id": mcid},
+        files={"file": ("b.png", buf.getvalue(), "image/png")},
+    )
+    [b_name] = [f for f in service.repo.list_media(service.get_note(nid).name) if f != a_name]
+    b_url = f"/api/notes/{nid}/media/{b_name}"
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": b_url})
+    assert (
+        client.post(
+            f"/notes/{nid}/media/{a_name}/delete", data={"chapter_id": mcid}, follow_redirects=False
+        ).status_code
+        == 303
+    )
+    # an old copy of the form still sends A
+    client.post(
+        f"/notes/{nid}/chapters/{mcid}/edit", data={"title": "Caption", "content_text": a_url}
+    )
+    block = next(c for c in service.get_note(nid).chapters if c.id == mcid)
+    assert block.content == b_url and block.title == "Caption"
+
+
+def test_harness_control_the_edit_form_still_saves_text_content(client, service):
+    note = _create(client, "Text")
+    nid, cid = note["id"], note["chapters"][0]["id"]
+    client.post(f"/notes/{nid}/chapters/{cid}/edit", data={"title": "T", "content_text": "body"})
+    assert service.get_note(nid).chapters[0].content == "body"
+
+
+def test_a_delete_waiting_on_a_pick_sees_the_link_it_saved(client, service, monkeypatch):
+    # 20261021-020 item 5: the mirror of the PUT test, for pick_media: the pick has
+    # checked the file exists and not yet written; a delete then waits, and refuses.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    checked, release = threading.Event(), threading.Event()
+    real = type(service)._media_exists
+
+    def slow_exists(self, *a):
+        found = real(self, *a)
+        checked.set()
+        release.wait(5)
+        return found
+
+    monkeypatch.setattr(type(service), "_media_exists", slow_exists)
+    out = {}
+    picker = threading.Thread(target=lambda: out.update(p=service.pick_media(nid, mcid, url)))
+    picker.start()
+    assert checked.wait(5)
+    deleter = threading.Thread(
+        target=lambda: out.update(d=service.delete_media_unless_used(nid, filename))
+    )
+    deleter.start()
+    deleter.join(0.3)
+    assert deleter.is_alive()  # waits for the pick's lock hold
+    release.set()
+    picker.join(5)
+    deleter.join(5)
+    assert out["p"][1] is True and out["d"][1] and out["d"][2] is False
+    assert filename in service.repo.list_media(service.get_note(nid).name)

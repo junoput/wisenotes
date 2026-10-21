@@ -1,12 +1,10 @@
 import logging
-import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import unquote
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.config import get_settings
+from app.media_urls import our_media
 from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
@@ -22,31 +20,17 @@ _DEFAULT_LANGUAGES: dict[str, str] = {
 }
 
 
-def _shows(content: str | None, path: str) -> bool:
-    """Whether a media block's URL names this path. The host, query and fragment do
-    not change which file the server sends, so a PUT that set
-    "/api/...png?v=2" or "http://host/api/...png" still counts as a use."""
-    shown = urlsplit((content or "").strip())
-    return unquote(shown.path) == path
-
-
-_OUR_MEDIA = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
-
-
-def _our_media(content: str | None) -> tuple[str, str] | None:
-    """(note id, file name) when a media block's URL names one of our stored images."""
-    m = _OUR_MEDIA.match(unquote(urlsplit((content or "").strip()).path))
-    return (m.group(1), m.group(2)) if m else None
-
-
 def media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
-    """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>"."""
-    path = f"/api/notes/{note.id}/media/{filename}"
+    """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>".
+    A block names it when our_media reads its URL as this file, the way a browser
+    does: "/./api/...", "\\api/...", "%2E" and "?v=2" all count; another host does
+    not, since media_kind never draws it."""
+    target = (note.id, filename)
     users = []
     for n in notes:
         titles = {c.id: c.title for c in n.chapters}
         for c in n.chapters:
-            if c.type == "media" and _shows(c.content, path):
+            if c.type == "media" and our_media(c.content) == target:
                 where = titles.get(c.parent_id or "") or c.title or "untitled"
                 users.append(f"{n.title} / {where}")
     return users
@@ -203,13 +187,33 @@ class NoteService:
             chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
             if chapter is None:
                 return None, True
-            ours = _our_media(url)
+            ours = our_media(url)
             if ours and not self._media_exists(*ours):
                 return note, False
             saved = self.update_chapter(
                 note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
             )
             return saved, True
+
+    def edit_chapter(
+        self,
+        note_id: str,
+        chapter_id: str,
+        title: str,
+        content: str,
+        language: str | None = None,
+        source: str | None = None,
+    ) -> Note | None:
+        """The block edit form's save. A media block keeps the URL it has NOW: the
+        form's copy was read when the form was drawn, and saving it would put back
+        a link another tab has since replaced and deleted (20261021-020). Its URL
+        changes only through pick_media, which checks it."""
+        with self.repo.lock:
+            note = self.repo.get_note(note_id)
+            chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
+            if chapter is not None and chapter.type == "media":
+                content = chapter.content
+            return self.update_chapter(note_id, chapter_id, title, content, language, source)
 
     def _media_exists(self, note_id: str, filename: str) -> bool:
         owner = self.repo.get_note(note_id)
@@ -229,13 +233,15 @@ class NoteService:
             existing = self.repo.get_note(note_id)
             if existing is None:
                 return None, []
-            before = {c.id: c.content for c in existing.chapters}
+            # Keyed by chapter id, and a change of type counts: a text block turned
+            # into a media block with a dead link in it is a new link (20261021-020).
+            before = {c.id: (c.type, c.content) for c in existing.chapters}
             gone = [
                 f"{c.id}: {c.content}"
                 for c in payload.chapters or []
                 if c.type == "media"
-                and before.get(c.id) != c.content
-                and (ours := _our_media(c.content))
+                and before.get(c.id) != (c.type, c.content)
+                and (ours := our_media(c.content))
                 and not self._media_exists(*ours)
             ]
             if gone:
