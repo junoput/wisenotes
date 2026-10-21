@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,11 @@ from filelock import FileLock
 
 from app.schemas import Note
 from app.schemas import NoteDocument
+
+# A note being deleted is first renamed to this prefix, which list_notes skips:
+# the note is gone at once, and a removal that then fails leaves a visible
+# leftover instead of a note with half its files (20261021-043 review).
+DELETING_PREFIX = ".deleting-"
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,14 @@ class JsonNoteRepository:
         self._root_dir.mkdir(parents=True, exist_ok=True)
         # Single lock file for directory operations
         self._lock = FileLock(str(self._root_dir / ".notes.lock"))
+        # The folders of notes the latest list_notes could not read (bad or invalid
+        # JSON). Their links are unknown, so the checks that ask "does another note
+        # show this image" fail closed while any exist (20261021-041).
+        self.unreadable: list[str] = []
+        # Folders with no note file (not notes: nothing can link their files), and
+        # what is left of deletes whose removal could not finish. Shown, not blocking.
+        self.no_note_file: list[str] = []
+        self.leftovers: list[str] = []
         # Perform one-time migration from legacy monolith file
         self._maybe_migrate_from_legacy()
 
@@ -125,22 +139,35 @@ class JsonNoteRepository:
         return self._lock
 
     def list_notes(self) -> list[Note]:
+        """Every note that can be read. Each folder is examined inside one try, so
+        a folder that cannot be listed or opened (mode 000, 0100, 0600) is counted
+        as unreadable instead of failing the whole scan or being skipped as empty
+        (20261021-043 review). The scan also records the folders with no note file
+        and the leftovers of deletes that could not finish."""
         notes: list[Note] = []
+        unreadable: list[str] = []
+        no_note_file: list[str] = []
+        leftovers: list[str] = []
         with self._lock:
             for entry in sorted(self._root_dir.iterdir()):
-                if not entry.is_dir() or entry.name.startswith("."):
+                if entry.name.startswith(DELETING_PREFIX):
+                    leftovers.append(entry.name)
                     continue
-
-                # Prefer <name>.json matching folder name, else any *.json
-                nfile = entry / f"{entry.name}.json"
-                if not nfile.exists():
-                    json_files = list(entry.glob("*.json"))
-                    nfile = json_files[0] if json_files else None
-                if not nfile or not nfile.exists():
+                if entry.name.startswith("."):
                     continue
-
                 try:
-                    with nfile.open("r", encoding="utf-8") as f:
+                    if not entry.is_dir():
+                        continue
+                    names = sorted(p.name for p in entry.iterdir())
+                    # Prefer <name>.json matching the folder name, else any *.json
+                    preferred = f"{entry.name}.json"
+                    jsons = [n for n in names if n.endswith(".json")]
+                    pick = preferred if preferred in jsons else (jsons[0] if jsons else None)
+                    if pick is None:
+                        # no id, so nothing can link its files: not a note (sub decision)
+                        no_note_file.append(entry.name)
+                        continue
+                    with (entry / pick).open("r", encoding="utf-8") as f:
                         raw = json.load(f)
 
                     if "name" not in raw and "slug" in raw:
@@ -150,9 +177,13 @@ class JsonNoteRepository:
 
                     notes.append(Note.model_validate(raw))
 
-                except (json.JSONDecodeError, Exception) as e:
-                    logger.error("Failed to read note from %s: %s", nfile, e)
+                except Exception as e:
+                    logger.error("Failed to read note folder %s: %s", entry.name, e)
+                    unreadable.append(entry.name)
                     continue
+            self.unreadable = unreadable
+            self.no_note_file = no_note_file
+            self.leftovers = leftovers
 
         notes.sort(key=lambda n: n.created_at)
         return notes
@@ -238,18 +269,29 @@ class JsonNoteRepository:
                 raise
         return note
 
-    def delete_note(self, note_id: str) -> None:
+    def delete_note(self, note_id: str) -> str | None:
+        """Remove a note's folder. It is renamed first (atomic): if that fails, an
+        OSError is raised and nothing changed. Then the renamed folder is removed;
+        if that fails, the note is already gone and the leftover's name is
+        returned (and logged) for the caller to report."""
         with self._lock:
             target: Path | None = None
             for note in self.list_notes():
                 if note.id == note_id:
                     target = self._note_dir(note.name)
                     break
-            if target and target.exists():
-                try:
-                    shutil.rmtree(target)
-                except Exception:
-                    pass
+            if not target or not target.exists():
+                return None
+            doomed = self._root_dir / f"{DELETING_PREFIX}{target.name}-{uuid.uuid4().hex[:8]}"
+            target.rename(doomed)
+            try:
+                shutil.rmtree(doomed)
+            except OSError as e:
+                logger.error(
+                    "note %s deleted, but %s was not fully removed: %s", note_id, doomed.name, e
+                )
+                return doomed.name
+            return None
 
     def export_document(self) -> NoteDocument:
         return NoteDocument(version="1.0.0", exported_at=datetime.utcnow(), notes=self.list_notes())

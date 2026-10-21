@@ -45,11 +45,12 @@ class TestNoteServiceCRUD:
 
     def test_delete_note(self, service):
         note = service.create_note(NoteCreate(title="Doomed"))
-        assert service.delete_note(note.id) is True
+        deleted, borrowers, _ = service.delete_note_unless_shown(note.id)
+        assert deleted is not None and borrowers == []
         assert service.get_note(note.id) is None
 
     def test_delete_nonexistent_note(self, service):
-        assert service.delete_note("nope") is False
+        assert service.delete_note_unless_shown("nope")[0] is None
 
 
 class TestChapterOperations:
@@ -187,7 +188,7 @@ class TestExportImport:
 
         # Delete all, then import
         for n in service.list_notes():
-            service.delete_note(n.id)
+            service.delete_note_unless_shown(n.id)
         assert len(service.list_notes()) == 0
 
         service.import_document(doc)

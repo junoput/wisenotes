@@ -11,6 +11,17 @@
   <a class="icon-btn add-note-btn" href="/notes/new" hx-get="/notes/new" hx-target="body" hx-swap="beforeend" aria-label="Add note" title="Add note">+</a>
 </div>
 <div class="pane-content">
+  {# What the notes folder holds that the app cannot use (20261021-041). There is no
+     override in the app: each must be repaired or removed on disk. #}
+  {% if unreadable %}
+  <p class="import-missing unreadable-notes" role="status">{{ unreadable|length }} note{{ 's' if unreadable|length != 1 }} could not be read and {{ 'are' if unreadable|length != 1 else 'is' }} not listed: {{ unreadable|join(', ') }}. Until {{ 'they are' if unreadable|length != 1 else 'it is' }} repaired or removed on disk, no image or note can be deleted.</p>
+  {% endif %}
+  {% if no_note_file %}
+  <p class="import-missing no-note-file" role="status">{{ no_note_file|length }} folder{{ 's' if no_note_file|length != 1 }} without a note file: {{ no_note_file|join(', ') }}. Repair or remove {{ 'them' if no_note_file|length != 1 else 'it' }} on disk.</p>
+  {% endif %}
+  {% if leftovers %}
+  <p class="import-missing delete-leftovers" role="status">{{ leftovers|length }} folder{{ 's' if leftovers|length != 1 }} left by a delete that could not finish: {{ leftovers|join(', ') }}. The note{{ 's are' if leftovers|length != 1 else ' is' }} gone; remove {{ 'them' if leftovers|length != 1 else 'it' }} on disk.</p>
+  {% endif %}
   <div class="note-list">
     {# Group notes by folder #}
     {% set ns = namespace(folders={}, ungrouped=[]) %}
