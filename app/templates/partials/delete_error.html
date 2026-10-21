@@ -1,0 +1,2 @@
+{# Why deleting the note was refused. In the settings' delete section; sent alone, out of band, to an htmx request. #}
+<p id="delete-error" class="import-missing delete-error" role="alert"{% if oob %} hx-swap-oob="true"{% endif %}{% if not delete_error %} hidden{% endif %}>{{ delete_error or "" }}</p>

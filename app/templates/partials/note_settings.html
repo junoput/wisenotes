@@ -1,4 +1,4 @@
-{# Note settings. Overlay when appended by htmx; the same markup inside the page otherwise. Needs note, existing_folders. #}
+{# Note settings. Overlay when appended by htmx; the same markup inside the page otherwise. Needs note, existing_folders; optionally delete_error. #}
 <div class="note-settings-overlay" id="note-settings">
   <div class="note-settings-panel">
     <div class="note-settings-header">
@@ -33,6 +33,7 @@
       </div>
       <div class="note-settings-section">
         <strong class="danger-text">Delete</strong>
+        {% include "partials/delete_error.html" %}
         <form class="row" action="/notes/{{ note.id }}/delete" method="post" hx-post="/notes/{{ note.id }}/delete" hx-target="body" hx-swap="none" data-confirm="Delete this note?">
           <p class="muted">Permanently delete this note and its chapters.</p>
           <button type="submit" class="btn danger">Delete Note</button>

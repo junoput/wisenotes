@@ -53,6 +53,14 @@ async def update_note(
 
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, service: NoteService = Depends(get_note_service)):
+    note = service.get_note(note_id)
+    borrowers = service.media_borrowers(note) if note else []
+    if borrowers:
+        # Same refusal as the page route: the note's folder holds images these show.
+        raise HTTPException(
+            status_code=409,
+            detail=f"Other notes show images from this note: {'; '.join(borrowers)}",
+        )
     ok = service.delete_note(note_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Note not found")

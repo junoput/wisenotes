@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import unquote
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from app.config import get_settings
@@ -17,6 +19,27 @@ _DEFAULT_LANGUAGES: dict[str, str] = {
     "code": "python",
     "math": "latex",
 }
+
+
+def _shows(content: str | None, path: str) -> bool:
+    """Whether a media block's URL names this path. The host, query and fragment do
+    not change which file the server sends, so a PUT that set
+    "/api/...png?v=2" or "http://host/api/...png" still counts as a use."""
+    shown = urlsplit((content or "").strip())
+    return unquote(shown.path) == path
+
+
+def media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
+    """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>"."""
+    path = f"/api/notes/{note.id}/media/{filename}"
+    users = []
+    for n in notes:
+        titles = {c.id: c.title for c in n.chapters}
+        for c in n.chapters:
+            if c.type == "media" and _shows(c.content, path):
+                where = titles.get(c.parent_id or "") or c.title or "untitled"
+                users.append(f"{n.title} / {where}")
+    return users
 
 
 def _make_chapter(
@@ -115,6 +138,16 @@ class NoteService:
         # Pass old name to allow repo to rename folder/file if needed
         saved = self.repo.upsert_note(updated, old_name=existing.name)
         return saved
+
+    def media_borrowers(self, note: Note) -> list[str]:
+        """Blocks in OTHER notes that show one of this note's images, which deleting
+        the note would remove with its folder: "<file>: <note> / <chapter>"."""
+        others = [n for n in self.list_notes() if n.id != note.id]
+        return [
+            f"{f}: {user}"
+            for f in self.repo.list_media(note.name)
+            for user in media_users(others, note, f)
+        ]
 
     def delete_note(self, note_id: str) -> bool:
         if not self.repo.get_note(note_id):

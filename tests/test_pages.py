@@ -609,3 +609,73 @@ def test_the_gallery_reads_the_notes_once_however_many_files(client, service, mo
     monkeypatch.setattr(type(service), "list_notes", lambda self: calls.append(1) or real(self))
     client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX)
     assert len(calls) == 1
+
+
+def _borrowed_image(client):
+    """Pics owns an image that a block in Elsewhere shows; Pics shows another file."""
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    other = _create(client, "Elsewhere")
+    root = other["chapters"][0]["id"]
+    client.post(
+        f"/notes/{other['id']}/chapters",
+        data={"block_type": "media", "position": "child", "ref_id": root},
+    )
+    ocid = client.get(f"/api/notes/{other['id']}").json()["chapters"][1]["id"]
+    client.post(f"/notes/{other['id']}/chapters/{ocid}/media/select", data={"url": url})
+    return nid, filename, other["id"]
+
+
+def test_a_note_whose_image_another_note_shows_is_not_deleted(client):
+    # 20261020-085: the delete removed the note's media/ folder under the other block.
+    nid, filename, _ = _borrowed_image(client)
+    resp = client.post(f"/notes/{nid}/delete", follow_redirects=False)
+    assert resp.status_code == 409 and _doc(resp)
+    assert '<p id="delete-error" class="import-missing delete-error" role="alert">' in resp.text
+    assert f"{filename}: Elsewhere / " in resp.text
+    assert 'class="note-settings-overlay"' in resp.text  # the settings, where the delete is
+    assert client.get(f"/api/notes/{nid}/media/list").json()["media"] == [filename]
+
+
+def test_a_refused_note_delete_with_htmx_is_the_reason_out_of_band(client):
+    nid, filename, _ = _borrowed_image(client)
+    resp = client.post(f"/notes/{nid}/delete", headers=HX)
+    assert resp.status_code == 409 and not _doc(resp)
+    assert 'id="delete-error"' in resp.text and 'hx-swap-oob="true"' in resp.text
+    assert f"{filename}: Elsewhere / " in resp.text
+    # the overlay it swaps into has the element, hidden until there is a reason
+    page = client.get(f"/notes/{nid}/settings", headers=HX).text
+    assert re.search(r'<p id="delete-error"[^>]* hidden>', page)
+
+
+def test_the_api_refuses_the_same_delete(client):
+    nid, filename, _ = _borrowed_image(client)
+    resp = client.delete(f"/api/notes/{nid}")
+    assert resp.status_code == 409 and f"{filename}: Elsewhere / " in resp.json()["detail"]
+    assert client.get(f"/api/notes/{nid}").status_code == 200
+
+
+def test_harness_control_a_note_showing_only_its_own_images_is_deleted(client):
+    # The note's own blocks go with it, so they do not hold the delete.
+    nid, _, _, _ = _note_with_picked_image(client)
+    resp = client.post(f"/notes/{nid}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+    assert client.get(f"/api/notes/{nid}").status_code == 404
+
+
+def test_once_the_other_block_picks_another_image_the_note_is_deleted(client):
+    nid, _, oid = _borrowed_image(client)
+    ocid = client.get(f"/api/notes/{oid}").json()["chapters"][1]["id"]
+    client.post(f"/notes/{oid}/chapters/{ocid}/media/select", data={"url": "/static/none.png"})
+    assert client.post(f"/notes/{nid}/delete", follow_redirects=False).status_code == 303
+
+
+def test_app_js_swaps_the_refused_note_delete(client):
+    js = client.get("/static/js/app.js").text
+    m = re.search(r"const NOTE_DELETE = /(.+)/;", js)
+    assert m and "NOTE_DELETE.test(path)" in js
+    note = _create(client, "Js")
+    page = client.get(f"/notes/{note['id']}/settings", headers=HX).text
+    [action] = re.findall(r'hx-post="(/notes/[^"]+/delete)"', page)
+    assert re.fullmatch(m.group(1), action)
+    assert not re.fullmatch(m.group(1), f"/notes/{note['id']}/media/x.png/delete")
