@@ -1,5 +1,6 @@
 {# Media library for one block: upload, pick, delete. Every action is a form. Needs active, chapter_id,
-   media_files ({name, users}). A file a block uses has no delete: it says where it is used instead. #}
+   media_files ({name, users}), optionally media_error (why the last delete was refused).
+   A file a block uses has no delete: it says where it is used instead. #}
 {% set note_id = active.id %}
 <form class="media-upload" action="/notes/{{ note_id }}/media/upload" method="post" enctype="multipart/form-data"
       hx-post="/notes/{{ note_id }}/media/upload" hx-encoding="multipart/form-data" hx-trigger="submit, change"
@@ -8,6 +9,7 @@
   <input type="file" name="file" accept="image/*" required aria-label="Image file">
   <button type="submit" class="btn">Upload</button>
 </form>
+{% if media_error %}<p class="import-missing media-error" role="alert">{{ media_error }}</p>{% endif %}
 <div class="media-gallery">
   {% for item in media_files %}
     {% set filename = item.name %}

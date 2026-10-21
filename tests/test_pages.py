@@ -516,7 +516,7 @@ def test_an_image_a_block_shows_cannot_be_deleted(client):
     resp = client.post(
         f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
     )
-    assert resp.status_code == 409 and "is used by Pics / " in resp.json()["detail"]
+    assert resp.status_code == 409 and "is used by Pics / " in resp.text
     assert client.get(f"/api/notes/{nid}/media/list").json()["media"] == [filename]
 
 
@@ -532,7 +532,7 @@ def test_an_image_another_note_shows_cannot_be_deleted_either(client):
     ocid = client.get(f"/api/notes/{other['id']}").json()["chapters"][1]["id"]
     client.post(f"/notes/{other['id']}/chapters/{ocid}/media/select", data={"url": url})
     resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
-    assert resp.status_code == 409 and "Elsewhere / " in resp.json()["detail"]
+    assert resp.status_code == 409 and "Elsewhere / " in resp.text
 
 
 def test_harness_control_an_unused_image_keeps_its_delete(client):
@@ -540,3 +540,72 @@ def test_harness_control_an_unused_image_keeps_its_delete(client):
     client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
     page = client.get(f"/notes/{nid}/chapters/{mcid}/edit").text
     assert f"/media/{filename}/delete" in page and "media-in-use" not in page
+
+
+def test_a_refused_delete_without_scripts_is_the_edit_page_saying_why(client):
+    # 20261020-084: a plain POST got a raw {"detail": ...} page.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 409 and _doc(resp)
+    assert '<p class="import-missing media-error" role="alert">' in resp.text
+    assert f"{filename} is used by Pics / " in resp.text
+    # the gallery is drawn as it is now: the file shows as in use, with no delete
+    assert 'class="media-in-use"' in resp.text
+    assert f'action="/notes/{nid}/media/{filename}/delete"' not in resp.text
+
+
+def test_a_refused_delete_with_htmx_is_the_gallery_saying_why(client):
+    # 20261020-084: htmx dropped the 409's body, so a stale gallery showed nothing.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, headers=HX
+    )
+    assert resp.status_code == 409 and not _doc(resp)
+    assert 'class="media-gallery"' in resp.text and 'class="media-in-use"' in resp.text
+    assert f"{filename} is used by Pics / " in resp.text
+
+
+def test_app_js_swaps_the_refused_media_delete(client):
+    # The fragment above is only seen if app.js lets htmx swap a 409; the path it
+    # tests must be the one the gallery's delete form posts to.
+    js = client.get("/static/js/app.js").text
+    m = re.search(r"const MEDIA_DELETE = /(.+)/;", js)
+    assert m and "status === 409" in js
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    page = client.get(f"/notes/{nid}/chapters/{mcid}/edit").text
+    [action] = re.findall(r'hx-post="(/notes/[^"]+/media/[^"]+/delete)"', page)
+    assert re.fullmatch(m.group(1), action)
+    assert not re.fullmatch(m.group(1), f"/notes/{nid}/media/upload")
+
+
+def test_a_url_with_a_query_or_a_host_still_counts_as_a_use(client):
+    # 20261020-084: the match was exact, so a PUT-set variant displayed the file
+    # but did not protect it.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    for shown in (url + "?v=2", "http://127.0.0.1:8000" + url, url.replace(".", "%2E")):
+        client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": shown})
+        resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+        assert resp.status_code == 409, shown
+    assert client.get(f"/api/notes/{nid}/media/list").json()["media"] == [filename]
+
+
+def test_the_gallery_reads_the_notes_once_however_many_files(client, service, monkeypatch):
+    # 20261020-084: _media_users ran list_notes() per file, files x notes reads per render.
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    for colour in ("green", "blue"):
+        buf = BytesIO()
+        Image.new("RGB", (4, 4), colour).save(buf, format="PNG")
+        client.post(
+            f"/notes/{nid}/media/upload",
+            data={"chapter_id": mcid},
+            files={"file": (f"{colour}.png", buf.getvalue(), "image/png")},
+        )
+    assert len(client.get(f"/api/notes/{nid}/media/list").json()["media"]) == 3
+    calls = []
+    real = type(service).list_notes
+    monkeypatch.setattr(type(service), "list_notes", lambda self: calls.append(1) or real(self))
+    client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX)
+    assert len(calls) == 1

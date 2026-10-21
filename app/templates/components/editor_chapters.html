@@ -1,5 +1,5 @@
 {% from 'components/add_block_button.html' import add_block_button %}
-{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0) %}
+{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0, media_error=none) %}
   {% set siblings = chapters|selectattr('parent_id', 'equalto', parent_id)|list|sort(attribute='order') %}
   {% for chapter in siblings %}
     {% set edit_url = '/notes/' ~ active_note.id ~ '/chapters/' ~ chapter.id %}
@@ -24,7 +24,7 @@
           {{ add_block_button(active_note.id, chapter.id, 'child', True, 'Add child block', block_types) }}
         {% endif %}
         {% if editing and editing.id == chapter.id %}
-          {% with note=active_note, chapter=chapter %}{% include "partials/chapter_edit_form.html" %}{% endwith %}
+          {% with note=active_note, chapter=chapter, media_error=media_error %}{% include "partials/chapter_edit_form.html" %}{% endwith %}
         {% else %}
         <a class="chapter-view" href="{{ edit_url }}/edit"
            hx-get="{{ edit_url }}/edit" hx-target="closest .chapter-content-wrapper" hx-swap="innerHTML">
@@ -56,7 +56,7 @@
       {% endif %}
       {% if depth < 3 and chapters|selectattr('parent_id', 'equalto', chapter.id)|list %}
         <div class="chapter-children">
-          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1) }}
+          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1, media_error) }}
         </div>
       {% endif %}
     </section>
