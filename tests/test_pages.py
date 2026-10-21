@@ -540,3 +540,22 @@ def test_harness_control_an_unused_image_keeps_its_delete(client):
     client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
     page = client.get(f"/notes/{nid}/chapters/{mcid}/edit").text
     assert f"/media/{filename}/delete" in page and "media-in-use" not in page
+
+
+def test_an_external_image_set_after_import_is_a_placeholder_not_a_broken_image(client):
+    # 20261014-140 leftover: a URL set through the select form or PUT still drew an
+    # <img> that img-src 'self' blocks.
+    nid, mcid, _, url = _note_with_picked_image(client)
+    for external in (
+        "https://example.org/a.png",
+        "http://example.org/a.png",
+        "//example.org/a.png",
+    ):
+        client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": external})
+        page = client.get(f"/notes/{nid}").text
+        assert f"External image not shown: {external}." in page, external
+        assert f'src="{external}"' not in page, external
+    # control: the note's own image is still drawn
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
+    page = client.get(f"/notes/{nid}").text
+    assert f'<img src="{url}"' in page and "External image not shown" not in page
