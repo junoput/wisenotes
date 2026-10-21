@@ -13,14 +13,20 @@
     </a>
   </div>
 </div>
-{% set ns = namespace(missing=[]) %}
-{% for c in active.chapters if c.type == 'media' and c.content and c.content.startswith('missing:') %}
-  {% set ns.missing = ns.missing + [c.content[8:]] %}
+{# Every media block that shows a placeholder instead of an image, by media_kind. #}
+{% set ns = namespace(missing=[], outside=[]) %}
+{% for c in active.chapters if c.type == 'media' %}
+  {% set kind = c.content|media_kind %}
+  {% if kind == 'missing' %}{% set ns.missing = ns.missing + [c.content.strip()[8:]] %}
+  {% elif kind in ('external', 'other') %}{% set ns.outside = ns.outside + [c.content] %}{% endif %}
 {% endfor %}
-{% if ns.missing %}
+{% if ns.missing or ns.outside %}
 <div class="import-missing" role="status">
-  {{ ns.missing|length }} image{{ 's' if ns.missing|length != 1 }} could not be imported and {{ 'are' if ns.missing|length != 1 else 'is' }} not in this note:
-  {{ ns.missing|join(', ') }}. Open each marked block to upload or pick a replacement.
+  {% if ns.missing %}{{ ns.missing|length }} image{{ 's' if ns.missing|length != 1 }} could not be imported and {{ 'are' if ns.missing|length != 1 else 'is' }} not in this note:
+  {{ ns.missing|join(', ') }}.{% endif %}
+  {% if ns.outside %}{{ ns.outside|length }} image{{ 's' if ns.outside|length != 1 }} {{ 'are' if ns.outside|length != 1 else 'is' }} not stored in this note and not shown:
+  {{ ns.outside|join(', ') }}.{% endif %}
+  Open each marked block to upload or pick a replacement.
 </div>
 {% endif %}
 <div class="editor-body">

@@ -55,6 +55,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.blocks import BLOCKS
+from app.media_urls import MISSING_PREFIX
+from app.media_urls import media_kind
 from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
@@ -85,7 +87,6 @@ _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
 Scope = tuple[str, str]
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-MISSING_PREFIX = "missing:"  # media block content for an image the import could not store
 
 
 class BundleError(ValueError):
@@ -383,7 +384,8 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
     """Resolve a media block's reference to a stored image, importing it once."""
     if content in media_urls:
         return media_urls[content]
-    if content.startswith(MISSING_PREFIX):
+    kind = media_kind(content)
+    if kind == "missing":
         return content  # already a placeholder (a re-import of an export); keep it visible
     m = _MEDIA_REF.match(content) or _API_MEDIA_REF.match(content)
     if m:
@@ -399,12 +401,15 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
             url = _store_image(service, note_id, key[1], raw, result)
         media_urls[content] = url
         return url
-    if content.startswith(("http://", "https://")):
-        # Never fetched (no new SSRF surface), and the CSP's img-src 'self' would
-        # block it in the browser, a broken image with no word why (20261014-140).
-        # A visible placeholder naming the URL, like an image absent from the zip.
+    if kind == "inline":
+        return content  # a data:image/ URL; the CSP's img-src data: shows it
+    if kind == "external":
+        # Never fetched (no new SSRF surface). Kept as it is: the block and the
+        # note's notice say it is not shown, the same way as for a URL set later
+        # (20261014-140, 20261021-009).
         result.skipped.append(f"{content}: external image, not fetched")
-        return _missing(content, result)
+        result.missing.append(content)
+        return content
     return ""
 
 

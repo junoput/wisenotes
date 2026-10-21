@@ -37,15 +37,10 @@
             <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}"><div class="math-formula-content">{{ chapter.content }}</div></div>
           {% elif chapter.type == 'media' %}
             <div class="block-content media-block-display">
-              {% if chapter.content and chapter.content.startswith('missing:') %}
-                <div class="media-empty media-missing">Image missing from the import: {{ chapter.content[8:] }}</div>
-              {% elif chapter.content and chapter.content.startswith(('http://', 'https://', '//')) %}
-                {# img-src 'self' data: blocks another host; say so rather than draw a broken image (20261014-140) #}
-                <div class="media-empty media-missing">External image not shown: {{ chapter.content }}. Upload or pick a copy here.</div>
-              {% elif chapter.content %}
+              {% if chapter.content|media_kind in ('image', 'inline') %}
                 <img src="{{ chapter.content }}" alt="{{ chapter.title or 'Media' }}">
               {% else %}
-                <div class="media-empty">No image yet</div>
+                {% with content=chapter.content or '' %}{% include "components/media_placeholder.html" %}{% endwith %}
               {% endif %}
             </div>
           {% else %}

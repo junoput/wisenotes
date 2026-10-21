@@ -150,9 +150,9 @@ class TestJson:
         r = import_bundle(service, "n.json", _doc(n))
         [imported] = r.notes
         by_order = sorted((c for c in imported.chapters if c.parent_id), key=lambda c: c.order)
-        # 20261014-140: an external URL is a visible placeholder, never fetched; kept,
-        # it was a broken image (CSP img-src 'self').
-        assert [c.content for c in by_order[:2]] == ["", "missing:https://example.org/a.png"]
+        # 20261014-140, 20261021-009: an external URL is kept as it is, never fetched;
+        # the page shows it as not stored (media_kind "external"), counted in missing.
+        assert [c.content for c in by_order[:2]] == ["", "https://example.org/a.png"]
         assert r.missing == ["https://example.org/a.png"]
         assert "https://example.org/a.png: external image, not fetched" in r.skipped
         assert by_order[2].type == "text"
