@@ -889,6 +889,22 @@ class TestUndoPins:
         assert service.list_notes() == []  # undone all the same
 
 
+class StrErrno(OSError):
+    """A subclass whose errno property returns text."""
+
+    @property
+    def errno(self):
+        return self.args[0]
+
+
+class RaisingErrno(OSError):
+    """A subclass whose errno property itself raises."""
+
+    @property
+    def errno(self):
+        raise RuntimeError("/srv/secret/raised")
+
+
 @pytest.mark.parametrize(
     ("error", "words"),
     [
@@ -898,6 +914,12 @@ class TestUndoPins:
         (OSError(99999, "/srv/secret"), "system error 99999"),
         (OSError("/srv/secret"), "system error"),
         (RuntimeError("/srv/secret"), "RuntimeError"),
+        # 20261021-052 review: errno that is not an int
+        (OSError("/srv/secret/x", "y"), "system error"),
+        (StrErrno("/srv/secret/prop"), "system error"),
+        (OSError(["/srv/secret/list"], "x"), "system error"),
+        (OSError(True, "/srv/secret"), "system error"),
+        (RaisingErrno("x"), "system error"),
     ],
 )
 def test_a_failure_reason_never_carries_the_exceptions_own_text(error, words):
@@ -914,3 +936,19 @@ def test_an_import_write_failure_with_a_path_in_strerror_shows_no_path(service, 
         import_bundle(service, "x.zip", _three_note_zip(_png()))
     assert "/srv/secret" not in str(caught.value)
     assert "(Input/output error)" in str(caught.value)
+
+
+def test_an_import_whose_write_fails_with_a_list_errno_is_still_an_import_error(
+    service, monkeypatch
+):
+    # The list errno made failure_reason raise TypeError, which replaced the import
+    # error (and its kept-notes message) with a plain 500.
+    def odd(note_name, name, data):
+        raise OSError(["/srv/secret/list"], "x")
+
+    monkeypatch.setattr(service.repo, "save_media", odd)
+    with pytest.raises(BundleError) as caught:
+        import_bundle(service, "x.zip", _three_note_zip(_png()))
+    assert (
+        str(caught.value) == "The import failed while writing (system error). Nothing was imported"
+    )
