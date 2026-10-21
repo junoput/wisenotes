@@ -35,6 +35,21 @@ def _short(content: str, limit: int = 60) -> str:
     return content if len(content) <= limit else content[:limit] + "..."
 
 
+class UnreadableNotes(Exception):
+    """A delete was refused because some note could not be read, so whether it
+    shows the image cannot be known. Carries what the refusing route draws."""
+
+    def __init__(self, folders: list[str], note: Note, notes: list[Note]):
+        self.folders, self.note, self.notes = folders, note, notes
+        count = len(folders)
+        super().__init__(
+            f"{count} note{'s' if count != 1 else ''} could not be read "
+            f"({', '.join(folders)}), so it cannot be told whether "
+            f"{'they show' if count != 1 else 'it shows'} this image. "
+            "Repair or remove the unreadable note first."
+        )
+
+
 def media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
     """The media blocks, in any of `notes`, that show this file: "<note> / <chapter>".
     A block names it when our_media reads its URL as this file, the way a browser
@@ -171,6 +186,8 @@ class NoteService:
             note = next((n for n in notes if n.id == note_id), None)
             if note is None:
                 return None, [], notes
+            if self.repo.unreadable:
+                raise UnreadableNotes(list(self.repo.unreadable), note, notes)
             borrowers = self.media_borrowers(note, notes)
             if not borrowers:
                 self.repo.delete_note(note_id)
@@ -187,6 +204,8 @@ class NoteService:
             note = next((n for n in notes if n.id == note_id), None)
             if note is None:
                 return None, [], False, notes
+            if self.repo.unreadable:
+                raise UnreadableNotes(list(self.repo.unreadable), note, notes)
             users = media_users(notes, note, filename)
             if users:
                 return note, users, False, notes

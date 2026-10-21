@@ -29,6 +29,10 @@ class JsonNoteRepository:
         self._root_dir.mkdir(parents=True, exist_ok=True)
         # Single lock file for directory operations
         self._lock = FileLock(str(self._root_dir / ".notes.lock"))
+        # The folders of notes the latest list_notes could not read (bad or invalid
+        # JSON). Their links are unknown, so the checks that ask "does another note
+        # show this image" fail closed while any exist (20261021-041).
+        self.unreadable: list[str] = []
         # Perform one-time migration from legacy monolith file
         self._maybe_migrate_from_legacy()
 
@@ -126,6 +130,7 @@ class JsonNoteRepository:
 
     def list_notes(self) -> list[Note]:
         notes: list[Note] = []
+        unreadable: list[str] = []
         with self._lock:
             for entry in sorted(self._root_dir.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("."):
@@ -152,7 +157,9 @@ class JsonNoteRepository:
 
                 except (json.JSONDecodeError, Exception) as e:
                     logger.error("Failed to read note from %s: %s", nfile, e)
+                    unreadable.append(entry.name)
                     continue
+            self.unreadable = unreadable
 
         notes.sort(key=lambda n: n.created_at)
         return notes
@@ -246,10 +253,9 @@ class JsonNoteRepository:
                     target = self._note_dir(note.name)
                     break
             if target and target.exists():
-                try:
-                    shutil.rmtree(target)
-                except Exception:
-                    pass
+                # Raised, not swallowed: a folder that is still there is not a
+                # deleted note, and callers say so (20261021-041).
+                shutil.rmtree(target)
 
     def export_document(self) -> NoteDocument:
         return NoteDocument(version="1.0.0", exported_at=datetime.utcnow(), notes=self.list_notes())

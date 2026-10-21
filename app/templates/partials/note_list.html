@@ -11,6 +11,10 @@
   <a class="icon-btn add-note-btn" href="/notes/new" hx-get="/notes/new" hx-target="body" hx-swap="beforeend" aria-label="Add note" title="Add note">+</a>
 </div>
 <div class="pane-content">
+  {% if unreadable %}
+  {# Skipped from the list; deletes of images and notes are refused while it exists (20261021-041). #}
+  <p class="import-missing unreadable-notes" role="status">{{ unreadable|length }} note{{ 's' if unreadable|length != 1 }} could not be read and {{ 'are' if unreadable|length != 1 else 'is' }} not listed: {{ unreadable|join(', ') }}.</p>
+  {% endif %}
   <div class="note-list">
     {# Group notes by folder #}
     {% set ns = namespace(folders={}, ungrouped=[]) %}

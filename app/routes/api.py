@@ -19,6 +19,7 @@ from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
 from app.services.image_processing import STORED_MEDIA_TYPES
 from app.services.notes import NoteService
+from app.services.notes import UnreadableNotes
 from app.services.notes import get_note_service
 
 templates = Jinja2Templates(directory="app/templates")
@@ -75,7 +76,15 @@ async def update_note(
 
 @router.delete("/notes/{note_id}")
 async def delete_note(note_id: str, service: NoteService = Depends(get_note_service)):
-    note, borrowers, _ = service.delete_note_unless_shown(note_id)
+    try:
+        note, borrowers, _ = service.delete_note_unless_shown(note_id)
+    except UnreadableNotes as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"The note could not be removed ({e.strerror or type(e).__name__}).",
+        ) from e
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     if borrowers:

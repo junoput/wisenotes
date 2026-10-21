@@ -153,7 +153,8 @@ document.body.addEventListener('htmx:beforeSwap', (e) => {
   const path = e.detail.requestConfig?.path || '';
   const status = e.detail.xhr.status;
   if ((path === '/notes/import' && status === 400)
-      || ((MEDIA_DELETE.test(path) || NOTE_DELETE.test(path) || MEDIA_SELECT.test(path)) && status === 409)) {
+      || ((MEDIA_DELETE.test(path) || NOTE_DELETE.test(path) || MEDIA_SELECT.test(path)) && status === 409)
+      || (NOTE_DELETE.test(path) && status === 500)) {
     e.detail.shouldSwap = true; e.detail.isError = false;
   }
 });

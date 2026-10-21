@@ -37,6 +37,7 @@ from app.services.bundle import import_bundle
 from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
+from app.services.notes import UnreadableNotes
 from app.services.notes import get_note_service
 from app.services.notes import media_users
 
@@ -82,7 +83,9 @@ def _page(
     template = "partials/hx_refresh.html" if _is_htmx(request) else "index.html"
     notes = service.list_notes() if notes is None else notes
     return templates.TemplateResponse(
-        request, template, _ctx(request, notes=notes, active=note, **extra)
+        request,
+        template,
+        _ctx(request, notes=notes, active=note, unreadable=service.repo.unreadable, **extra),
     )
 
 
@@ -94,7 +97,12 @@ def _after_change(
         return templates.TemplateResponse(
             request,
             "partials/hx_refresh.html",
-            _ctx(request, notes=service.list_notes(), active=note),
+            _ctx(
+                request,
+                notes=service.list_notes(),
+                active=note,
+                unreadable=service.repo.unreadable,
+            ),
             headers=headers,
         )
     return RedirectResponse(url=f"/notes/{note.id}" if note else "/", status_code=303)
@@ -233,23 +241,24 @@ async def fetch_note(
 
 
 def _delete_refused(
-    request: Request, service: NoteService, note: Note, borrowers: list[str], notes: list[Note]
+    request: Request,
+    service: NoteService,
+    note: Note,
+    message: str,
+    notes: list[Note],
+    status_code: int = 409,
 ) -> Response:
-    """Deleting the note removes its media/ folder, so a block in another note
-    showing one of its images would be left requesting a file that is gone. Say
-    which, on the settings: an out-of-band swap into the open overlay with htmx,
-    the settings page without scripts. Both are 409s."""
-    message = (
-        "Other notes show images from this note: "
-        + "; ".join(borrowers)
-        + ". Pick other images there first."
-    )
+    """Why the note was not deleted, on the settings: an out-of-band swap into the
+    open overlay with htmx, the settings page without scripts. Deleting removes
+    the note's media/ folder, so a block in another note showing one of its
+    images refuses it (409), and so does a note that cannot be read (409); a
+    folder that could not be removed is a 500."""
     if _is_htmx(request):
         return templates.TemplateResponse(
             request,
             "partials/delete_error.html",
             {"request": request, "delete_error": message, "oob": True},
-            status_code=409,
+            status_code=status_code,
         )
     folders = sorted({n.folder for n in notes if n.folder})
     resp = _page(
@@ -262,7 +271,7 @@ def _delete_refused(
         delete_error=message,
         here=f"/notes/{note.id}/settings",
     )
-    resp.status_code = 409
+    resp.status_code = status_code
     return resp
 
 
@@ -311,11 +320,23 @@ async def update_note_folder(
 async def delete_note(
     note_id: str, request: Request, service: NoteService = Depends(get_note_service)
 ):
-    note, borrowers, notes = service.delete_note_unless_shown(note_id)
+    try:
+        note, borrowers, notes = service.delete_note_unless_shown(note_id)
+    except UnreadableNotes as e:
+        return _delete_refused(request, service, e.note, str(e), e.notes)
+    except OSError as e:
+        note = _note_or_404(service, note_id)
+        message = f"The note could not be removed ({e.strerror or type(e).__name__})."
+        return _delete_refused(request, service, note, message, service.list_notes(), 500)
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     if borrowers:
-        return _delete_refused(request, service, note, borrowers, notes)
+        message = (
+            "Other notes show images from this note: "
+            + "; ".join(borrowers)
+            + ". Pick other images there first."
+        )
+        return _delete_refused(request, service, note, message, notes)
     return _after_change(request, service, notes[0] if notes else None, headers=CLOSE_OVERLAY)
 
 
@@ -528,7 +549,12 @@ async def delete_media(
     chapter_id: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    note, users, deleted, notes = service.delete_media_unless_used(note_id, filename)
+    try:
+        note, users, deleted, notes = service.delete_media_unless_used(note_id, filename)
+    except UnreadableNotes as e:
+        return _media_reply(
+            request, service, e.note, chapter_id, error=str(e), status_code=409, notes=e.notes
+        )
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     if users:

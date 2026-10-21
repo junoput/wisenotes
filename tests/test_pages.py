@@ -8,6 +8,7 @@ import errno
 import json
 import os
 import re
+import shutil
 import threading
 import zipfile
 from io import BytesIO
@@ -21,6 +22,7 @@ from app.routes import pages
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services import notes as notes_mod
+from app.services import storage
 
 HX = {"HX-Request": "true"}
 NOT_SHOWN = "Image not shown: {} is not stored in this note. Upload or pick a copy here."
@@ -1346,3 +1348,83 @@ def test_a_write_failure_during_import_is_shown_on_the_import_form(
         in resp.text
     )
     assert ('hx-swap-oob="true"' in resp.text) is hx and _doc(resp) is not hx
+
+
+def _break_a_note(service, folder="Bad<b>"):
+    """A note folder whose JSON does not parse, as list_notes meets it."""
+    d = service.repo._root_dir / folder
+    d.mkdir()
+    (d / f"{folder}.json").write_text("{ not json")
+    return folder
+
+
+@pytest.mark.parametrize("hx", [False, True])
+def test_an_unreadable_note_refuses_media_and_note_deletes(client, service, hx):
+    # 20261021-041, fail closed: its links are unknown, so "no other note shows this
+    # image" cannot be answered.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    _break_a_note(service)
+    headers = HX if hx else {}
+    reason = "1 note could not be read (Bad&lt;b&gt;), so it cannot be told whether it shows"
+    media = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, headers=headers
+    )
+    assert media.status_code == 409 and reason in media.text and _doc(media) is not hx
+    note = client.post(f"/notes/{nid}/delete", headers=headers, follow_redirects=False)
+    assert note.status_code == 409 and reason in note.text and _doc(note) is not hx
+    assert filename in service.repo.list_media(service.get_note(nid).name)
+    assert "Bad<b>" not in media.text + note.text  # escaped
+    assert str(service.repo._root_dir) not in media.text + note.text  # no path
+
+
+def test_the_api_refuses_a_note_delete_while_a_note_is_unreadable(client, service):
+    nid = _create(client, "Keep")["id"]
+    _break_a_note(service, "Broken")
+    resp = client.delete(f"/api/notes/{nid}")
+    assert resp.status_code == 409 and "(Broken)" in resp.json()["detail"]
+    assert client.get(f"/api/notes/{nid}").status_code == 200
+
+
+def test_the_list_says_a_note_could_not_be_read(client, service):
+    _create(client, "Fine")
+    _break_a_note(service)
+    page = client.get("/").text
+    assert "1 note could not be read and is not listed: Bad&lt;b&gt;." in page
+    assert "Bad<b>" not in page
+
+
+def test_harness_control_once_the_note_is_repaired_deletes_work(client, service):
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    folder = _break_a_note(service)
+    shutil.rmtree(service.repo._root_dir / folder)
+    assert "could not be read" not in client.get("/").text
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+
+@pytest.mark.parametrize("hx", [False, True])
+def test_a_folder_that_cannot_be_removed_is_reported_not_called_deleted(
+    client, service, monkeypatch, hx
+):
+    # 20261021-041: storage.delete_note swallowed the rmtree error, so the delete
+    # looked like a success and the note came back on the next list.
+    nid = _create(client, "Stuck")["id"]
+
+    def refuse(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(storage.shutil, "rmtree", refuse)
+    resp = client.post(f"/notes/{nid}/delete", headers=HX if hx else {}, follow_redirects=False)
+    assert resp.status_code == 500
+    assert "The note could not be removed (Permission denied)." in resp.text
+    assert str(service.repo._root_dir) not in resp.text
+    assert _doc(resp) is not hx
+    api = client.delete(f"/api/notes/{nid}")
+    assert api.status_code == 500 and "Permission denied" in api.json()["detail"]
+    assert client.get(f"/api/notes/{nid}").status_code == 200
+    js = client.get("/static/js/app.js").text
+    assert "(NOTE_DELETE.test(path) && status === 500)" in js
