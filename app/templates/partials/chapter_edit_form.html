@@ -36,7 +36,8 @@
       {% elif chapter.content %}
         <div class="field media-preview">{% with content=chapter.content %}{% include "components/media_placeholder.html" %}{% endwith %}</div>
       {% endif %}
-      <input type="hidden" name="content_text" value="{{ chapter.content or '' }}">
+      {# No content_text: a media block's URL changes only through the gallery's pick
+         (pick_media checks it); the save keeps the URL the block has now. #}
     {% else %}
       <div class="field">
         <textarea name="content_text" rows="14" class="chapter-content-input" autofocus

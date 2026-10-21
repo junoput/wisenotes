@@ -374,7 +374,7 @@ async def update_chapter(
     source: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
-    note = service.update_chapter(
+    note = service.edit_chapter(
         note_id, chapter_id, title, content_text, language or None, _normalize_source(source)
     )
     if not note:
