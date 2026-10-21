@@ -4,6 +4,8 @@ from typing import Any
 from uuid import uuid4
 
 from app.config import get_settings
+from app.media_urls import is_data_url
+from app.media_urls import media_kind
 from app.media_urls import our_media
 from app.schemas import Chapter
 from app.schemas import Note
@@ -18,6 +20,19 @@ _DEFAULT_LANGUAGES: dict[str, str] = {
     "code": "python",
     "math": "latex",
 }
+
+
+NOT_RASTER = "not a PNG, JPEG, WebP or GIF data URL"
+
+
+def _not_drawable_data(content: str | None) -> bool:
+    """A data: URL the app would not draw (data:image/svg+xml and the like);
+    refused when written, as import refuses it (20261021-023)."""
+    return is_data_url(content) and media_kind(content) != "inline"
+
+
+def _short(content: str, limit: int = 60) -> str:
+    return content if len(content) <= limit else content[:limit] + "..."
 
 
 def media_users(notes: list[Note], note: Note, filename: str) -> list[str]:
@@ -177,23 +192,26 @@ class NoteService:
                 return note, users, False, notes
             return note, [], self.repo.delete_media(note.name, filename), notes
 
-    def pick_media(self, note_id: str, chapter_id: str, url: str) -> tuple[Note | None, bool]:
+    def pick_media(self, note_id: str, chapter_id: str, url: str) -> tuple[Note | None, bool, str]:
         """Point a media block at `url`: (the note, or None if note or block is gone;
-        False when url names one of our images that no longer exists). Checked in
-        the same lock hold as the guarded deletes, so a pick that waited for a
-        delete does not save a link to the file it removed."""
+        whether it was saved; why not, for the user). Refused: one of our images
+        that no longer exists, checked in the same lock hold as the guarded
+        deletes so a pick that waited for a delete does not save a link to the
+        file it removed; and a data: URL the app would not draw."""
         with self.repo.lock:
             note = self.repo.get_note(note_id)
             chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
             if chapter is None:
-                return None, True
+                return None, True, ""
+            if _not_drawable_data(url):
+                return note, False, "That image is not PNG, JPEG, WebP or GIF. Upload one instead."
             ours = our_media(url)
             if ours and not self._media_exists(*ours):
-                return note, False
+                return note, False, "That image was deleted. Pick another or upload one."
             saved = self.update_chapter(
                 note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
             )
-            return saved, True
+            return saved, True, ""
 
     def edit_chapter(
         self,
@@ -236,13 +254,19 @@ class NoteService:
             # Keyed by chapter id, and a change of type counts: a text block turned
             # into a media block with a dead link in it is a new link (20261021-020).
             before = {c.id: (c.type, c.content) for c in existing.chapters}
+            changed = [
+                c
+                for c in payload.chapters or []
+                if c.type == "media" and before.get(c.id) != (c.type, c.content)
+            ]
             gone = [
                 f"{c.id}: {c.content}"
-                for c in payload.chapters or []
-                if c.type == "media"
-                and before.get(c.id) != (c.type, c.content)
-                and (ours := our_media(c.content))
-                and not self._media_exists(*ours)
+                for c in changed
+                if (ours := our_media(c.content)) and not self._media_exists(*ours)
+            ] + [
+                f"{c.id}: {_short(c.content)} ({NOT_RASTER})"
+                for c in changed
+                if _not_drawable_data(c.content)
             ]
             if gone:
                 return existing, gone

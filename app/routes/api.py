@@ -58,7 +58,10 @@ async def update_note(
         # A block would request a file that is not there (20261021-016).
         raise HTTPException(
             status_code=409,
-            detail=f"Media blocks name images that do not exist: {'; '.join(gone)}",
+            detail=(
+                "Media blocks refused (an image of ours that does not exist, or a "
+                f"data: URL that is not PNG, JPEG, WebP or GIF): {'; '.join(gone)}"
+            ),
         )
     return note
 

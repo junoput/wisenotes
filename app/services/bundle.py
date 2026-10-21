@@ -13,7 +13,7 @@ Everything that arrives here is untrusted. The rules, in the order they run:
 4. Images go through the upload pipeline, which decides by content: raster is
    re-encoded to webp, GIF is verified and kept, SVG and anything Pillow cannot
    open are dropped and reported. Nothing is written as received except a
-   verified GIF. An inline data:image/ URL is decoded and goes the same way.
+   verified GIF. An inline data: URL is decoded and goes the same way.
 5. Text is scrubbed of control characters; a media block keeps only a
    reference that resolves inside the bundle, a stored inline image, or an
    external URL (kept, never fetched, shown as not stored).
@@ -61,6 +61,7 @@ from pydantic import ValidationError
 from app.blocks import BLOCKS
 from app.media_urls import MISSING_PREFIX
 from app.media_urls import clean
+from app.media_urls import is_data_url
 from app.media_urls import media_kind
 from app.schemas import Chapter
 from app.schemas import Note
@@ -406,7 +407,9 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
             url = _store_image(service, note_id, key[1], raw, result)
         media_urls[content] = url
         return url
-    if kind == "inline":
+    if is_data_url(content):
+        # any data: URL, inline or not: the pipeline decides, and a refusal is a
+        # visible placeholder rather than a silently emptied block
         return _inline_image(service, note_id, content, result)
     if kind == "external":
         # Never fetched (no new SSRF surface). Kept as it is: the block and the
