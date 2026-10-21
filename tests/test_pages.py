@@ -732,3 +732,22 @@ def test_the_theme_switch_on_a_page_answered_to_a_post_returns_to_a_get_page(cli
 def test_harness_control_a_get_page_still_names_itself(client):
     nid = _create(client, "Self")["id"]
     assert _theme_next(client.get(f"/notes/{nid}?x=1").text) == f"/notes/{nid}?x=1"
+
+
+def test_an_external_image_set_after_import_is_a_placeholder_not_a_broken_image(client):
+    # 20261014-140 leftover: a URL set through the select form or PUT still drew an
+    # <img> that img-src 'self' blocks.
+    nid, mcid, _, url = _note_with_picked_image(client)
+    for external in (
+        "https://example.org/a.png",
+        "http://example.org/a.png",
+        "//example.org/a.png",
+    ):
+        client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": external})
+        page = client.get(f"/notes/{nid}").text
+        assert f"External image not shown: {external}." in page, external
+        assert f'src="{external}"' not in page, external
+    # control: the note's own image is still drawn
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
+    page = client.get(f"/notes/{nid}").text
+    assert f'<img src="{url}"' in page and "External image not shown" not in page
