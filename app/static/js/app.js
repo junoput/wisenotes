@@ -25,13 +25,14 @@ function setCollapsed(pane, collapsed) {
   }
 }
 
+const noteOpen = () => Boolean(document.getElementById('editor')?.dataset.noteId);
+
 function restorePanes() {
   const pane = document.getElementById('note-list');
   if (!pane) return;
   // Narrow: the list is a dropdown under an open note, but with no note open it
   // IS the page, and nothing else on it could open it again (20261014-187).
-  const noteOpen = Boolean(document.getElementById('editor')?.dataset.noteId);
-  const collapsed = isNarrow() ? noteOpen : localStorage.getItem('pane:note-list:collapsed') === '1';
+  const collapsed = isNarrow() ? noteOpen() : localStorage.getItem('pane:note-list:collapsed') === '1';
   setCollapsed(pane, collapsed);
 }
 
@@ -91,12 +92,16 @@ const typing = (el) => el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el
 
 // The open note's item if there is one, else the first. Focusing the first item
 // while another note was open drew a focus ring on a note nobody had chosen
-// (20261019-010).
+// (20261019-010). An item in a collapsed folder is display:none and takes no
+// focus, so the next candidate is tried until one does.
 function focusNote() {
-  (document.querySelector('.note-list .item.active') || document.querySelector('[data-focus-first]')
-    || document.querySelector('.note-list .item'))?.focus({ preventScroll: true });
+  const candidates = [document.querySelector('.note-list .item.active'),
+    document.querySelector('[data-focus-first]'), ...document.querySelectorAll('.note-list .item')];
+  for (const el of candidates) {
+    el?.focus({ preventScroll: true });
+    if (el && document.activeElement === el) return;
+  }
 }
-const noteOpen = () => Boolean(document.getElementById('editor')?.dataset.noteId);
 
 // Bare Shift: first note, then cycle through blocks.
 window.addEventListener('keydown', (e) => {

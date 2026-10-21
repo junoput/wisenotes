@@ -54,7 +54,8 @@ def test_the_home_page_exception_keys_on_markup_not_on_an_unset_class():
     assert "no-note-open" not in CSS
     home = [sel for sel, _ in _rules(_narrow_block()) if "#editor:not([data-note-id])" in sel]
     assert home, "the narrow block must exempt the home page from the dropdown"
-    editor = (ROOT / "app/templates/index.html").read_text()
-    assert (
-        '{% if active %}data-note-id="{{ active.id }}"{% endif %}' in editor
-    )  # the premise of :has()
+    # The premise of :has(), in both places #editor is drawn: the page, and the
+    # out-of-band swap that replaces it after every htmx change (20261020-087).
+    for template in ("index.html", "partials/hx_refresh.html"):
+        editor = (ROOT / "app/templates" / template).read_text()
+        assert '{% if active %}data-note-id="{{ active.id }}"{% endif %}' in editor, template
