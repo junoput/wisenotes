@@ -1,7 +1,9 @@
 """Import sanitisation and export round trip, at the service level."""
 
+import errno
 import io
 import json
+import os
 import threading
 import zipfile
 from datetime import datetime
@@ -10,6 +12,7 @@ import pytest
 from PIL import Image
 
 from app.schemas import NoteCreate
+from app.schemas import NoteUpdate
 from app.services import bundle
 from app.services.bundle import BundleError
 from app.services.bundle import export_zip
@@ -324,12 +327,18 @@ class TestAllOrNothing:
         def save_then_fail(note_name, name, data):
             calls.append(note_name)
             if len(calls) == 2:
-                raise RuntimeError("disk full")
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), f"/srv/secret/{name}")
             return real_save(note_name, name, data)
 
         monkeypatch.setattr(service.repo, "save_media", save_then_fail)
-        with pytest.raises(RuntimeError, match="disk full"):
+        # 20261021-037: a write failure is an import error (400 at the routes),
+        # naming the reason but not the data directory's path
+        with pytest.raises(BundleError) as caught:
             import_bundle(service, "x.zip", _three_note_zip(_png()))
+        assert str(caught.value) == (
+            "The import failed while writing (No space left on device). Nothing was imported"
+        )
+        assert "/srv/secret" not in str(caught.value)
         assert len(calls) == 2  # precondition: the failure came after a note was created
         assert [n.title for n in service.list_notes()] == ["Already here"]
         # and no folder left on disk either (media included)
@@ -709,3 +718,99 @@ class TestImportRacesAMediaDelete:
         r = import_bundle(service, "many.zip", z)
         assert r.images == images
         assert reads == [] and len(writes) == 1  # no library read once writing starts
+
+
+class TestImportFailureReporting:
+    """20261021-037, from the review of 1d0ee05."""
+
+    def test_a_write_failure_after_a_note_is_borrowed_names_the_kept_note(
+        self, service, monkeypatch
+    ):
+        # A real OSError, not an injected BundleError: the kept note is in the message.
+        h = TestImportRacesAMediaDelete()
+        z, decoding, release = h._two_notes_paused_in_the_second(monkeypatch)
+        repo = type(service.repo)
+        real = repo.upsert_note
+
+        def full_disk_for_bravo(self, note, old_name=None):
+            if note.title == "Bravo" and any(c.type == "media" for c in note.chapters):
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), "/srv/x")
+            return real(self, note, old_name)
+
+        monkeypatch.setattr(repo, "upsert_note", full_disk_for_bravo)
+        out = {}
+
+        def run():
+            try:
+                import_bundle(service, "full.zip", z)
+            except BundleError as e:
+                out["error"] = str(e)
+
+        importer = threading.Thread(target=run)
+        importer.start()
+        assert decoding.wait(5)
+        alpha = next(n for n in service.list_notes() if n.title == "Alpha")
+        h._borrow(service, alpha)
+        release.set()
+        importer.join(5)
+        assert out["error"] == (
+            "The import failed while writing (No space left on device). "
+            "The import was undone except for: Alpha (other notes show its images)"
+        )
+        assert sorted(n.title for n in service.list_notes()) == ["Alpha", "Xray"]
+
+    def test_a_folder_set_while_the_images_decode_is_kept(self, service, monkeypatch):
+        # bundle.py wrote the file's folder or None, so a folder the user set meanwhile
+        # was lost; update_note used to keep it.
+        decoding, release = threading.Event(), threading.Event()
+        real = bundle.process_uploaded_image
+
+        def slow(*a):
+            decoding.set()
+            release.wait(5)
+            return real(*a)
+
+        monkeypatch.setattr(bundle, "process_uploaded_image", slow)
+        z = _zip({"notes.json": _doc(_note()), "media/Old-Name/pic.png": _png()})
+        out = {}
+        importer = threading.Thread(target=lambda: out.update(r=import_bundle(service, "f.zip", z)))
+        importer.start()
+        assert decoding.wait(5)
+        [created] = service.list_notes()
+        service.update_note(created.id, NoteUpdate(folder="Trips"))
+        release.set()
+        importer.join(5)
+        assert service.get_note(created.id).folder == "Trips"
+
+    def test_harness_control_the_files_own_folder_still_wins(self, service):
+        z = _zip({"notes.json": _doc(_note(folder="From file")), "media/Old-Name/pic.png": _png()})
+        [note] = import_bundle(service, "f.zip", z).notes
+        assert note.folder == "From file"
+
+    def test_every_note_deleted_mid_import_says_so(self, service, monkeypatch):
+        decoding, release = threading.Event(), threading.Event()
+        real = bundle.process_uploaded_image
+
+        def slow(*a):
+            decoding.set()
+            release.wait(5)
+            return real(*a)
+
+        monkeypatch.setattr(bundle, "process_uploaded_image", slow)
+        z = _zip({"notes.json": _doc(_note()), "media/Old-Name/pic.png": _png()})
+        out = {}
+
+        def run():
+            try:
+                import_bundle(service, "gone.zip", z)
+            except BundleError as e:
+                out["error"] = str(e)
+
+        importer = threading.Thread(target=run)
+        importer.start()
+        assert decoding.wait(5)
+        [created] = service.list_notes()
+        service.delete_note_unless_shown(created.id)
+        release.set()
+        importer.join(5)
+        assert out["error"] == "Every note in the file was deleted while it was being imported"

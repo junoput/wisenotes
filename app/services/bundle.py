@@ -107,6 +107,7 @@ class ImportResult:
         default_factory=list
     )  # images media blocks referenced and did not get
     ignored: int = 0  # __MACOSX/ and dot-file entries, dropped unread
+    deleted: int = 0  # notes the user deleted while they were being imported
 
 
 # ---------------------------------------------------------------- export
@@ -344,23 +345,47 @@ def _create_notes(
         for src, scope in notes:
             _create_note(service, src, scope, media, result, created_ids)
     except BaseException as e:
-        kept: list[str] = []
-        for note_id in created_ids:
-            try:
-                note, borrowers, _ = service.delete_note_unless_shown(note_id)
-                if note is not None and borrowers:
-                    kept.append(f"{note.title} (other notes show its images)")
-            except Exception:
-                logger.exception("import rollback could not delete note %s", note_id)
-                kept.append(f"note {note_id} (could not be removed)")
-        if kept:
-            logger.warning("import rollback kept %s", "; ".join(kept))
-            if isinstance(e, BundleError):
+        kept = _undo(service, created_ids)
+        if isinstance(e, BundleError):
+            if kept:
                 raise BundleError(
                     f"{e}. The import was undone except for: {'; '.join(kept)}"
                 ) from e
+            raise
+        if isinstance(e, Exception):
+            # A write that failed (a full disk, a permission): say so as an import
+            # error, which both routes answer with 400 and the page shows, with
+            # scripts or without. A bare 500 showed nothing with scripts on, and a
+            # kept note only in the log (20261021-037). OSError's strerror, not
+            # str(e): the message must not carry the data directory's paths.
+            logger.exception("import failed while writing")
+            reason = e.strerror if isinstance(e, OSError) and e.strerror else type(e).__name__
+            done = (
+                f"The import was undone except for: {'; '.join(kept)}"
+                if kept
+                else "Nothing was imported"
+            )
+            raise BundleError(f"The import failed while writing ({reason}). {done}") from e
         raise
+    if not result.notes and result.deleted:
+        raise BundleError("Every note in the file was deleted while it was being imported")
     return result
+
+
+def _undo(service: NoteService, created_ids: list[str]) -> list[str]:
+    """Remove the notes an import created; the ones it keeps, described."""
+    kept: list[str] = []
+    for note_id in created_ids:
+        try:
+            note, borrowers, _ = service.delete_note_unless_shown(note_id)
+            if note is not None and borrowers:
+                kept.append(f"{note.title} (other notes show its images)")
+        except Exception:
+            logger.exception("import rollback could not delete note %s", note_id)
+            kept.append(f"note {note_id} (could not be removed)")
+    if kept:
+        logger.warning("import rollback kept %s", "; ".join(kept))
+    return kept
 
 
 def _create_note(
@@ -406,6 +431,7 @@ def _create_note(
             # Deleted by the user while its images were decoded: honour that and
             # carry on; failing would undo notes that may already be in use.
             created_ids.remove(created.id)
+            result.deleted += 1
             result.skipped.append(f"{title}: deleted while it was being imported")
             return
         for new_name, data, _ in pending:
@@ -416,7 +442,9 @@ def _create_note(
         saved = repo.upsert_note(
             note.model_copy(
                 update={
-                    "folder": _clean_text(src.folder, 120) or None,
+                    # the note as it is now: a folder set while its images
+                    # decoded is kept unless the file names one (20261021-037)
+                    "folder": _clean_text(src.folder, 120) or note.folder,
                     "chapters": chapters,
                     "updated_at": datetime.utcnow(),
                 }

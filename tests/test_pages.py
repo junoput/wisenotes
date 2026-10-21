@@ -4,7 +4,9 @@ the same POSTs with the header must return the htmx fragment."""
 
 import asyncio
 import base64
+import errno
 import json
+import os
 import re
 import threading
 import zipfile
@@ -1316,3 +1318,31 @@ def test_a_delete_waiting_on_a_create_sees_the_link_it_saved(client, service, mo
     assert out["c"][0] is not None and out["c"][1] == []
     assert out["d"][1] and out["d"][2] is False  # refused: the new note shows it
     assert filename in service.repo.list_media(service.get_note(nid).name)
+
+
+@pytest.mark.parametrize("hx", [False, True])
+def test_a_write_failure_during_import_is_shown_on_the_import_form(
+    client, service, monkeypatch, hx
+):
+    # 20261021-037: a bare 500, which app.js does not swap: with scripts nothing was shown.
+    nid, _, _, _ = _note_with_picked_image(client)
+    body = client.get(f"/notes/{nid}/export.zip").content
+    real = type(service.repo).upsert_note
+
+    def full_disk(self, note, old_name=None):
+        if any(c.type == "media" for c in note.chapters):
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), "/srv/x")
+        return real(self, note, old_name)
+
+    monkeypatch.setattr(type(service.repo), "upsert_note", full_disk)
+    resp = client.post(
+        "/notes/import",
+        files={"file": ("n.zip", body, "application/zip")},
+        headers=HX if hx else {},
+    )
+    assert resp.status_code == 400
+    assert (
+        "The import failed while writing (No space left on device). Nothing was imported"
+        in resp.text
+    )
+    assert ('hx-swap-oob="true"' in resp.text) is hx and _doc(resp) is not hx
