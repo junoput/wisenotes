@@ -18,6 +18,7 @@ from app.services.bundle import BundleError
 from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
 from app.services.image_processing import STORED_MEDIA_TYPES
+from app.services.notes import NoteNotRemoved
 from app.services.notes import NoteService
 from app.services.notes import UnreadableNotes
 from app.services.notes import get_note_service
@@ -80,11 +81,8 @@ async def delete_note(note_id: str, service: NoteService = Depends(get_note_serv
         note, borrowers, _ = service.delete_note_unless_shown(note_id)
     except UnreadableNotes as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    except OSError as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"The note could not be removed ({e.strerror or type(e).__name__}).",
-        ) from e
+    except NoteNotRemoved as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     if borrowers:

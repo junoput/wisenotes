@@ -22,7 +22,6 @@ from app.routes import pages
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services import notes as notes_mod
-from app.services import storage
 
 HX = {"HX-Request": "true"}
 NOT_SHOWN = "Image not shown: {} is not stored in this note. Upload or pick a copy here."
@@ -1406,25 +1405,101 @@ def test_harness_control_once_the_note_is_repaired_deletes_work(client, service)
     assert resp.status_code == 303
 
 
+@pytest.fixture()
+def restore_modes():
+    """chmod paths for a test and put them back, so tmp_path can be cleaned."""
+    changed = []
+
+    def chmod(path, mode):
+        changed.append((path, path.stat().st_mode))
+        path.chmod(mode)
+
+    yield chmod
+    for path, mode in reversed(changed):
+        if path.exists():  # a delete may have moved it; the test restores the new path
+            path.chmod(mode)
+
+
 @pytest.mark.parametrize("hx", [False, True])
-def test_a_folder_that_cannot_be_removed_is_reported_not_called_deleted(
-    client, service, monkeypatch, hx
+def test_a_note_whose_folder_cannot_be_moved_is_not_deleted_and_says_so(
+    client, service, restore_modes, hx
 ):
-    # 20261021-041: storage.delete_note swallowed the rmtree error, so the delete
-    # looked like a success and the note came back on the next list.
+    # 20261021-043 review B1: the delete must fail clean. A data directory the app
+    # cannot write (a real EACCES on the rename): nothing changes, and the settings
+    # say why, with scripts or without.
     nid = _create(client, "Stuck")["id"]
-
-    def refuse(path):
-        raise PermissionError(13, "Permission denied", str(path))
-
-    monkeypatch.setattr(storage.shutil, "rmtree", refuse)
+    restore_modes(service.repo._root_dir, 0o500)
     resp = client.post(f"/notes/{nid}/delete", headers=HX if hx else {}, follow_redirects=False)
     assert resp.status_code == 500
     assert "The note could not be removed (Permission denied)." in resp.text
-    assert str(service.repo._root_dir) not in resp.text
-    assert _doc(resp) is not hx
+    assert str(service.repo._root_dir) not in resp.text and _doc(resp) is not hx
     api = client.delete(f"/api/notes/{nid}")
-    assert api.status_code == 500 and "Permission denied" in api.json()["detail"]
+    assert api.status_code == 500 and api.json()["detail"] == (
+        "The note could not be removed (Permission denied)."
+    )
     assert client.get(f"/api/notes/{nid}").status_code == 200
     js = client.get("/static/js/app.js").text
     assert "(NOTE_DELETE.test(path) && status === 500)" in js
+
+
+@pytest.mark.parametrize("hx", [False, True])
+def test_a_delete_whose_removal_stops_halfway_is_a_delete_with_a_leftover(
+    client, service, restore_modes, hx
+):
+    # B1 as measured: media/ at 0500, so rmtree removed the JSON and stopped on the
+    # image; the note vanished and the page answered 404 with no message. Now the
+    # folder is renamed first: the note is deleted, and the leftover is reported.
+    nid, _, _, _ = _note_with_picked_image(client)
+    name = service.get_note(nid).name
+    media = service.repo._root_dir / name / "media"
+    restore_modes(media, 0o500)
+    resp = client.post(f"/notes/{nid}/delete", headers=HX if hx else {}, follow_redirects=False)
+    assert resp.status_code == (200 if hx else 303)
+    assert client.get(f"/api/notes/{nid}").status_code == 404
+    [leftover] = [p for p in service.repo._root_dir.iterdir() if p.name.startswith(".deleting-")]
+    assert leftover.name.startswith(f".deleting-{name}-")
+    restore_modes(leftover / "media", 0o700)  # the rename kept the mode; let tmp_path clean
+    page = client.get("/").text
+    assert f"1 folder left by a delete that could not finish: {leftover.name}." in page
+    assert "The note is gone; remove it on disk." in page
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o100, 0o600])
+def test_a_folder_that_cannot_be_listed_or_opened_is_unreadable_not_a_crash(
+    client, service, restore_modes, mode
+):
+    # 20261021-043 review item 3: 000 and 0600 made exists() raise outside the try
+    # (every page 500); 0100 with a JSON not named <folder>.json failed open.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    d = service.repo._root_dir / "Locked"
+    d.mkdir()
+    (d / "other-name.json").write_text("{}")
+    restore_modes(d, mode)
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "1 note could not be read and is not listed: Locked." in page.text
+    resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+    assert resp.status_code == 409 and "(Locked)" in resp.text
+
+
+def test_a_folder_without_a_note_file_is_shown_and_does_not_block(client, service):
+    # Sub decision: no JSON, no id, nothing can link its files: not a note.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    (service.repo._root_dir / "Orphan" / "media").mkdir(parents=True)
+    page = client.get("/").text
+    assert "1 folder without a note file: Orphan. Repair or remove it on disk." in page
+    resp = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+
+
+def test_the_unreadable_notice_says_the_fix_is_on_disk(client, service):
+    _break_a_note(service, "Broken")
+    page = client.get("/").text
+    assert (
+        "1 note could not be read and is not listed: Broken. Until it is repaired or "
+        "removed on disk, no image or note can be deleted."
+    ) in page

@@ -375,14 +375,17 @@ def _create_notes(
 def _undo(service: NoteService, created_ids: list[str]) -> list[str]:
     """Remove the notes an import created; the ones it keeps, described."""
     kept: list[str] = []
+    titles = {n.id: n.title for n in service.list_notes()}
     for note_id in created_ids:
         try:
-            note, borrowers, _ = service.delete_note_unless_shown(note_id)
+            # An unreadable note cannot have linked files this import just made, so
+            # it does not hold the undo; only the borrower check does.
+            note, borrowers, _ = service.delete_note_unless_shown(note_id, check_unreadable=False)
             if note is not None and borrowers:
                 kept.append(f"{note.title} (other notes show its images)")
         except Exception:
             logger.exception("import rollback could not delete note %s", note_id)
-            kept.append(f"note {note_id} (could not be removed)")
+            kept.append(f"{titles.get(note_id, 'a note')} (could not be removed)")
     if kept:
         logger.warning("import rollback kept %s", "; ".join(kept))
     return kept

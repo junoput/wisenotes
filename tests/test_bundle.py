@@ -814,3 +814,29 @@ class TestImportFailureReporting:
         release.set()
         importer.join(5)
         assert out["error"] == "Every note in the file was deleted while it was being imported"
+
+
+def test_the_undo_removes_its_own_notes_while_another_note_is_unreadable(service, monkeypatch):
+    # 20261021-043 review item 2: the undo hit the unreadable gate and kept every note
+    # it had created, named by UUID. An unreadable note cannot link files this import
+    # just made, so the undo bypasses that gate and keeps only the borrower check.
+    bad = service.repo._root_dir / "Broken"
+    bad.mkdir()
+    (bad / "Broken.json").write_text("{ not json")
+
+    calls = []
+    real = bundle.process_uploaded_image
+
+    def second_fails(*a):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        return real(*a)
+
+    monkeypatch.setattr(bundle, "process_uploaded_image", second_fails)
+    with pytest.raises(BundleError) as caught:
+        import_bundle(service, "x.zip", _three_note_zip(_png()))
+    assert str(caught.value) == (
+        "The import failed while writing (No space left on device). Nothing was imported"
+    )
+    assert service.list_notes() == [] and service.repo.unreadable == ["Broken"]

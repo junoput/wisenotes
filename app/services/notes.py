@@ -35,6 +35,15 @@ def _short(content: str, limit: int = 60) -> str:
     return content if len(content) <= limit else content[:limit] + "..."
 
 
+class NoteNotRemoved(Exception):
+    """The note's folder could not be moved away, so nothing changed. Carries
+    the note and the notes, so the refusing route does not read them again."""
+
+    def __init__(self, reason: str, note: Note, notes: list[Note]):
+        self.note, self.notes = note, notes
+        super().__init__(f"The note could not be removed ({reason}).")
+
+
 class UnreadableNotes(Exception):
     """A delete was refused because some note could not be read, so whether it
     shows the image cannot be known. Carries what the refusing route draws."""
@@ -178,19 +187,29 @@ class NoteService:
     # the delete was deleted anyway (20261021-010). Each returns the notes it read,
     # so a caller drawing the answer does not read them again.
 
-    def delete_note_unless_shown(self, note_id: str) -> tuple[Note | None, list[str], list[Note]]:
+    def delete_note_unless_shown(
+        self, note_id: str, check_unreadable: bool = True
+    ) -> tuple[Note | None, list[str], list[Note]]:
         """(the note, or None if there is none; the blocks elsewhere that refused the
-        delete, empty if it was deleted; every note as it is now)."""
+        delete, empty if it was deleted; every note as it is now). Raises
+        UnreadableNotes while a note cannot be read (unless check_unreadable is
+        False: an import undoing its own new notes, which no other note can have
+        linked before they existed), and NoteNotRemoved when the folder could not
+        be moved away. A removal that fails after that leaves a leftover folder,
+        which the notes list reports."""
         with self.repo.lock:
             notes = self.repo.list_notes()
             note = next((n for n in notes if n.id == note_id), None)
             if note is None:
                 return None, [], notes
-            if self.repo.unreadable:
+            if check_unreadable and self.repo.unreadable:
                 raise UnreadableNotes(list(self.repo.unreadable), note, notes)
             borrowers = self.media_borrowers(note, notes)
             if not borrowers:
-                self.repo.delete_note(note_id)
+                try:
+                    self.repo.delete_note(note_id)
+                except OSError as e:
+                    raise NoteNotRemoved(e.strerror or type(e).__name__, note, notes) from e
                 notes = [n for n in notes if n.id != note_id]
             return note, borrowers, notes
 
@@ -304,12 +323,6 @@ class NoteService:
             for c in changed
             if _not_drawable_data(c.content)
         ]
-
-    def delete_note(self, note_id: str) -> bool:
-        if not self.repo.get_note(note_id):
-            return False
-        self.repo.delete_note(note_id)
-        return True
 
     def delete_chapter(self, note_id: str, chapter_id: str) -> Note | None:
         """Delete a chapter (and its descendants) from a note."""

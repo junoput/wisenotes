@@ -36,6 +36,7 @@ from app.services.bundle import export_zip
 from app.services.bundle import import_bundle
 from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
+from app.services.notes import NoteNotRemoved
 from app.services.notes import NoteService
 from app.services.notes import UnreadableNotes
 from app.services.notes import get_note_service
@@ -85,8 +86,19 @@ def _page(
     return templates.TemplateResponse(
         request,
         template,
-        _ctx(request, notes=notes, active=note, unreadable=service.repo.unreadable, **extra),
+        _ctx(request, notes=notes, active=note, **_disk_notices(service), **extra),
     )
+
+
+def _disk_notices(service: NoteService) -> dict:
+    """What the latest scan of the notes folder could not use, for the notes list.
+    Read after list_notes, which sets them."""
+    repo = service.repo
+    return {
+        "unreadable": repo.unreadable,
+        "no_note_file": repo.no_note_file,
+        "leftovers": repo.leftovers,
+    }
 
 
 def _after_change(
@@ -101,7 +113,7 @@ def _after_change(
                 request,
                 notes=service.list_notes(),
                 active=note,
-                unreadable=service.repo.unreadable,
+                **_disk_notices(service),
             ),
             headers=headers,
         )
@@ -324,10 +336,8 @@ async def delete_note(
         note, borrowers, notes = service.delete_note_unless_shown(note_id)
     except UnreadableNotes as e:
         return _delete_refused(request, service, e.note, str(e), e.notes)
-    except OSError as e:
-        note = _note_or_404(service, note_id)
-        message = f"The note could not be removed ({e.strerror or type(e).__name__})."
-        return _delete_refused(request, service, note, message, service.list_notes(), 500)
+    except NoteNotRemoved as e:
+        return _delete_refused(request, service, e.note, str(e), e.notes, 500)
     if note is None:
         raise HTTPException(status_code=404, detail="Note not found")
     if borrowers:
