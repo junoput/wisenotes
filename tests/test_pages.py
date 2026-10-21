@@ -5,14 +5,17 @@ the same POSTs with the header must return the htmx fragment."""
 import asyncio
 import json
 import re
+import threading
 import zipfile
 from io import BytesIO
 from urllib.parse import quote
 
+import pytest
 from PIL import Image
 
 from app.routes import api
 from app.routes import pages
+from app.services import notes as notes_mod
 
 HX = {"HX-Request": "true"}
 
@@ -751,3 +754,88 @@ def test_an_external_image_set_after_import_is_a_placeholder_not_a_broken_image(
     client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
     page = client.get(f"/notes/{nid}").text
     assert f'<img src="{url}"' in page and "External image not shown" not in page
+
+
+def test_a_pick_waiting_on_a_delete_does_not_link_the_file_it_removed(client, service, monkeypatch):
+    # 20261021-010: the in-use check and the delete took the lock separately, so a pick
+    # saved between them was deleted anyway. Now the delete holds one lock for both, and
+    # the pick, checked under the same lock, finds the file gone instead of linking it.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    checked, release = threading.Event(), threading.Event()
+    real = notes_mod.media_users
+
+    def slow_users(*a):
+        users = real(*a)
+        checked.set()  # the check has run; the delete has not
+        release.wait(5)
+        return users
+
+    monkeypatch.setattr(notes_mod, "media_users", slow_users)
+    out = {}
+    deleter = threading.Thread(
+        target=lambda: out.update(d=service.delete_media_unless_used(nid, filename))
+    )
+    deleter.start()
+    assert checked.wait(5)
+    picker = threading.Thread(target=lambda: out.update(p=service.pick_media(nid, mcid, url)))
+    picker.start()
+    picker.join(0.3)
+    assert picker.is_alive()  # the pick waits for the delete's lock hold
+    release.set()
+    deleter.join(5)
+    picker.join(5)
+    assert out["d"][2] is True  # deleted
+    assert out["p"][1] is False  # and the pick was refused, not saved
+    block = next(c for c in service.get_note(nid).chapters if c.id == mcid)
+    assert block.content == "/static/none.png"
+
+
+def test_a_refused_pick_says_why_with_scripts_or_without(client):
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+    reason = "That image was deleted. Pick another or upload one."
+    plain = client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url}, follow_redirects=False
+    )
+    assert plain.status_code == 409 and _doc(plain) and reason in plain.text
+    hx = client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url}, headers=HX)
+    assert hx.status_code == 409 and not _doc(hx) and reason in hx.text
+    assert hx.headers["hx-retarget"] == f"#media-gallery-{mcid}"
+    assert hx.headers["hx-reswap"] == "innerHTML"
+    js = client.get("/static/js/app.js").text
+    m = re.search(r"const MEDIA_SELECT = /(.+)/;", js)
+    assert m and "MEDIA_SELECT.test(path)" in js
+    assert re.fullmatch(m.group(1), f"/notes/{nid}/chapters/{mcid}/media/select")
+
+
+def test_harness_control_a_pick_of_an_existing_or_foreign_url_is_saved(client, service):
+    nid, mcid, _, url = _note_with_picked_image(client)
+    for shown in ("/static/none.png", url):
+        resp = client.post(
+            f"/notes/{nid}/chapters/{mcid}/media/select",
+            data={"url": shown},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303, shown
+        assert next(c for c in service.get_note(nid).chapters if c.id == mcid).content == shown
+
+
+@pytest.mark.parametrize("hx", [True, False])
+def test_a_refused_delete_reads_the_notes_once(client, service, monkeypatch, hx):
+    # 20261021-010: the check, _media_files and _page each read every note.
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    bid, _, _ = _borrowed_image(client)
+    calls = []
+    repo = type(service.repo)
+    real = repo.list_notes
+    monkeypatch.setattr(repo, "list_notes", lambda self: calls.append(1) or real(self))
+    headers = HX if hx else {}
+    r = client.post(
+        f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid}, headers=headers
+    )
+    assert r.status_code == 409 and len(calls) == 1, len(calls)
+    calls.clear()
+    assert client.post(f"/notes/{bid}/delete", headers=headers).status_code == 409
+    assert len(calls) == 1, len(calls)
