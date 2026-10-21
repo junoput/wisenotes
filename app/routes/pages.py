@@ -96,7 +96,7 @@ def _import_refused(request: Request, service: NoteService, message: str) -> Res
             {"request": request, "import_error": message, "oob": True},
             status_code=400,
         )
-    resp = _page(request, service, None, new_note=True, import_error=message)
+    resp = _page(request, service, None, new_note=True, import_error=message, here="/notes/new")
     resp.status_code = 400
     return resp
 
@@ -239,7 +239,13 @@ def _delete_refused(
         )
     folders = sorted({n.folder for n in service.list_notes() if n.folder})
     resp = _page(
-        request, service, note, settings=True, existing_folders=folders, delete_error=message
+        request,
+        service,
+        note,
+        settings=True,
+        existing_folders=folders,
+        delete_error=message,
+        here=f"/notes/{note.id}/settings",
     )
     resp.status_code = 409
     return resp
@@ -463,7 +469,15 @@ def _media_reply(
     chapter = next((c for c in note.chapters if c.id == chapter_id), None)
     if chapter is None:
         raise HTTPException(status_code=status_code, detail=error)
-    resp = _page(request, service, note, editing=chapter, media_files=files, media_error=error)
+    resp = _page(
+        request,
+        service,
+        note,
+        editing=chapter,
+        media_files=files,
+        media_error=error,
+        here=f"/notes/{note.id}/chapters/{chapter.id}/edit",
+    )
     resp.status_code = status_code
     return resp
 

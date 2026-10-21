@@ -18,7 +18,12 @@
   <header class="topbar">
     <div class="brand">Wisenotes</div>
     <form class="theme-switch" action="/theme" method="post" aria-label="Theme">
-      <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+      {# The page to come back to. A page answered to a POST (a refused import or delete)
+         names the GET page it shows in `here`; its own URL takes POSTs only (405). #}
+      {% if here %}{% set back = here %}
+      {% elif request.method == "GET" %}{% set back = request.url.path ~ ("?" ~ request.url.query if request.url.query else "") %}
+      {% else %}{% set back = "/" %}{% endif %}
+      <input type="hidden" name="next" value="{{ back }}">
       {% for value, label in [('light', 'Light'), ('dark', 'Dark'), ('system', 'Auto')] %}
         <button type="submit" name="theme" value="{{ value }}"
                 aria-pressed="{{ 'true' if (theme or 'system') == value or (value == 'system' and theme not in ('light', 'dark')) else 'false' }}">{{ label }}</button>

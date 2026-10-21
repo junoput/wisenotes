@@ -706,3 +706,29 @@ def test_an_imported_external_image_is_a_visible_placeholder_not_a_broken_image(
     assert "Image missing from the import: https://example.org/a.png" in resp.text
     assert 'src="https://example.org' not in resp.text
     assert "img-src 'self' data:" in resp.headers["content-security-policy"]  # unchanged
+
+
+def _theme_next(html):
+    [back] = re.findall(r'<input type="hidden" name="next" value="([^"]*)">', html)
+    return back
+
+
+def test_the_theme_switch_on_a_page_answered_to_a_post_returns_to_a_get_page(client):
+    # 20261020-095: next was the POST's own path, so Light/Dark answered 405.
+    resp = client.post("/notes/import", files={"file": ("x.json", b"not json", "text/plain")})
+    assert resp.status_code == 400 and _theme_next(resp.text) == "/notes/new"
+    nid, mcid, filename, _ = _note_with_picked_image(client)
+    resp = client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+    assert resp.status_code == 409
+    assert _theme_next(resp.text) == f"/notes/{nid}/chapters/{mcid}/edit"
+    bid, _, _ = _borrowed_image(client)
+    resp = client.post(f"/notes/{bid}/delete")
+    assert resp.status_code == 409 and _theme_next(resp.text) == f"/notes/{bid}/settings"
+    # each one is a page a GET can open
+    for back in ("/notes/new", f"/notes/{nid}/chapters/{mcid}/edit", f"/notes/{bid}/settings"):
+        assert client.get(back).status_code == 200, back
+
+
+def test_harness_control_a_get_page_still_names_itself(client):
+    nid = _create(client, "Self")["id"]
+    assert _theme_next(client.get(f"/notes/{nid}?x=1").text) == f"/notes/{nid}?x=1"
