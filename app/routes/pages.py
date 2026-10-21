@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from app.assets import ASSET_VERSION
 from app.blocks import get_all_blocks
 from app.schemas import Chapter
 from app.schemas import Note
@@ -39,6 +40,7 @@ from app.services.notes import media_users
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["asset_version"] = ASSET_VERSION
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024

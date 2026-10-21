@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from app.assets import ASSET_VERSION
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services.bundle import BundleError
@@ -19,6 +20,7 @@ from app.services.notes import NoteService
 from app.services.notes import get_note_service
 
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["asset_version"] = ASSET_VERSION
 
 router = APIRouter(prefix="/api")
 
