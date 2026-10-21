@@ -1,3 +1,12 @@
+"""JSON API. Every page has a form or link; these routes are for scripts and htmx.
+
+Text in a JSON answer is NOT escaped: an error `detail` (409, 400, 500) can name
+note titles, folder names and URLs exactly as stored, and the notes, chapters and
+import results carry user text as is. A client that puts any of it into HTML
+must escape it. The server-rendered pages escape it in their templates; escaping
+it here as well would double-escape there (20261021-051).
+"""
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException

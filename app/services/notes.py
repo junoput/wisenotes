@@ -12,6 +12,7 @@ from app.schemas import Note
 from app.schemas import NoteCreate
 from app.schemas import NoteDocument
 from app.schemas import NoteUpdate
+from app.services.reasons import failure_reason
 from app.services.storage import JsonNoteRepository
 
 logger = logging.getLogger(__name__)
@@ -209,7 +210,7 @@ class NoteService:
                 try:
                     self.repo.delete_note(note_id)
                 except OSError as e:
-                    raise NoteNotRemoved(e.strerror or type(e).__name__, note, notes) from e
+                    raise NoteNotRemoved(failure_reason(e), note, notes) from e
                 notes = [n for n in notes if n.id != note_id]
             return note, borrowers, notes
 

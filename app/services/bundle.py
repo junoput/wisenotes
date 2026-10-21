@@ -70,6 +70,7 @@ from app.schemas import NoteDocument
 from app.services.image_processing import UnsupportedImage
 from app.services.image_processing import process_uploaded_image
 from app.services.notes import NoteService
+from app.services.reasons import failure_reason
 
 logger = logging.getLogger(__name__)
 
@@ -356,10 +357,11 @@ def _create_notes(
             # A write that failed (a full disk, a permission): say so as an import
             # error, which both routes answer with 400 and the page shows, with
             # scripts or without. A bare 500 showed nothing with scripts on, and a
-            # kept note only in the log (20261021-037). OSError's strerror, not
-            # str(e): the message must not carry the data directory's paths.
+            # kept note only in the log (20261021-037). The reason is a fixed
+            # word list (failure_reason), never text from the exception, which
+            # could carry the data directory's paths (20261021-051).
             logger.exception("import failed while writing")
-            reason = e.strerror if isinstance(e, OSError) and e.strerror else type(e).__name__
+            reason = failure_reason(e)
             done = (
                 f"The import was undone except for: {'; '.join(kept)}"
                 if kept
