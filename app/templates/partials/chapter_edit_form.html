@@ -31,8 +31,10 @@
     {% endif %}
 
     {% if chapter.type == 'media' %}
-      {% if chapter.content %}
+      {% if chapter.content|media_kind in ('image', 'inline') %}
         <div class="field media-preview"><img src="{{ chapter.content }}" alt="preview"></div>
+      {% elif chapter.content %}
+        <div class="field media-preview">{% with content=chapter.content %}{% include "components/media_placeholder.html" %}{% endwith %}</div>
       {% endif %}
       <input type="hidden" name="content_text" value="{{ chapter.content or '' }}">
     {% else %}

@@ -10,6 +10,8 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from app.assets import ASSET_VERSION
+from app.media_urls import media_kind
+from app.media_urls import missing_name
 from app.schemas import NoteCreate
 from app.schemas import NoteUpdate
 from app.services.bundle import BundleError
@@ -21,6 +23,8 @@ from app.services.notes import get_note_service
 
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
+templates.env.filters["media_kind"] = media_kind
+templates.env.filters["missing_name"] = missing_name
 
 router = APIRouter(prefix="/api")
 

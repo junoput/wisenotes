@@ -3,6 +3,7 @@ plain form POSTs with no HX-Request header must redirect to a full page, and
 the same POSTs with the header must return the htmx fragment."""
 
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -19,6 +20,7 @@ from app.schemas import NoteUpdate
 from app.services import notes as notes_mod
 
 HX = {"HX-Request": "true"}
+NOT_SHOWN = "Image not shown: {} is not stored in this note. Upload or pick a copy here."
 
 
 def _doc(resp):
@@ -706,8 +708,8 @@ def test_an_imported_external_image_is_a_visible_placeholder_not_a_broken_image(
     body = json.dumps(note).encode()
     resp = client.post("/notes/import", files={"file": ("ext.json", body, "application/json")})
     assert resp.status_code == 200 and _doc(resp)
-    assert "1 image could not be imported and is not in this note" in resp.text
-    assert "Image missing from the import: https://example.org/a.png" in resp.text
+    assert "1 image is not stored in this note and not shown" in resp.text
+    assert NOT_SHOWN.format("https://example.org/a.png") in resp.text
     assert 'src="https://example.org' not in resp.text
     assert "img-src 'self' data:" in resp.headers["content-security-policy"]  # unchanged
 
@@ -749,12 +751,105 @@ def test_an_external_image_set_after_import_is_a_placeholder_not_a_broken_image(
     ):
         client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": external})
         page = client.get(f"/notes/{nid}").text
-        assert f"External image not shown: {external}." in page, external
+        assert NOT_SHOWN.format(external) in page, external
         assert f'src="{external}"' not in page, external
     # control: the note's own image is still drawn
     client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
     page = client.get(f"/notes/{nid}").text
-    assert f'<img src="{url}"' in page and "External image not shown" not in page
+    assert f'<img src="{url}"' in page and "Image not shown" not in page
+
+
+def _import_media(client, content, title="Kinds"):
+    note = {
+        "id": "k1",
+        "name": title,
+        "title": title,
+        "chapters": [
+            {"id": "c1", "title": "Pics", "content": "", "order": 0, "type": "chapter"},
+            {
+                "id": "c2",
+                "title": "",
+                "content": content,
+                "order": 0,
+                "parent_id": "c1",
+                "type": "media",
+            },
+        ],
+    }
+    body = json.dumps(note).encode()
+    resp = client.post("/notes/import", files={"file": ("k.json", body, "application/json")})
+    assert resp.status_code == 200
+    imported = client.get("/api/notes").json()[-1]
+    return imported, resp.text
+
+
+@pytest.mark.parametrize(
+    "external", ["HTTP://example.org/a.png", "  https://example.org/a.png", "/\\example.org/a.png"]
+)
+def test_an_external_image_reads_the_same_imported_or_set_later(client, external):
+    # 20261021-009: imported it was "missing from the import" and counted; set later,
+    # another wording and not counted. Now one rule and one wording, both paths.
+    imported, page = _import_media(client, external)
+    stored = imported["chapters"][1]["content"]
+    assert stored == external  # kept, never fetched
+    assert NOT_SHOWN.format(stored) in page and "1 image is not stored in this note" in page
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": external})
+    later = client.get(f"/notes/{nid}").text
+    assert NOT_SHOWN.format(external) in later and "1 image is not stored in this note" in later
+    assert f'src="{external}"' not in page + later
+
+
+def test_the_edit_form_does_not_draw_an_external_image_either(client):
+    # 20261021-009: chapter_edit_form.html drew <img src="{{ chapter.content }}"> as is.
+    nid, mcid, _, url = _note_with_picked_image(client)
+    client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "https://example.org/a.png"}
+    )
+    form = client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX).text
+    assert 'src="https://example.org' not in form
+    assert NOT_SHOWN.format("https://example.org/a.png") in form
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": url})
+    form = client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX).text
+    assert f'<img src="{url}" alt="preview">' in form  # control: its own image is drawn
+
+
+def test_an_inline_data_image_is_re_encoded_on_import_never_kept_as_received(client):
+    # 20261021-009: import dropped data:, which img-src data: would show. Review of
+    # ff02f92: keeping it verbatim let data:image/svg+xml through, against charter R3.
+    # Now it goes through the upload pipeline like any image in a bundle.
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "green").save(buf, format="PNG")
+    png = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    imported, page = _import_media(client, png, "Inline")
+    stored = imported["chapters"][1]["content"]
+    assert stored.startswith(f"/api/notes/{imported['id']}/media/") and stored.endswith(".webp")
+    assert client.get(stored).status_code == 200 and f'<img src="{stored}"' in page
+    assert "data:" not in json.dumps(imported)
+
+
+@pytest.mark.parametrize(
+    "inline",
+    [
+        "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>",
+        "data:image/svg+xml;base64,"
+        + base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode(),
+        "DATA:image/png;base64,not-base64!",
+        "data:image/png;base64," + base64.b64encode(b"just bytes, not an image").decode(),
+        "data:image/png",
+    ],
+)
+def test_an_inline_image_that_is_not_a_raster_becomes_a_placeholder(client, inline):
+    imported, page = _import_media(client, inline, "Refused")
+    assert imported["chapters"][1]["content"] == "missing:inline image"
+    assert "Image missing from the import: inline image" in page
+    assert "svg" not in json.dumps(imported).lower()  # nothing of it kept in the note
+    assert client.get(f"/api/notes/{imported['id']}/media/list").json()["media"] == []
+
+
+def test_javascript_is_still_dropped_on_import(client):
+    imported, _ = _import_media(client, "JaVaScRiPt:alert(1)", "Script")
+    assert imported["chapters"][1]["content"] == ""
 
 
 def test_a_pick_waiting_on_a_delete_does_not_link_the_file_it_removed(client, service, monkeypatch):
@@ -946,3 +1041,12 @@ def test_a_delete_waiting_on_a_put_sees_the_link_it_saved(client, service, monke
     deleter.join(5)
     assert out["p"][1] == [] and out["d"][1] and out["d"][2] is False  # refused, kept
     assert filename in service.repo.list_media(service.get_note(nid).name)
+
+
+def test_the_page_names_a_placeholder_the_way_media_kind_reads_it(client):
+    # 20261021-013 review: placeholder and notice cut content.strip()[8:].
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    assert _put_media(client, nid, mcid, "mis\tsing:a.png").status_code == 200
+    page = client.get(f"/notes/{nid}").text
+    assert "Image missing from the import: a.png<" in page
+    assert "could not be imported and is not in this note:\n  a.png." in page

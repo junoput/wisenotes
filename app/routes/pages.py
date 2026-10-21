@@ -25,6 +25,8 @@ from starlette.concurrency import run_in_threadpool
 
 from app.assets import ASSET_VERSION
 from app.blocks import get_all_blocks
+from app.media_urls import media_kind
+from app.media_urls import missing_name
 from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
@@ -41,6 +43,8 @@ from app.services.notes import media_users
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
+templates.env.filters["media_kind"] = media_kind
+templates.env.filters["missing_name"] = missing_name
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024

@@ -13,9 +13,10 @@ Everything that arrives here is untrusted. The rules, in the order they run:
 4. Images go through the upload pipeline, which decides by content: raster is
    re-encoded to webp, GIF is verified and kept, SVG and anything Pillow cannot
    open are dropped and reported. Nothing is written as received except a
-   verified GIF.
+   verified GIF. An inline data:image/ URL is decoded and goes the same way.
 5. Text is scrubbed of control characters; a media block keeps only a
-   reference that resolves inside the bundle or a plain http(s) URL.
+   reference that resolves inside the bundle, a stored inline image, or an
+   external URL (kept, never fetched, shown as not stored).
 6. Nothing is executed and nothing is extracted to a path: entries are read
    into memory one at a time within the caps and handed to the image
    pipeline.
@@ -40,6 +41,8 @@ rather than becoming an empty block. The note page lists every such block.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import io
 import json
 import logging
@@ -51,10 +54,14 @@ from dataclasses import field
 from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import unquote_to_bytes
 
 from pydantic import ValidationError
 
 from app.blocks import BLOCKS
+from app.media_urls import MISSING_PREFIX
+from app.media_urls import clean
+from app.media_urls import media_kind
 from app.schemas import Chapter
 from app.schemas import Note
 from app.schemas import NoteCreate
@@ -85,7 +92,6 @@ _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
 Scope = tuple[str, str]
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-MISSING_PREFIX = "missing:"  # media block content for an image the import could not store
 
 
 class BundleError(ValueError):
@@ -383,7 +389,8 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
     """Resolve a media block's reference to a stored image, importing it once."""
     if content in media_urls:
         return media_urls[content]
-    if content.startswith(MISSING_PREFIX):
+    kind = media_kind(content)
+    if kind == "missing":
         return content  # already a placeholder (a re-import of an export); keep it visible
     m = _MEDIA_REF.match(content) or _API_MEDIA_REF.match(content)
     if m:
@@ -399,13 +406,39 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
             url = _store_image(service, note_id, key[1], raw, result)
         media_urls[content] = url
         return url
-    if content.startswith(("http://", "https://")):
-        # Never fetched (no new SSRF surface), and the CSP's img-src 'self' would
-        # block it in the browser, a broken image with no word why (20261014-140).
-        # A visible placeholder naming the URL, like an image absent from the zip.
+    if kind == "inline":
+        return _inline_image(service, note_id, content, result)
+    if kind == "external":
+        # Never fetched (no new SSRF surface). Kept as it is: the block and the
+        # note's notice say it is not shown, the same way as for a URL set later
+        # (20261014-140, 20261021-009).
         result.skipped.append(f"{content}: external image, not fetched")
-        return _missing(content, result)
+        result.missing.append(content)
+        return content
     return ""
+
+
+INLINE_NAME = "inline image"  # what the missing list and the placeholder call one
+
+
+def _inline_image(service, note_id, content, result) -> str:
+    """A data:image/ URL is decoded and stored through the upload pipeline like
+    any image in a bundle (charter R3): re-encoded, pixel-capped, SVG refused.
+    It is never kept as received (20261021-013 review). What does not decode, or
+    is not PNG, JPEG, WebP or GIF, becomes a visible placeholder."""
+    header, comma, payload = clean(content).partition(",")
+    if not comma:
+        result.skipped.append(f"{INLINE_NAME}: not a data URL")
+        return _missing(INLINE_NAME, result)
+    try:
+        if header.lower().replace(" ", "").endswith(";base64"):
+            raw = base64.b64decode(payload, validate=True)
+        else:
+            raw = unquote_to_bytes(payload)
+    except (binascii.Error, ValueError):
+        result.skipped.append(f"{INLINE_NAME}: data URL does not decode")
+        return _missing(INLINE_NAME, result)
+    return _store_image(service, note_id, INLINE_NAME, raw, result)
 
 
 def _store_image(service, note_id, filename, raw, result) -> str:
