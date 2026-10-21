@@ -437,6 +437,52 @@ class TestSeveralNoteFolders:
         r = import_bundle(service, "named.zip", z)
         assert r.images == 0 and r.missing == ["pic.png"]
 
+    def test_a_folder_whose_name_ends_in_media_is_a_note_folder(self, service):
+        # 20261020-086: '"media/" not in name' was a substring test; socialmedia/ was dropped.
+        r = import_bundle(service, "social.zip", self._zip_of_folders("Alpha", "socialmedia"))
+        assert [n.title for n in r.notes] == ["Alpha", "socialmedia"]
+        assert r.images == 2 and r.missing == [] and r.skipped == []
+        assert self._color_of(service, r.notes[1])[2] > 200  # socialmedia zipped blue
+
+    def test_a_json_inside_a_media_folder_is_still_not_a_note(self, service):
+        # the quiet side of the fix above: a media/ path component still excludes it
+        z = self._zip_of_folders("Alpha", extra={"Alpha/media/meta.json": b"{}"})
+        r = import_bundle(service, "meta.zip", z)
+        assert [n.title for n in r.notes] == ["Alpha"]
+        assert r.skipped == ["Alpha/media/meta.json: not notes.json or an image under media/"]
+
+    def test_a_root_level_note_cannot_take_a_folders_images_by_naming_it(self, service):
+        # 20261020-086: x.json at the root fell back to its name, Bravo, and so
+        # reached Bravo/media/pic.png.
+        n = _folder_note("Bravo", "pic.png")
+        z = _zip({"x.json": json.dumps(n).encode(), "Bravo/media/pic.png": _png()})
+        r = import_bundle(service, "root.zip", z)
+        assert r.images == 0 and r.missing == ["pic.png"]
+
+    def test_with_the_folder_note_present_only_it_gets_its_images(self, service):
+        # ...and with Bravo/Bravo.json beside it, both notes got the image.
+        n = _folder_note("Bravo", "pic.png")
+        z = self._zip_of_folders("Bravo", extra={"x.json": json.dumps(n).encode()})
+        r = import_bundle(service, "both.zip", z)
+        assert len(r.notes) == 2 and r.images == 1 and r.missing == ["pic.png"]
+        [owner] = [n for n in r.notes if service.repo.list_media(n.name)]
+        media = next(c for c in owner.chapters if c.type == "media")
+        assert media.content.startswith(f"/api/notes/{owner.id}/media/")
+        assert service.repo.get_note(owner.id).name == "Bravo"
+
+    def test_harness_control_a_root_level_note_keeps_its_export_style_images(self, service):
+        # The fallback that stays: a root-level note's media/<name>/<file> references.
+        z = _zip({"x.json": json.dumps(_note()).encode(), "media/Old-Name/pic.png": _png()})
+        r = import_bundle(service, "export-style.zip", z)
+        assert r.images == 1 and r.missing == []
+
+    def test_a_doubled_slash_in_the_folder_path_still_finds_its_images(self, service):
+        # 20261020-086: the scope was normalised (x/Alpha) but the media key was not (x//Alpha).
+        n = _folder_note("Alpha", "pic.png")
+        z = _zip({"x//Alpha/Alpha.json": json.dumps(n).encode(), "x//Alpha/media/pic.png": _png()})
+        r = import_bundle(service, "slashes.zip", z)
+        assert r.images == 1 and r.missing == []
+
     def test_a_note_titled_notes_is_a_note_not_an_export(self, service):
         # 3b: stored as notes/notes.json, it was classified as an export by its file name.
         z = self._zip_of_folders("notes", "Alpha")

@@ -78,6 +78,11 @@ _MEDIA_ENTRY = re.compile(r"^(?:.*/)?media/([^/]+)/([^/]+)$")
 # y/Alpha/ keep their own images (20261020-045)
 _FOLDER_MEDIA_ENTRY = re.compile(r"^((?:.*/)?[^/]+)/media/([^/]+)$")
 _MEDIA_REF = re.compile(r"^media/([^/]+)/([^/]+)$")
+# A scope says where a note's images were zipped: ("export", <note name>) for
+# media/<name>/<file>, ("folder", <folder path>) for <folder>/media/<file>. The two
+# layouts never share a key, so a note named Bravo outside Bravo/ cannot reach
+# Bravo/media/ (20261020-086).
+Scope = tuple[str, str]
 _API_MEDIA_REF = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 MISSING_PREFIX = "missing:"  # media block content for an image the import could not store
@@ -145,7 +150,7 @@ def _import_json(service: NoteService, content: bytes) -> ImportResult:
     if len(content) > MAX_JSON_BYTES:
         raise BundleError("JSON too large")
     notes = _parse_notes(content)
-    return _create_notes(service, [(n, n.name) for n in notes], media={})
+    return _create_notes(service, [(n, ("export", n.name)) for n in notes], media={})
 
 
 def _import_zip(service: NoteService, content: bytes) -> ImportResult:
@@ -158,7 +163,7 @@ def _import_zip(service: NoteService, content: bytes) -> ImportResult:
         if zf.testzip() is not None:
             raise BundleError("Zip file is corrupt")
         notes = _notes_in_zip(zf, json_entries)
-        media: dict[tuple[str, str], bytes] = {}
+        media: dict[tuple[Scope, str], bytes] = {}
         for info, scope, fname in media_entries:
             media[(scope, fname)] = zf.read(info)  # size already bounded by _inspect_zip
     result = _create_notes(service, notes, media)
@@ -178,7 +183,7 @@ def _inspect_zip(zf: zipfile.ZipFile):
         raise BundleError(f"Too many entries in zip (max {MAX_ZIP_ENTRIES})")
     total = 0
     json_entries: list[str] = []
-    media_entries: list[tuple[zipfile.ZipInfo, str, str]] = []
+    media_entries: list[tuple[zipfile.ZipInfo, Scope, str]] = []
     skipped: list[str] = []
     ignored = 0
     for info in infos:
@@ -204,12 +209,16 @@ def _inspect_zip(zf: zipfile.ZipFile):
         if _is_os_junk(name):
             ignored += 1
             continue
-        if base.endswith(".json") and "media/" not in name:
+        # A path component, not a substring: socialmedia/socialmedia.json is a note.
+        if base.endswith(".json") and "media" not in PurePosixPath(name).parts[:-1]:
             json_entries.append(name)
             continue
-        m = _MEDIA_ENTRY.match(name) or _FOLDER_MEDIA_ENTRY.match(name)
-        if m and PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS:
-            media_entries.append((info, m.group(1), base))
+        image = PurePosixPath(base).suffix.lower() in IMAGE_EXTENSIONS
+        if image and (m := _MEDIA_ENTRY.match(name)):
+            media_entries.append((info, ("export", m.group(1)), base))
+        elif image and (m := _FOLDER_MEDIA_ENTRY.match(name)):
+            # normalised as the note's folder is in _notes_in_zip (x//Alpha is x/Alpha)
+            media_entries.append((info, ("folder", str(PurePosixPath(m.group(1)))), base))
         else:
             skipped.append(f"{name}: not notes.json or an image under media/")
     if not json_entries:
@@ -219,7 +228,7 @@ def _inspect_zip(zf: zipfile.ZipFile):
     return sorted(json_entries), media_entries, skipped, ignored
 
 
-def _notes_in_zip(zf: zipfile.ZipFile, entries: list[str]) -> list[tuple[Note, str]]:
+def _notes_in_zip(zf: zipfile.ZipFile, entries: list[str]) -> list[tuple[Note, Scope]]:
     """Each note with the scope its images are keyed by.
 
     An export (a document with a "notes" list, whatever its file is called)
@@ -250,11 +259,13 @@ def _notes_in_zip(zf: zipfile.ZipFile, entries: list[str]) -> list[tuple[Note, s
             "import an export or note folders, not both"
         )
     if exports:
-        return [(n, n.name) for n in _parse_notes(exports[0][1])]
+        return [(n, ("export", n.name)) for n in _parse_notes(exports[0][1])]
     out = []
     for entry, raw in folders:
         folder = str(PurePosixPath(entry).parent)
-        out += [(n, n.name if folder == "." else folder) for n in _parse_notes(raw)]
+        # A note .json at the root has no folder; its images, if any, are export-style.
+        scope = ("folder", folder) if folder != "." else None
+        out += [(n, scope or ("export", n.name)) for n in _parse_notes(raw)]
     return out
 
 
@@ -308,7 +319,9 @@ def _clean_text(s: str | None, limit: int) -> str:
 
 
 def _create_notes(
-    service: NoteService, notes: list[tuple[Note, str]], media: dict[tuple[str, str], bytes]
+    service: NoteService,
+    notes: list[tuple[Note, Scope]],
+    media: dict[tuple[Scope, str], bytes],
 ) -> ImportResult:
     """All or nothing: if anything raises part-way, the notes created so far are deleted.
 
@@ -330,7 +343,7 @@ def _create_notes(
 
 
 def _create_note(
-    service, src: Note, scope: str, media, result: ImportResult, created_ids: list[str]
+    service, src: Note, scope: Scope, media, result: ImportResult, created_ids: list[str]
 ) -> None:
     title = _clean_text(src.title, 200).strip() or "Imported note"
     created = service.create_note(
@@ -374,7 +387,10 @@ def _import_media_ref(service, note_id, scope, content, media, media_urls, resul
         return content  # already a placeholder (a re-import of an export); keep it visible
     m = _MEDIA_REF.match(content) or _API_MEDIA_REF.match(content)
     if m:
-        key = (m.group(1), m.group(2)) if _MEDIA_REF.match(content) else (scope, m.group(2))
+        if _MEDIA_REF.match(content):
+            key = (("export", m.group(1)), m.group(2))
+        else:
+            key = (scope, m.group(2))
         raw = media.get(key)
         if raw is None:
             result.skipped.append(f"{content}: image not in bundle")
