@@ -204,14 +204,43 @@ class NoteService:
             if chapter is None:
                 return None, True
             ours = _our_media(url)
-            if ours:
-                owner = self.repo.get_note(ours[0])
-                if owner is None or ours[1] not in self.repo.list_media(owner.name):
-                    return note, False
+            if ours and not self._media_exists(*ours):
+                return note, False
             saved = self.update_chapter(
                 note_id, chapter_id, chapter.title, url, chapter.language, chapter.source
             )
             return saved, True
+
+    def _media_exists(self, note_id: str, filename: str) -> bool:
+        owner = self.repo.get_note(note_id)
+        return owner is not None and filename in self.repo.list_media(owner.name)
+
+    def update_note_checked(
+        self, note_id: str, payload: NoteUpdate
+    ) -> tuple[Note | None, list[str]]:
+        """update_note for a client that sends whole chapters (PUT /api/notes/{id}):
+        (the note, or None if there is none; "<chapter id>: <url>" for each media
+        block the payload changed to one of our images that does not exist, which
+        refuses the update). Checked in the same lock hold as the write, as
+        pick_media is (20261021-016). A block whose URL the payload leaves as it
+        was is not checked, so a note that already holds a broken link can still
+        be saved."""
+        with self.repo.lock:
+            existing = self.repo.get_note(note_id)
+            if existing is None:
+                return None, []
+            before = {c.id: c.content for c in existing.chapters}
+            gone = [
+                f"{c.id}: {c.content}"
+                for c in payload.chapters or []
+                if c.type == "media"
+                and before.get(c.id) != c.content
+                and (ours := _our_media(c.content))
+                and not self._media_exists(*ours)
+            ]
+            if gone:
+                return existing, gone
+            return self.update_note(note_id, payload), []
 
     def delete_note(self, note_id: str) -> bool:
         if not self.repo.get_note(note_id):

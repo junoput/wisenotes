@@ -45,9 +45,15 @@ async def create_note(payload: NoteCreate, service: NoteService = Depends(get_no
 async def update_note(
     note_id: str, payload: NoteUpdate, service: NoteService = Depends(get_note_service)
 ):
-    note = service.update_note(note_id, payload)
+    note, gone = service.update_note_checked(note_id, payload)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
+    if gone:
+        # A block would request a file that is not there (20261021-016).
+        raise HTTPException(
+            status_code=409,
+            detail=f"Media blocks name images that do not exist: {'; '.join(gone)}",
+        )
     return note
 
 

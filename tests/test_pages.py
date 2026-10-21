@@ -15,6 +15,7 @@ from PIL import Image
 
 from app.routes import api
 from app.routes import pages
+from app.schemas import NoteUpdate
 from app.services import notes as notes_mod
 
 HX = {"HX-Request": "true"}
@@ -839,3 +840,109 @@ def test_a_refused_delete_reads_the_notes_once(client, service, monkeypatch, hx)
     calls.clear()
     assert client.post(f"/notes/{bid}/delete", headers=headers).status_code == 409
     assert len(calls) == 1, len(calls)
+
+
+def _put_media(client, nid, mcid, url):
+    note = client.get(f"/api/notes/{nid}").json()
+    for c in note["chapters"]:
+        if c["id"] == mcid:
+            c["content"] = url
+    return client.put(f"/api/notes/{nid}", json={"chapters": note["chapters"]})
+
+
+def test_put_refuses_a_media_block_naming_a_deleted_image(client, service):
+    # 20261021-016: only the select form checked; PUT wrote any URL.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    client.post(f"/notes/{nid}/media/{filename}/delete", data={"chapter_id": mcid})
+    for gone in (url, url + "?v=2", f"/api/notes/{nid}/media/nothing.webp"):
+        resp = _put_media(client, nid, mcid, gone)
+        assert resp.status_code == 409, gone
+        assert f"{mcid}: {gone}" in resp.json()["detail"]
+    block = next(c for c in service.get_note(nid).chapters if c.id == mcid)
+    assert block.content == "/static/none.png"
+
+
+def test_harness_control_put_saves_existing_foreign_and_unchanged_urls(client, service):
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    for shown in ("/static/none.png", "https://example.org/a.png", url):
+        assert _put_media(client, nid, mcid, shown).status_code == 200, shown
+    # The block now names an image deleted underneath it. A save that leaves that
+    # URL as it was is not refused: a note holding a broken link stays editable.
+    service.repo.delete_media(service.get_note(nid).name, filename)
+    chapters = client.get(f"/api/notes/{nid}").json()["chapters"]
+    resp = client.put(f"/api/notes/{nid}", json={"title": "Renamed", "chapters": chapters})
+    assert resp.status_code == 200 and resp.json()["title"] == "Renamed"
+
+
+def test_a_put_waiting_on_a_delete_does_not_link_the_file_it_removed(client, service, monkeypatch):
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    checked, release = threading.Event(), threading.Event()
+    real = notes_mod.media_users
+
+    def slow_users(*a):
+        users = real(*a)
+        checked.set()
+        release.wait(5)
+        return users
+
+    monkeypatch.setattr(notes_mod, "media_users", slow_users)
+    chapters = [
+        {**c.model_dump(mode="json"), "content": url} if c.id == mcid else c.model_dump(mode="json")
+        for c in service.get_note(nid).chapters
+    ]
+    out = {}
+    deleter = threading.Thread(
+        target=lambda: out.update(d=service.delete_media_unless_used(nid, filename))
+    )
+    deleter.start()
+    assert checked.wait(5)
+    putter = threading.Thread(
+        target=lambda: out.update(p=service.update_note_checked(nid, NoteUpdate(chapters=chapters)))
+    )
+    putter.start()
+    putter.join(0.3)
+    assert putter.is_alive()  # waits for the delete's lock hold
+    release.set()
+    deleter.join(5)
+    putter.join(5)
+    assert out["d"][2] is True and out["p"][1] == [f"{mcid}: {url}"]
+
+
+def test_a_delete_waiting_on_a_put_sees_the_link_it_saved(client, service, monkeypatch):
+    # The other order: the PUT has checked the file exists and not yet written. A
+    # delete arriving then must wait, and then refuse: the block now shows the file.
+    nid, mcid, filename, url = _note_with_picked_image(client)
+    client.post(f"/notes/{nid}/chapters/{mcid}/media/select", data={"url": "/static/none.png"})
+    checked, release = threading.Event(), threading.Event()
+    real = type(service)._media_exists
+
+    def slow_exists(self, *a):
+        found = real(self, *a)
+        checked.set()  # checked; not yet written
+        release.wait(5)
+        return found
+
+    monkeypatch.setattr(type(service), "_media_exists", slow_exists)
+    chapters = [
+        {**c.model_dump(mode="json"), "content": url} if c.id == mcid else c.model_dump(mode="json")
+        for c in service.get_note(nid).chapters
+    ]
+    out = {}
+    putter = threading.Thread(
+        target=lambda: out.update(p=service.update_note_checked(nid, NoteUpdate(chapters=chapters)))
+    )
+    putter.start()
+    assert checked.wait(5)
+    deleter = threading.Thread(
+        target=lambda: out.update(d=service.delete_media_unless_used(nid, filename))
+    )
+    deleter.start()
+    deleter.join(0.3)
+    assert deleter.is_alive()  # waits for the PUT's lock hold
+    release.set()
+    putter.join(5)
+    deleter.join(5)
+    assert out["p"][1] == [] and out["d"][1] and out["d"][2] is False  # refused, kept
+    assert filename in service.repo.list_media(service.get_note(nid).name)
