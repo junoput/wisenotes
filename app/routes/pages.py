@@ -556,18 +556,19 @@ async def select_media(
     url: str = Form(...),
     service: NoteService = Depends(get_note_service),
 ):
-    note, exists = service.pick_media(note_id, chapter_id, url)
+    note, saved, reason = service.pick_media(note_id, chapter_id, url)
     if note is None:
         raise HTTPException(status_code=404, detail="Note or block not found")
-    if not exists:
-        # The gallery was drawn before the file was deleted (20261021-010). Answer
-        # with the gallery as it is now, into the gallery, not the page.
+    if not saved:
+        # The gallery was drawn before the file was deleted (20261021-010), or the
+        # URL is a data: URL the app would not draw (20261021-023). Answer with
+        # the gallery as it is now, into the gallery, not the page.
         resp = _media_reply(
             request,
             service,
             note,
             chapter_id,
-            error="That image was deleted. Pick another or upload one.",
+            error=reason,
             status_code=409,
         )
         resp.headers["HX-Retarget"] = f"#media-gallery-{chapter_id}"

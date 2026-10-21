@@ -1182,3 +1182,44 @@ def test_a_delete_waiting_on_a_pick_sees_the_link_it_saved(client, service, monk
     deleter.join(5)
     assert out["p"][1] is True and out["d"][1] and out["d"][2] is False
     assert filename in service.repo.list_media(service.get_note(nid).name)
+
+
+SVG_DATA = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>"
+
+
+def test_put_and_select_refuse_a_data_url_that_is_not_a_raster(client, service):
+    # 20261021-023: PUT and select stored data:image/svg+xml, and the page drew it.
+    nid, mcid, _, url = _note_with_picked_image(client)
+    resp = _put_media(client, nid, mcid, SVG_DATA)
+    assert resp.status_code == 409
+    assert f"{mcid}: {SVG_DATA[:60]}" in resp.json()["detail"]
+    assert "not a PNG, JPEG, WebP or GIF data URL" in resp.json()["detail"]
+    plain = client.post(
+        f"/notes/{nid}/chapters/{mcid}/media/select",
+        data={"url": SVG_DATA},
+        follow_redirects=False,
+    )
+    assert plain.status_code == 409 and "is not PNG, JPEG, WebP or GIF" in plain.text
+    assert next(c for c in service.get_note(nid).chapters if c.id == mcid).content == url
+
+
+def test_harness_control_a_raster_data_url_is_saved_and_drawn(client):
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    png = "data:image/png;base64,iVBORw0KGgo="
+    assert _put_media(client, nid, mcid, png).status_code == 200
+    assert f'<img src="{png}"' in client.get(f"/notes/{nid}").text
+
+
+def test_a_stored_svg_data_url_is_a_placeholder_not_an_image(client, service):
+    # one written before this check (straight into the store) is not drawn either
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    chapters = [
+        c.model_copy(update={"content": SVG_DATA}) if c.id == mcid else c
+        for c in service.get_note(nid).chapters
+    ]
+    service.update_note(nid, NoteUpdate(chapters=chapters))
+    page = client.get(f"/notes/{nid}").text
+    assert 'src="data:image/svg' not in page
+    assert "Image not shown: data:image/svg+xml" in page
+    form = client.get(f"/notes/{nid}/chapters/{mcid}/edit", headers=HX).text
+    assert 'src="data:image/svg' not in form

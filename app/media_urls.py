@@ -30,6 +30,15 @@ def missing_name(content: str | None) -> str:
     return s[len(MISSING_PREFIX) :] if s.startswith(MISSING_PREFIX) else ""
 
 
+# The inline images the app draws: the raster types the upload pipeline stores
+# (charter R3). data:image/svg+xml and every other data: URL are not drawn.
+_RASTER_DATA = re.compile(r"^data:image/(png|jpeg|webp|gif)[;,]", re.IGNORECASE)
+
+
+def is_data_url(content: str | None) -> bool:
+    return clean(content)[:5].lower() == "data:"
+
+
 _OUR_MEDIA = re.compile(r"^/api/notes/([^/]+)/media/([^/]+)$")
 
 
@@ -75,9 +84,11 @@ def media_kind(content: str | None) -> str:
     "empty"    nothing chosen yet;
     "missing"  an import placeholder, MISSING_PREFIX + what was not stored;
     "image"    a path on this server: drawn;
-    "inline"   a data:image/ URL: drawn (the CSP allows data:). This says how
-               to render, not what may be stored: import decodes and
-               re-encodes it like any image (bundle._inline_image);
+    "inline"   a data:image/png, jpeg, webp or gif URL: drawn (the CSP allows
+               data:). This says how to render, not what may be stored:
+               import decodes and re-encodes any data: URL like any image
+               (bundle._inline_image), and PUT and select refuse a data: URL
+               that is not inline (20261021-023);
     "external" another host (http:, https:, //host): not drawn, the CSP blocks it;
     "other"    anything else (javascript:, file:, a relative path): not drawn,
                and dropped on import.
@@ -91,8 +102,8 @@ def media_kind(content: str | None) -> str:
     m = _SCHEME.match(url)
     if m:
         scheme = m.group(1).lower()
-        if scheme == "data" and url[m.end() :].lower().startswith("image/"):
-            return "inline"
+        if scheme == "data":
+            return "inline" if _RASTER_DATA.match(url) else "other"
         return "external" if scheme in ("http", "https") else "other"
     if url.startswith("//"):
         return "external"

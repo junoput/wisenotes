@@ -61,3 +61,22 @@ def test_missing_name_reads_the_placeholder_as_media_kind_does(content, name):
     # with media_kind's cleaning.
     assert missing_name(content) == name
     assert (media_kind(content) == "missing") == bool(name)
+
+
+@pytest.mark.parametrize(
+    ("content", "kind"),
+    [
+        ("data:image/png;base64,AAAA", "inline"),
+        ("data:image/jpeg;base64,AAAA", "inline"),
+        ("data:image/webp;base64,AAAA", "inline"),
+        ("data:image/GIF;base64,AAAA", "inline"),
+        ("data:image/svg+xml,<svg/>", "other"),
+        ("data:image/svg+xml;base64,PHN2Zy8+", "other"),
+        ("data:image/bmp;base64,AAAA", "other"),
+        ("data:image/pngx;base64,AAAA", "other"),
+        ("data:image/png", "other"),
+    ],
+)
+def test_only_the_raster_types_the_pipeline_stores_are_drawn_inline(content, kind):
+    # 20261021-023: any data:image/ was "inline", so data:image/svg+xml was drawn.
+    assert media_kind(content) == kind
