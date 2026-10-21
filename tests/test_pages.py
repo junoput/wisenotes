@@ -3,6 +3,7 @@ plain form POSTs with no HX-Request header must redirect to a full page, and
 the same POSTs with the header must return the htmx fragment."""
 
 import asyncio
+import base64
 import json
 import re
 import threading
@@ -813,12 +814,41 @@ def test_the_edit_form_does_not_draw_an_external_image_either(client):
     assert f'<img src="{url}" alt="preview">' in form  # control: its own image is drawn
 
 
-def test_an_inline_data_image_survives_import_and_javascript_does_not(client):
-    # 20261021-009: import dropped data:, which the CSP's img-src data: would show.
-    data = "data:image/png;base64,iVBORw0KGgo="
-    imported, page = _import_media(client, data, "Inline")
-    assert imported["chapters"][1]["content"] == data and f'src="{data}"' in page
-    imported, page = _import_media(client, "JaVaScRiPt:alert(1)", "Script")
+def test_an_inline_data_image_is_re_encoded_on_import_never_kept_as_received(client):
+    # 20261021-009: import dropped data:, which img-src data: would show. Review of
+    # ff02f92: keeping it verbatim let data:image/svg+xml through, against charter R3.
+    # Now it goes through the upload pipeline like any image in a bundle.
+    buf = BytesIO()
+    Image.new("RGB", (4, 4), "green").save(buf, format="PNG")
+    png = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    imported, page = _import_media(client, png, "Inline")
+    stored = imported["chapters"][1]["content"]
+    assert stored.startswith(f"/api/notes/{imported['id']}/media/") and stored.endswith(".webp")
+    assert client.get(stored).status_code == 200 and f'<img src="{stored}"' in page
+    assert "data:" not in json.dumps(imported)
+
+
+@pytest.mark.parametrize(
+    "inline",
+    [
+        "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>",
+        "data:image/svg+xml;base64,"
+        + base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode(),
+        "DATA:image/png;base64,not-base64!",
+        "data:image/png;base64," + base64.b64encode(b"just bytes, not an image").decode(),
+        "data:image/png",
+    ],
+)
+def test_an_inline_image_that_is_not_a_raster_becomes_a_placeholder(client, inline):
+    imported, page = _import_media(client, inline, "Refused")
+    assert imported["chapters"][1]["content"] == "missing:inline image"
+    assert "Image missing from the import: inline image" in page
+    assert "svg" not in json.dumps(imported).lower()  # nothing of it kept in the note
+    assert client.get(f"/api/notes/{imported['id']}/media/list").json()["media"] == []
+
+
+def test_javascript_is_still_dropped_on_import(client):
+    imported, _ = _import_media(client, "JaVaScRiPt:alert(1)", "Script")
     assert imported["chapters"][1]["content"] == ""
 
 
@@ -1011,3 +1041,12 @@ def test_a_delete_waiting_on_a_put_sees_the_link_it_saved(client, service, monke
     deleter.join(5)
     assert out["p"][1] == [] and out["d"][1] and out["d"][2] is False  # refused, kept
     assert filename in service.repo.list_media(service.get_note(nid).name)
+
+
+def test_the_page_names_a_placeholder_the_way_media_kind_reads_it(client):
+    # 20261021-013 review: placeholder and notice cut content.strip()[8:].
+    nid, mcid, _, _ = _note_with_picked_image(client)
+    assert _put_media(client, nid, mcid, "mis\tsing:a.png").status_code == 200
+    page = client.get(f"/notes/{nid}").text
+    assert "Image missing from the import: a.png<" in page
+    assert "could not be imported and is not in this note:\n  a.png." in page

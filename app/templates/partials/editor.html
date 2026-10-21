@@ -17,7 +17,7 @@
 {% set ns = namespace(missing=[], outside=[]) %}
 {% for c in active.chapters if c.type == 'media' %}
   {% set kind = c.content|media_kind %}
-  {% if kind == 'missing' %}{% set ns.missing = ns.missing + [c.content.strip()[8:]] %}
+  {% if kind == 'missing' %}{% set ns.missing = ns.missing + [c.content|missing_name] %}
   {% elif kind in ('external', 'other') %}{% set ns.outside = ns.outside + [c.content] %}{% endif %}
 {% endfor %}
 {% if ns.missing or ns.outside %}

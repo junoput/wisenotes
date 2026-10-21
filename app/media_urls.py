@@ -16,17 +16,31 @@ _INSIDE = re.compile(r"[\t\n\r]")
 _EDGES = "".join(map(chr, range(0x21)))  # C0 controls and space
 
 
+def clean(content: str | None) -> str:
+    """The URL as a browser reads it: tabs and newlines removed, edges stripped."""
+    return _INSIDE.sub("", content or "").strip(_EDGES)
+
+
+def missing_name(content: str | None) -> str:
+    """What an import placeholder says was not stored; "" for any other content.
+    Read through the same cleaning as media_kind, so the two never disagree."""
+    s = clean(content)
+    return s[len(MISSING_PREFIX) :] if s.startswith(MISSING_PREFIX) else ""
+
+
 def media_kind(content: str | None) -> str:
     """One of:
     "empty"    nothing chosen yet;
     "missing"  an import placeholder, MISSING_PREFIX + what was not stored;
     "image"    a path on this server: drawn;
-    "inline"   a data:image/ URL: drawn (the CSP allows data:);
+    "inline"   a data:image/ URL: drawn (the CSP allows data:). This says how
+               to render, not what may be stored: import decodes and
+               re-encodes it like any image (bundle._inline_image);
     "external" another host (http:, https:, //host): not drawn, the CSP blocks it;
     "other"    anything else (javascript:, file:, a relative path): not drawn,
                and dropped on import.
     """
-    s = _INSIDE.sub("", content or "").strip(_EDGES)
+    s = clean(content)
     if not s:
         return "empty"
     if s.startswith(MISSING_PREFIX):

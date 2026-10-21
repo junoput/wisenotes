@@ -3,6 +3,7 @@
 import pytest
 
 from app.media_urls import media_kind
+from app.media_urls import missing_name
 
 
 @pytest.mark.parametrize(
@@ -42,3 +43,21 @@ def test_another_host_in_any_spelling_a_browser_accepts_is_external(content):
 )
 def test_every_other_kind(content, kind):
     assert media_kind(content) == kind
+
+
+@pytest.mark.parametrize(
+    ("content", "name"),
+    [
+        ("missing:a.png", "a.png"),
+        ("  missing:a.png ", "a.png"),
+        ("\x01missing:a.png", "a.png"),
+        ("mis\tsing:a.png", "a.png"),
+        ("/api/notes/n/media/a.png", ""),
+        ("", ""),
+    ],
+)
+def test_missing_name_reads_the_placeholder_as_media_kind_does(content, name):
+    # 20261021-013 review: the templates cut content.strip()[8:], which disagreed
+    # with media_kind's cleaning.
+    assert missing_name(content) == name
+    assert (media_kind(content) == "missing") == bool(name)
