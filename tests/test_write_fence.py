@@ -29,7 +29,9 @@ def name_writer(data_dir: Path, who: str) -> None:
 
 
 def snapshot(data_dir: Path) -> dict[str, bytes]:
-    return {str(p.relative_to(data_dir)): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()}
+    return {
+        str(p.relative_to(data_dir)): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()
+    }
 
 
 def test_the_named_writer_writes(client, fenced):
@@ -78,7 +80,16 @@ def test_a_change_of_writer_waits_for_a_write_in_flight(fenced):
     fd, allowed = write_fence.acquire(fenced)
     assert allowed and fd is not None
     deploy = subprocess.Popen(
-        ["flock", "-x", "-w", "5", str(fenced / write_fence.LOCK_FILE), "sh", "-c", f"echo other > {fenced / '.writer'}"]
+        [
+            "flock",
+            "-x",
+            "-w",
+            "5",
+            str(fenced / write_fence.LOCK_FILE),
+            "sh",
+            "-c",
+            f"echo other > {fenced / '.writer'}",
+        ]
     )
     try:
         with pytest.raises(subprocess.TimeoutExpired):
@@ -97,7 +108,9 @@ def test_a_write_waits_while_the_writer_is_being_changed(fenced):
     try:
         # let the deploy take the lock first
         for _ in range(100):
-            probe = subprocess.run(["flock", "-n", "-s", str(fenced / write_fence.LOCK_FILE), "true"])
+            probe = subprocess.run(
+                ["flock", "-n", "-s", str(fenced / write_fence.LOCK_FILE), "true"], check=False
+            )
             if probe.returncode != 0:
                 break
             threading.Event().wait(0.01)
@@ -129,7 +142,9 @@ def test_the_legacy_migration_runs_only_in_the_writer(fenced):
     assert (fenced / "Old-note" / "Old-note.json").exists()
 
 
-def test_a_write_holds_the_lock_until_its_handler_has_finished(client, fenced, service, monkeypatch):
+def test_a_write_holds_the_lock_until_its_handler_has_finished(
+    client, fenced, service, monkeypatch
+):
     # If the lock were dropped before the handler ran, a change of writer could
     # land in the middle of this write.
     name_writer(fenced, "me")
@@ -137,7 +152,9 @@ def test_a_write_holds_the_lock_until_its_handler_has_finished(client, fenced, s
     create = service.create_note
 
     def probing_create(payload):
-        probe = subprocess.run(["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"])
+        probe = subprocess.run(
+            ["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"], check=False
+        )
         seen["exclusive_refused"] = probe.returncode != 0
         return create(payload)
 
@@ -146,4 +163,9 @@ def test_a_write_holds_the_lock_until_its_handler_has_finished(client, fenced, s
     assert r.status_code in (200, 303), r.text
     assert seen == {"exclusive_refused": True}
     # and released afterwards
-    assert subprocess.run(["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"]).returncode == 0
+    assert (
+        subprocess.run(
+            ["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"], check=False
+        ).returncode
+        == 0
+    )
