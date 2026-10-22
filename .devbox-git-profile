@@ -1,0 +1,10 @@
+# Git profile for wisenotes, read by dev-agent-tools (gate, lane, tick,
+# conventions). Operator decisions 2026-10-22 and 2026-10-25, ticket 20261022-037.
+#
+# develop is the integration branch; main is promoted by the operator.
+integration=develop
+# wisenotes has no login and no users, so the identity convention does not
+# apply to it.
+conventions_exempt=docs/IDENTITY.md
+# No python= yet: a declared interpreter is used without the project's venv,
+# so the gate cannot import pytest. Added when dev-agent-tools 20261014-062 lands.
