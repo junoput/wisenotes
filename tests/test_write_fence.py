@@ -127,3 +127,23 @@ def test_the_legacy_migration_runs_only_in_the_writer(fenced):
     name_writer(fenced, "me")
     JsonNoteRepository(legacy)
     assert (fenced / "Old-note" / "Old-note.json").exists()
+
+
+def test_a_write_holds_the_lock_until_its_handler_has_finished(client, fenced, service, monkeypatch):
+    # If the lock were dropped before the handler ran, a change of writer could
+    # land in the middle of this write.
+    name_writer(fenced, "me")
+    seen = {}
+    create = service.create_note
+
+    def probing_create(payload):
+        probe = subprocess.run(["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"])
+        seen["exclusive_refused"] = probe.returncode != 0
+        return create(payload)
+
+    monkeypatch.setattr(service, "create_note", probing_create)
+    r = client.post("/notes", data={"title": "Held"}, follow_redirects=False)
+    assert r.status_code in (200, 303), r.text
+    assert seen == {"exclusive_refused": True}
+    # and released afterwards
+    assert subprocess.run(["flock", "-n", "-x", str(fenced / write_fence.LOCK_FILE), "true"]).returncode == 0

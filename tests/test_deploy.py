@@ -674,7 +674,8 @@ case "$1" in
                         *PortBindings*) field 3 "$c" ;;
                         *) echo "$id" ;; esac ;;
   logs) echo "stub log" ;;
-  start) [ -f "$c" ] || exit 125; read -r id _ port w <"$c"; echo "$id running $port $w" >"$c"; gapcheck ;;
+  start) [ -f "$c" ] || exit 125; read -r id _ port w <"$c"; echo "$id running $port $w" >"$c"
+         echo "started $last writer=$(cat "$WISENOTES_DATA/.writer" 2>/dev/null)" >>"$S/log"; gapcheck ;;
   stop) [ -f "$c" ] || exit 125; read -r id _ port w <"$c"; echo "$id stopped $port $w" >"$c"; gapcheck ;;
   ps) ;;
 esac
@@ -834,22 +835,19 @@ def test_beside_the_writer_changes_before_each_repoint(beside):
     assert old not in routes[0] and writer(beside).startswith("wisenotes.")
 
 
+def started(box):
+    return [line for line in log(box).splitlines() if line.startswith("started ")]
+
+
 def test_beside_the_new_container_cannot_write_while_smoked(beside):
     serving_aaa(beside)
     old = writer(beside)
-    # Record the writer at the moment each start happens, via the log the stubs keep.
-    real = beside / "bin/podman"
-    real.rename(beside / "bin/podman.real")
-    real.write_text(
-        '#!/usr/bin/env bash\n'
-        '[ "$1" = start ] && echo "start ${!#} writer=$(cat "$WISENOTES_DATA/.writer")" >>"$STUB_STATE/starts"\n'
-        f'exec {beside}/bin/podman.real "$@"\n'
-    )
-    real.chmod(0o755)
     run_beside(beside, sha="bbb")
-    starts = (beside / "state/starts").read_text().splitlines()
-    assert starts[0] == f"start --attach wisenotes-next writer={old}" or starts[0] == f"start wisenotes-next writer={old}"
-    assert any(s.startswith("start wisenotes writer=wisenotes-next.") for s in starts), starts
+    starts = started(beside)
+    assert len(starts) == 2, starts
+    # each new container starts while another is still named the writer
+    assert starts[0] == f"started wisenotes-next writer={old}"
+    assert starts[1].startswith("started wisenotes writer=wisenotes-next."), starts
 
 
 @pytest.mark.parametrize("failure", ["bad", "run_fail"])
@@ -964,6 +962,8 @@ def test_start_hands_back_from_a_container_left_beside(beside):
     r = run_beside(beside, "--start")
     assert r.returncode == 0, r.stdout + r.stderr
     assert gaps(beside) == ""
+    # wisenotes starts unable to write: the container serving the slot keeps writing until the hand-back
+    assert started(beside) == ["started wisenotes writer=wisenotes-next.1.1"]
     assert set(containers(beside)) == {"wisenotes"} and slot(beside).endswith(":20250")
     assert writer(beside) == containers(beside)["wisenotes"][3]
 
