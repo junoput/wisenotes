@@ -1,8 +1,9 @@
 # Deploying wisenotes
 
-One container, one script, one data directory. `deploy/deploy.sh` runs on the
-host that serves and does everything: build the image from a git ref, swap the
-container, prove the new one answers, roll back if it does not.
+One container at rest, one script, one data directory. `deploy/deploy.sh` runs
+on the host that serves and does everything: build the image from a git ref,
+start it beside the serving container, prove it answers, hand over with no
+gap on the tailnet URL, roll back if it does not.
 
 > **Read this before running it: `deploy.sh` deploys `origin/develop` unless
 > told otherwise (`WISENOTES_REF`, or `--ref`).** On devbox the preview loop
@@ -25,6 +26,7 @@ picked up again unchanged if that changes.
 | branch | `develop` (`WISENOTES_BRANCH`) |
 | data | `/home/claude/wisenotes` (operator's decision, 2026-09-23): outside every checkout and lane, mounted at `/app/data`; only the container writes there |
 | bind / URL | `127.0.0.1:$PORT`, the port `demos status` shows (20250, pinned in the port registry so it is never reassigned), published on the tailnet by `tailscale serve --bg --http=8094 localhost:<port>` as `http://devbox.tail499b22.ts.net:8094/` |
+| deploy beside | `WISENOTES_SPARE_PORT` (a second port, pinned as `wisenotes-preview-next`) and `WISENOTES_SERVE_SLOT=8094` in `deploy/.env`. During a deploy the new container stands on the spare port for about a minute and the slot points at it; at rest the slot points at 20250 again. Unset, every deploy replaces in place, with the gap |
 | loop | `demos` (dev-agent-tools) runs `deploy/preview.sh --loop 120` as the user unit `demo@wisenotes-preview`, enabled on boot; `journalctl --user -u demo@wisenotes-preview` shows each pass. `demos` exports the port as `$PORT`, which the scripts honour, so `WISENOTES_PORT` is left unset in `deploy/.env`. After a reboot the first pass starts the last good image (`deploy.sh --start`) even when `develop` is still refused |
 | restarts and boot | `wisenotes-container.service` (user unit, written and enabled by `deploy.sh`) is the one thing that starts the container: it runs `podman start --attach wisenotes`, restarts it if it dies (`Restart=on-failure`), and starts it at boot. The container has no podman `--restart` policy (20261019-054). Because the unit starts it, the container's conmon and port forwarder live in that unit's cgroup, so restarting `demo@wisenotes-preview` no longer takes the container's networking with it (20261019-014). `deploy.sh` never enables `podman-restart.service`: that unit starts every `restart=always` container of the user, and making other projects' containers persistent is not wisenotes' call (operator, 2026-10-14). On devbox it was already enabled and is left as it is: with no restart policy, wisenotes' container is not one it starts |
 
@@ -86,6 +88,71 @@ redeploys, and reads the note back through the new container (see the
 rehearsal record on ticket 20260923-005). Back up by copying the directory;
 it is plain JSON and media files.
 
+## A deploy with no gap (20261022-035)
+
+Until 2026-10-22 every deploy stopped the container before starting the new
+one, so the demo was down for 15-30 s on every landing. Now a deploy starts
+the new image beside the serving container and moves the tailnet slot over:
+
+1. `<name>-next` is created from `<name>:<sha>` on `WISENOTES_SPARE_PORT` and
+   started under a transient unit, `<name>-next-container.service`
+   (`Restart=on-failure`, no podman restart policy), so it has one restarter
+   and its port forwarder is not in the preview loop's cgroup. `<name>` keeps
+   serving and stays the only writer.
+2. Smoke on the spare port. Failure: `<name>-next` is removed and the script
+   says `ROLLED BACK: <name> served throughout`. Nothing was retagged and the
+   slot never moved.
+3. Hand over: `<name>-next` becomes the writer, then the slot points at the
+   spare port. `current`/`previous` are retagged here, after the smoke.
+4. `<name>` is stopped and created again on `$PORT` from the same image,
+   unable to write, under `<name>-container.service` as before. Smoke.
+5. Hand back: `<name>` becomes the writer, the slot points at `$PORT`, and
+   `<name>-next` is stopped and removed. At rest it is one container on one
+   port, as before.
+
+If step 4 fails, the new image is deployed but serves from `<name>-next`; the
+script says so and exits 1, and the next preview pass (`deploy.sh --start`,
+because `<name>` is not running) brings `<name>` back beside it and hands back.
+`--start` also points the slot home if it was left on the spare port (a
+reboot mid-deploy: the slot's config survives, the transient unit does not).
+It never repoints a slot that proxies anywhere else.
+
+The deploy goes beside only when it can keep its guarantees, and otherwise
+replaces in place and says why, in the line that starts `replacing container
+... in place`: the spare port or the slot is unset; no user systemd, `flock` or
+`jq`; `<name>` is not running or does not answer; either image lacks the
+`wisenotes.write-fence` label (so **the first deploy of this change still has
+the gap**, because the serving image predates it); or the slot does not
+proxy to `$PORT`. `--rollback` always replaces in place.
+
+### Two containers, one data directory
+
+The data directory is shared read-write, and two containers must never both
+write it. `<data>/.writer` names the one that may: each container gets its
+own id in `WISENOTES_WRITER_ID` (also its `wisenotes.writer` label), and
+`app/write_fence.py` refuses any POST, PUT, PATCH or DELETE with a 503 and
+`Retry-After: 2` unless `.writer` holds that id. Every write holds a shared
+`flock` on `<data>/.writer.lock` from the check until its handler returns;
+`deploy.sh` changes `.writer` under an exclusive `flock` on the same file
+(`flock -x -w $WISENOTES_DRAIN_SECONDS`, default 30). So:
+
+- a change of writer waits for the writes in flight to finish, and a write
+  cannot start while the name is being changed;
+- the writer changes **before** the slot is repointed. A write that reaches
+  the old container in the moment between gets a 503 asking to retry; it is
+  never accepted by two containers. Reads are answered throughout;
+- a new container is always started while another is named the writer, so
+  it cannot write during its smoke. The one write a repository does outside
+  a request handler, the legacy `notes.json` migration, also runs only in
+  the writer;
+- writes still in flight past the drain time abort the hand-over, leaving
+  the old container serving and writing.
+
+With `WISENOTES_WRITER_ID` unset (development, the tests, a container started
+by hand) there is no fence. With it set and `.writer` or `.writer.lock`
+missing, writes are refused: `deploy.sh` writes both before it starts a
+container.
+
 ## What happens on a bad deploy
 
 The script keeps two image tags: `<name>:current` and `<name>:previous`.
@@ -93,15 +160,17 @@ The script keeps two image tags: `<name>:current` and `<name>:previous`.
 1. New image built from `git archive <sha>` in a temp dir (the checkout is
    never moved, so the script survives deploying a ref older than itself)
    and tagged `<name>:<sha>`. Nothing else is retagged yet.
-2. Old container removed, new one started from `<name>:<sha>`. This is the
-   only moment nothing serves: a few seconds, single container, no overlap.
+2. Beside (above), or in place: old container removed, new one started from
+   `<name>:<sha>`. In place, this is the moment nothing serves: 15-30 s
+   measured on devbox, single container, no overlap.
 3. Smoke: `/health` **and** `GET /` must both answer 200 within 60 s.
 4. Pass: old `current` becomes `previous`, `<sha>` becomes `current`. So
    `current` only ever names an image that passed the smoke check.
-5. Failure, of the start or the smoke: new container removed, `current`
-   (untouched, so the last good image) started and smoked again. The script
-   exits 1 and says `ROLLED BACK`. If there is no `current` image (first
-   deploy) or it fails too, it says `NOTHING IS SERVING` and exits 1.
+5. Failure, of the start or the smoke: beside, the new container is removed
+   and the old one never stopped. In place, the new container is removed and
+   `current` (untouched, so the last good image) started and smoked again.
+   The script exits 1 and says `ROLLED BACK`. If there is no `current` image
+   (first deploy) or it fails too, it says `NOTHING IS SERVING` and exits 1.
 
 `deploy.sh --start` (after a reboot) starts `current` and smokes it. If that
 fails, it stops the container rather than leave a failing image serving.
@@ -122,6 +191,8 @@ WISENOTES_NAME=wisenotes-rehearsal WISENOTES_PORT=8001 WISENOTES_DATA=$HOME/wise
 ```
 
 Then remove it: `podman rm -f wisenotes-rehearsal; podman rmi wisenotes-rehearsal:current`.
+A rehearsal of the deploy beside also needs `WISENOTES_SPARE_PORT` and a serve
+slot of its own in `WISENOTES_SERVE_SLOT`; never the preview's 8094.
 
 ## Accepted risks
 
@@ -143,5 +214,7 @@ mistaken for one.
 
 ## What this does not do
 
-No TLS: the tailnet carries it. No multi-instance, no zero-downtime swap, no
-migrations. If any of those become needed, that is a design change, not a flag.
+No TLS: the tailnet carries it. No multi-instance (two containers stand side
+by side only during a deploy, and only one writes), no migrations. The local
+port `$PORT` still has a gap during a deploy beside (step 4); only the tailnet
+URL has none. If any of those become needed, that is a design change, not a flag.
