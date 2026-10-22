@@ -9,6 +9,7 @@ from typing import Any
 
 from filelock import FileLock
 
+from app import write_fence
 from app.schemas import Note
 from app.schemas import NoteDocument
 from app.services.reasons import failure_reason
@@ -44,8 +45,13 @@ class JsonNoteRepository:
         # what is left of deletes whose removal could not finish. Shown, not blocking.
         self.no_note_file: list[str] = []
         self.leftovers: list[str] = []
-        # Perform one-time migration from legacy monolith file
-        self._maybe_migrate_from_legacy()
+        # Perform one-time migration from legacy monolith file. It writes, and a
+        # repository is built for every request, reads included, so it runs only
+        # in the container named to write (app/write_fence.py).
+        if self._legacy_path.exists():
+            with write_fence.hold(self._root_dir) as may_write:
+                if may_write:
+                    self._maybe_migrate_from_legacy()
 
     def _note_dir(self, name: str) -> Path:
         return self._root_dir / name

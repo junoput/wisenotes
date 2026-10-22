@@ -21,6 +21,9 @@ COPY app app
 RUN useradd --create-home appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8000
+# This image honours the write fence (app/write_fence.py): deploy.sh starts it
+# beside a serving container only when both images carry this label.
+LABEL wisenotes.write-fence="1"
 # /app/data is where notes live; mount a host directory there (deploy/deploy.sh does)
 VOLUME ["/app/data"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
