@@ -63,6 +63,21 @@ def test_every_record_carries_the_required_fields(records):
     assert row["body"] == "hello there"
 
 
+def test_the_timestamp_is_utc_with_milliseconds():
+    record = logging.LogRecord("t", logging.INFO, __file__, 1, "m", None, None)
+    record.created = 1792702651.6994
+    row = json.loads(logs.JsonFormatter().format(record))
+    assert row["timestamp"] == "2026-10-22T20:57:31.699Z"
+
+
+def test_a_field_a_caller_adds_never_re_spells_a_required_one(records):
+    logging.getLogger("wisenotes.test").info(
+        "the body", extra={"attrs": {"body": "forged", "service.name": "forged", "mine": 1}}
+    )
+    (row,) = records()
+    assert (row["body"], row["service.name"], row["mine"]) == ("the body", "wisenotes", 1)
+
+
 @pytest.mark.parametrize(
     ("level", "text", "number"),
     [

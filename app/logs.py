@@ -121,7 +121,6 @@ def configure() -> None:
     access = logging.getLogger("uvicorn.access")
     access.handlers.clear()
     access.propagate = False
-    access.disabled = True
     environment = os.environ.get("WISENOTES_ENVIRONMENT")
     if environment is not None and environment not in ENVIRONMENTS:
         logging.getLogger(__name__).warning(
