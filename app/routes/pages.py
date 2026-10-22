@@ -220,7 +220,8 @@ async def import_notes(
     if not result.notes:
         return _import_refused(request, service, "The file contained no notes")
     for line in result.skipped:
-        logger.info("import skipped %s", line)
+        # The reason only: what comes before it is a title, a URL or a file name.
+        logger.info("import skipped an entry: %s", line.rpartition(": ")[2])
     return _after_change(request, service, result.notes[0], headers=CLOSE_OVERLAY)
 
 

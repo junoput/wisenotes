@@ -223,7 +223,8 @@ if [ "$DRY" = 1 ]; then
   printf '  + git archive %s | tar -x -C %s && podman build -t %s:%s %s\n' "$sha" "$ctx" "$NAME" "$sha" "$ctx"
 else
   git -C "$repo" archive "$sha" | tar -x -C "$ctx"
-  podman build -q -t "$NAME:$sha" --label "wisenotes.sha=$sha" -f "$ctx/Dockerfile" "$ctx" >/dev/null
+  podman build -q -t "$NAME:$sha" --label "wisenotes.sha=$sha" --build-arg "WISENOTES_VERSION=$sha" \
+    -f "$ctx/Dockerfile" "$ctx" >/dev/null
 fi
 
 say "replacing container $NAME (was: $(image_of_running || echo none))"
