@@ -905,8 +905,14 @@ def test_harness_control_the_handover_proceeds_once_the_write_ends(beside):
 @pytest.mark.parametrize(
     "setup, why",
     [
-        (lambda b: (b / "state/nofence").write_text("wisenotes:bbb\n"), "the new image has no write fence"),
-        (lambda b: (b / "state/slot").write_text("http://localhost:9999\n"), "proxies to http://localhost:9999, not to 20250"),
+        (
+            lambda b: (b / "state/nofence").write_text("wisenotes:bbb\n"),
+            "the new image has no write fence",
+        ),
+        (
+            lambda b: (b / "state/slot").write_text("http://localhost:9999\n"),
+            "proxies to http://localhost:9999, not to 20250",
+        ),
     ],
 )
 def test_beside_falls_back_to_in_place_and_says_why(beside, setup, why):
@@ -931,8 +937,12 @@ def test_beside_an_old_image_without_the_fence_is_replaced_in_place(beside):
 def test_beside_the_slot_url_never_changes(beside):
     serving_aaa(beside)
     run_beside(beside, sha="bbb")
-    repoints = [line for line in log(beside).splitlines() if line.startswith("tailscale serve --bg")]
-    assert repoints and all(line.startswith("tailscale serve --bg --http=8094 ") for line in repoints)
+    repoints = [
+        line for line in log(beside).splitlines() if line.startswith("tailscale serve --bg")
+    ]
+    assert repoints and all(
+        line.startswith("tailscale serve --bg --http=8094 ") for line in repoints
+    )
 
 
 def test_beside_the_new_container_has_one_restarter_and_no_restart_policy(beside):
@@ -942,7 +952,9 @@ def test_beside_the_new_container_has_one_restarter_and_no_restart_policy(beside
     runs = [line for line in text.splitlines() if line.startswith("systemd-run ")]
     assert len(runs) == 1 and "--unit=wisenotes-next-container.service" in runs[0]
     assert "Restart=on-failure" in runs[0]
-    assert "--restart" not in "".join(line for line in text.splitlines() if line.startswith("podman create"))
+    assert "--restart" not in "".join(
+        line for line in text.splitlines() if line.startswith("podman create")
+    )
     assert "podman-restart" not in text
     # its unit is stopped before the container is removed
     stop = text.index("systemctl --user stop wisenotes-next-container.service")
@@ -955,7 +967,9 @@ def test_start_hands_back_from_a_container_left_beside(beside):
     run_beside(beside, sha="bbb")
     # the state a failed second leg leaves: wisenotes gone, next serving and writing
     (beside / "state/c/wisenotes").unlink()
-    (beside / "state/c/wisenotes-next").write_text("id-wisenotes:bbb running 20260 wisenotes-next.1.1\n")
+    (beside / "state/c/wisenotes-next").write_text(
+        "id-wisenotes:bbb running 20260 wisenotes-next.1.1\n"
+    )
     (beside / "data/.writer").write_text("wisenotes-next.1.1\n")
     (beside / "state/slot").write_text("http://127.0.0.1:20260\n")
     reset_log(beside)
