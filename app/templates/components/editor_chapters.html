@@ -1,5 +1,5 @@
 {% from 'components/add_block_button.html' import add_block_button %}
-{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0, media_error=none) %}
+{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0, media_error=none, edit_errors=none) %}
   {% set siblings = chapters|selectattr('parent_id', 'equalto', parent_id)|list|sort(attribute='order') %}
   {% for chapter in siblings %}
     {% set edit_url = '/notes/' ~ active_note.id ~ '/chapters/' ~ chapter.id %}
@@ -24,7 +24,7 @@
           {{ add_block_button(active_note.id, chapter.id, 'child', True, 'Add child block', block_types) }}
         {% endif %}
         {% if editing and editing.id == chapter.id %}
-          {% with note=active_note, chapter=chapter, media_error=media_error %}{% include "partials/chapter_edit_form.html" %}{% endwith %}
+          {% with note=active_note, chapter=editing, media_error=media_error, edit_errors=edit_errors %}{% include "partials/chapter_edit_form.html" %}{% endwith %}
         {% else %}
         <a class="chapter-view" href="{{ edit_url }}/edit"
            hx-get="{{ edit_url }}/edit" hx-target="closest .chapter-content-wrapper" hx-swap="innerHTML">
@@ -35,6 +35,9 @@
             <pre class="block-content code-block-display" data-language="{{ chapter.language or 'python' }}"><code>{{ chapter.content }}</code></pre>
           {% elif chapter.type == 'math' %}
             <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}"><div class="math-formula-content">{{ chapter.content }}</div></div>
+          {% elif chapter.type == 'graph' %}
+            {# Slice 1 of 20261022-064: the definition as text; slice 2 draws it. #}
+            <figure class="block-content graph-block-display"><figcaption class="graph-source-caption">Graph definition</figcaption><pre class="graph-spec">{{ chapter.content }}</pre></figure>
           {% elif chapter.type == 'media' %}
             <div class="block-content media-block-display">
               {% if chapter.content|media_kind in ('image', 'inline') %}
@@ -54,7 +57,7 @@
       {% endif %}
       {% if depth < 3 and chapters|selectattr('parent_id', 'equalto', chapter.id)|list %}
         <div class="chapter-children">
-          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1, media_error) }}
+          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1, media_error, edit_errors) }}
         </div>
       {% endif %}
     </section>

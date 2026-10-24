@@ -23,6 +23,7 @@ from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from app import graph_spec
 from app.assets import ASSET_VERSION
 from app.blocks import get_all_blocks
 from app.media_urls import media_kind
@@ -406,12 +407,53 @@ async def update_chapter(
     source: str = Form(""),
     service: NoteService = Depends(get_note_service),
 ):
+    current = service.get_note(note_id)
+    block = next((c for c in current.chapters if c.id == chapter_id), None) if current else None
+    if block is not None and block.type == "graph":
+        errors = graph_spec.validate(content_text)
+        if errors:
+            # Refused, and the text comes back as typed: losing a definition the
+            # person is fixing would be worse than the error (20261024-003).
+            draft = block.model_copy(
+                update={"title": title, "content": content_text, "source": source or None}
+            )
+            return _graph_refused(request, service, current, draft, errors)
     note = service.edit_chapter(
         note_id, chapter_id, title, content_text, language or None, _normalize_source(source)
     )
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     return _after_change(request, service, note)
+
+
+def _graph_refused(
+    request: Request, service: NoteService, note: Note, draft: Chapter, errors: list
+) -> Response:
+    """A graph definition that does not parse: the edit form again, with the
+    reasons by line, as a 400. htmx gets the form alone, swapped over the open
+    one (app.js lets this 400 through); without scripts, the whole page."""
+    reasons = [str(e) for e in errors]
+    if _is_htmx(request):
+        resp = templates.TemplateResponse(
+            request,
+            "partials/chapter_edit_form.html",
+            _ctx(request, note=note, chapter=draft, edit_errors=reasons),
+            status_code=400,
+        )
+        resp.headers["HX-Retarget"] = f"#edit-{draft.id}"
+        resp.headers["HX-Reswap"] = "outerHTML"
+        return resp
+    resp = _page(
+        request,
+        service,
+        note,
+        editing=draft,
+        edit_errors=reasons,
+        media_files=_media_files(service, note),
+        here=f"/notes/{note.id}/chapters/{draft.id}/edit",
+    )
+    resp.status_code = 400
+    return resp
 
 
 @router.post("/notes/{note_id}/chapters/{chapter_id}/delete")
