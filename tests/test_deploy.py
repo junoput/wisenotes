@@ -1197,3 +1197,15 @@ def test_a_slot_left_on_the_spare_port_alone_is_pointed_home(beside):
     assert r.returncode == 0 and "points at the spare port 20260" in r.stdout, r.stdout
     at_rest(beside, image="id-wisenotes:aaa")
     assert not restarted(beside)
+
+
+def test_check_never_repoints_a_slot_that_proxies_elsewhere(beside):
+    # the operator pointed the slot at something else: not ours to move back
+    serving_aaa(beside)
+    (beside / "state/slot").write_text("http://127.0.0.1:9999\n")
+    (beside / "data/.writer").write_text("wisenotes-next.1.2.3\n")
+    r = check(beside)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert writer(beside) == containers(beside)["wisenotes"][3]  # the writer is still repaired
+    assert slot(beside) == "http://127.0.0.1:9999"
+    assert "serve --bg" not in log(beside)
