@@ -83,7 +83,12 @@ deploy/deploy.sh --ref v1.2.0                   # or by hand: a tag / branch / s
 `$WISENOTES_DATA` on the host is bind-mounted at `/app/data` (`:Z` for
 SELinux). The image contains no data and the checkout contains no data, so a
 redeploy, a rebuild, an image change or `podman rm` of the container cannot
-touch it. That claim is tested, not assumed: the rehearsal writes a note,
+touch it. During a deploy beside, two containers mount the same directory
+with `:Z`. Under SELinux, `:Z` relabels the directory for one container at a
+time, and the second mount would take it from the first; `:z` (shared) is
+what two containers need. This host runs no SELinux, so the label does
+nothing here, and the beside deploy was rehearsed only here. On an SELinux
+host, change the mount to `:z` before using a spare port. That claim is tested, not assumed: the rehearsal writes a note,
 redeploys, and reads the note back through the new container (see the
 rehearsal record on ticket 20260923-005). Back up by copying the directory;
 it is plain JSON and media files.
@@ -151,7 +156,65 @@ own id in `WISENOTES_WRITER_ID` (also its `wisenotes.writer` label), and
 With `WISENOTES_WRITER_ID` unset (development, the tests, a container started
 by hand) there is no fence. With it set and `.writer` or `.writer.lock`
 missing, writes are refused: `deploy.sh` writes both before it starts a
-container.
+container. Every refused write is logged at WARN with its reason (`write
+refused: another container is the named writer`, `no writer file`, or the
+lock file's errno), never a name or a path. With scripts on, the page shows
+the 503's sentence at the top of the screen; without scripts the browser shows
+the 503 page itself.
+
+### A hand-over cut short, and how it comes back
+
+A deploy can stop between its steps: `demos restart` or `demos down`, or a
+dev-agent-tools upgrade, stops `demo@wisenotes-preview`, whose cgroup holds
+`deploy.sh`; the host can reboot. In between, the writer, the slot and the
+containers can disagree. `<name>` then still answers `/health` and every
+read, and refuses every write. Found in review of MR 20261022-036; each
+state below has a test in `tests/test_deploy.py` that reaches it with a real
+`SIGKILL` or `SIGTERM` from the stubbed tailscale.
+
+| cut short | left behind |
+|---|---|
+| after the writer moved to `-next`, before the slot did | `<name>` serves the slot; `.writer` names `-next` |
+| in the hand-back, after the writer moved back, before the slot did | the slot points at `-next`, which may not write |
+| a reboot after the slot moved | the unit starts `<name>`, unable to write; the slot's config survived and points at a `-next` that is not running |
+| a data directory restored from a backup taken mid-hand-over | `.writer` names a container that is gone |
+
+Three things bring it back:
+
+- **`deploy.sh --check`**, which `preview.sh` runs on every pass, whether or
+  not `<name>` serves. While `<name>` serves, it compares the rest state
+  (`.writer` equal to `<name>`'s `wisenotes.writer` label, `.writer.lock`
+  present, the slot not on the spare port, no `<name>-next`). If any differs, it
+  says `NOT AT REST`, lists the differences and settles. **Settling** means:
+  `<name>` becomes the writer, the slot points back at `$PORT`, and
+  `<name>-next` is removed. `<name>` is never restarted, so nothing that
+  serves goes away. At rest it prints nothing. A `<name>` that does not
+  serve is left to `--start`, as before.
+- **The INT/TERM trap**: a deploy that is stopped settles before it exits
+  (status 130). If `<name>` does not serve but `<name>-next` serves the slot,
+  `<name>-next` is made the writer instead. A `SIGKILL`, or a stop that runs
+  out of time, skips the trap, and then the next preview pass's `--check`
+  settles.
+- **`deploy.sh status`** prints `writer: <name>`, or `writer: NOT <name>` with
+  the name the file holds.
+
+A slot repoint is judged by reading the slot again, up to three times, and
+never by the command's exit status. A `tailscale serve` that applied and then
+timed out has applied, and treating it as not applied put the writer on one
+container and the slot on the other. If the slot cannot be confirmed on the
+spare port, the deploy settles back on `<name>` and says `NOT deployed`.
+
+### One deploy at a time
+
+Every mode except `status` and `--dry-run` takes a lock for the whole run. The
+lock is the directory `$XDG_RUNTIME_DIR/wisenotes-deploy-<name>.lock`, with
+the owner's pid inside, and can be overridden with `WISENOTES_DEPLOY_LOCK`.
+A second `deploy.sh`, by hand or from the loop, prints `another deploy.sh for
+<name> is running (pid N, lock ...)` and exits 75. `--check` exits 0 quietly
+while the lock is held, because a deploy in progress is not a state to
+repair. A lock whose owner has died (`SIGKILL`) is taken over. It is a
+directory, not a `flock`, because a flock's descriptor is inherited by every
+child, and conmon outlives the script by days.
 
 ## What happens on a bad deploy
 

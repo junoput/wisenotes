@@ -42,7 +42,8 @@ def acquire(data_dir: Path) -> tuple[int | None, bool]:
     try:
         fd = os.open(data_dir / LOCK_FILE, os.O_RDONLY)
     except OSError as e:
-        logger.error("write fence: cannot open %s (errno %s); refusing writes", LOCK_FILE, e.errno)
+        # The reason only, never names or paths: deploy.sh --check repairs this.
+        logger.warning("write refused: the writer lock file cannot be opened (errno %s)", e.errno)
         return None, False
     try:
         fcntl.flock(fd, fcntl.LOCK_SH)
@@ -55,6 +56,10 @@ def acquire(data_dir: Path) -> tuple[int | None, bool]:
         raise
     if named != me:
         os.close(fd)
+        logger.warning(
+            "write refused: %s",
+            "no writer file" if named is None else "another container is the named writer",
+        )
         return None, False
     return fd, True
 

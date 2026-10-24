@@ -169,3 +169,32 @@ def test_a_write_holds_the_lock_until_its_handler_has_finished(
         ).returncode
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        ("other", "write refused: another container is the named writer"),
+        ("no-writer", "write refused: no writer file"),
+        ("no-lock", "write refused: the writer lock file cannot be opened (errno 2)"),
+    ],
+)
+def test_a_refused_write_is_logged_with_its_reason_only(client, fenced, caplog, setup, reason):
+    # A silent refusal left the notes read-only with nothing to say why (036 review).
+    name_writer(fenced, "the-other-container" if setup == "other" else "me")
+    if setup == "no-writer":
+        (fenced / write_fence.WRITER_FILE).unlink()
+    if setup == "no-lock":
+        (fenced / write_fence.LOCK_FILE).unlink()
+    with caplog.at_level("WARNING", logger="app.write_fence"):
+        assert client.post("/notes", data={"title": "Lost"}).status_code == 503
+    fence = [r for r in caplog.records if r.name == "app.write_fence"]
+    assert [(r.levelname, r.getMessage()) for r in fence] == [("WARNING", reason)]
+    assert "the-other-container" not in caplog.text and str(fenced) not in caplog.text
+
+
+def test_harness_control_an_allowed_write_logs_no_refusal(client, fenced, caplog):
+    name_writer(fenced, "me")
+    with caplog.at_level("WARNING", logger="app.write_fence"):
+        client.post("/notes", data={"title": "Kept"})
+    assert not [r for r in caplog.records if r.name == "app.write_fence"]

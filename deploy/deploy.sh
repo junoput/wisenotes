@@ -5,7 +5,9 @@
 #   deploy/deploy.sh --ref <ref>     any git ref: a branch, tag or sha (rehearsals)
 #   deploy/deploy.sh --rollback      put the previous image back and start it
 #   deploy/deploy.sh --start         start the current image again (after a reboot); no build
-#   deploy/deploy.sh status          what is running, from which image
+#   deploy/deploy.sh --check         repair a container, writer or slot left mid-hand-over
+#                                    (preview.sh runs it every pass); quiet when at rest
+#   deploy/deploy.sh status          what is running, from which image, and who may write
 #   deploy/deploy.sh --dry-run ...   print the plan, change nothing
 #
 # Runs ON the host that serves (devbox preview; any podman host), from a
@@ -45,6 +47,20 @@
 # another may write; one arriving at the old container in that moment gets a
 # 503 asking to retry. Reads are served throughout.
 #
+# Interrupted, or rebooted, mid-hand-over (20261022-036 review): the writer, the
+# slot and the containers can disagree, and the notes then refuse every write
+# while still answering reads. Three things bring them back: an INT/TERM trap
+# that settles before exiting; `--check`, which preview.sh runs every pass and
+# which settles whenever $NAME serves but the writer file, the slot or a
+# leftover <NAME>-next say otherwise; and --start. Settling makes $NAME the
+# writer and the slot's target and removes <NAME>-next, without restarting $NAME.
+#
+# One deploy at a time: every mode but status takes a lock for the whole run
+# (a directory, $XDG_RUNTIME_DIR/wisenotes-deploy-<NAME>.lock, holding the
+# owner's pid; a lock whose owner is dead is taken over). A second run says who
+# holds it and exits 75; --check skips quietly while a deploy holds it, because
+# a deploy in progress is not a state to repair.
+#
 # Boot: a wisenotes-only user unit, <NAME>-container.service, runs
 # `podman start <NAME>` at boot. It never enables podman-restart.service,
 # which would bring back every other restart=always container on the host.
@@ -75,9 +91,10 @@ while [ $# -gt 0 ]; do
     --ref) REF=$2; shift 2 ;;
     --rollback) MODE=rollback; shift ;;
     --start) MODE=start; shift ;;
+    --check) MODE=check; shift ;;
     status) MODE=status; shift ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,74p' "$0"; exit 0 ;;
     *) echo "deploy: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
@@ -110,6 +127,41 @@ port_move_warning() { # say so when the container about to be replaced published
   if [ -n "$old" ] && [ "$old" != "$PORT" ]; then
     say "PORT MOVES: $NAME served on $old and will serve on $PORT. Anything proxying to $old (a tailscale serve slot) must be repointed. The port comes from WISENOTES_PORT, else \$PORT from the supervisor."
   fi
+}
+
+DEPLOY_LOCK=${WISENOTES_DEPLOY_LOCK:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/wisenotes-deploy-$NAME.lock}
+HOLDING_LOCK=0
+CLEANUP=()
+
+on_exit() {
+  local f
+  for f in "${CLEANUP[@]}"; do rm -rf "$f"; done
+  if [ "$HOLDING_LOCK" = 1 ] && [ "$(cat "$DEPLOY_LOCK/pid" 2>/dev/null)" = "$$" ]; then
+    rm -rf "$DEPLOY_LOCK"
+  fi
+}
+trap on_exit EXIT
+
+LOCK_HOLDER=
+take_deploy_lock() { # 0 taken; 1 another live run holds it (its pid in LOCK_HOLDER)
+  # A directory renamed into place, never a flock: a flock's descriptor is
+  # inherited by every child, and conmon outlives this script by days.
+  # rename(2) of a directory onto a non-empty one fails, so exactly one run
+  # wins, and the winner's pid is in place the moment the lock exists.
+  local tmp holder
+  tmp="$DEPLOY_LOCK.$$"
+  mkdir -p "$(dirname "$DEPLOY_LOCK")" "$tmp" && printf '%s\n' "$$" >"$tmp/pid"
+  for _ in 1 2; do
+    if mv -T "$tmp" "$DEPLOY_LOCK" 2>/dev/null; then HOLDING_LOCK=1; return 0; fi
+    holder=$(cat "$DEPLOY_LOCK/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      rm -rf "$tmp"; LOCK_HOLDER=$holder; return 1
+    fi
+    # its owner is gone (killed with -9): move it aside, so two runs taking over
+    # at once cannot both remove it, then try once more
+    mv -T "$DEPLOY_LOCK" "$DEPLOY_LOCK.stale.$$" 2>/dev/null && rm -rf "$DEPLOY_LOCK.stale.$$"
+  done
+  rm -rf "$tmp"; LOCK_HOLDER=$(cat "$DEPLOY_LOCK/pid" 2>/dev/null || echo unknown); return 1
 }
 
 UNIT_NAME="$NAME-container.service"
@@ -204,9 +256,18 @@ slot_points_at() { # $1 port
   return 1
 }
 
-route() { # $1 port: point the tailnet slot at it. The slot's URL does not change.
-  run timeout 20 tailscale serve --bg --http="$SERVE_SLOT" "http://$BIND:$1" >/dev/null || return 1
-  [ "$DRY" = 1 ] || slot_points_at "$1"
+route() { # $1 port: point the tailnet slot at it; 0 only when the slot is SEEN pointing there.
+  # The slot's URL does not change. A failed or timed-out command may still have
+  # applied, and one failed read is not a verdict, so the slot is read again
+  # either way; a caller that gets 1 must look at slot_target, not assume.
+  local i
+  run timeout 20 tailscale serve --bg --http="$SERVE_SLOT" "http://$BIND:$1" >/dev/null || true
+  [ "$DRY" = 1 ] && return 0
+  for i in 1 2 3; do
+    slot_points_at "$1" && return 0
+    [ "$i" = 3 ] || sleep 1
+  done
+  return 1
 }
 
 create_container() { # $1 container, $2 image, $3 host port, $4 writer id
@@ -269,6 +330,59 @@ route_home() { # after $NAME serves on $PORT as the writer: a slot left on $NEXT
   if have_container "$NEXT"; then stop_next; fi
 }
 
+rest_problems() { # what differs from the rest state while $NAME serves; nothing when at rest
+  local want got
+  if fence_container "$NAME"; then
+    want=$(writer_of "$NAME"); got=$(head -n 1 "$FENCE" 2>/dev/null || true)
+    [ "$got" = "$want" ] || echo "the writer file names ${got:-nobody}, not $NAME, so $NAME refuses every write"
+    [ -e "$FENCE_LOCK" ] || echo "the writer lock file is missing, so $NAME refuses every write"
+  fi
+  if [ -n "$SERVE_SLOT" ] && [ -n "$SPARE_PORT" ] && slot_points_at "$SPARE_PORT"; then
+    echo "tailnet slot $SERVE_SLOT points at the spare port $SPARE_PORT, not at $NAME on $PORT"
+  fi
+  if have_container "$NEXT"; then echo "$NEXT is left over from a deploy"; fi
+}
+
+serves() { is_running "$1" && [ "$(probe /health "${2:-}")" = 200 ]; }
+
+settle() { # $NAME serves: make it the writer and the slot's target, then remove $NEXT. 0 at rest.
+  # $NAME is not restarted, so nothing serving goes away. Every step is safe to
+  # repeat, and a failed step leaves the writer where the slot points.
+  if fence_container "$NAME"; then
+    set_writer "$(writer_of "$NAME")" || { say "writes in flight did not finish within ${DRAIN_SECONDS}s; not settled"; return 1; }
+  fi
+  if [ -n "$SERVE_SLOT" ] && [ -n "$SPARE_PORT" ] && slot_points_at "$SPARE_PORT"; then
+    say "tailnet slot $SERVE_SLOT points at $SPARE_PORT; pointing it at $NAME on $PORT"
+    if ! route "$PORT"; then
+      if slot_points_at "$SPARE_PORT" && serves "$NEXT" "$SPARE_PORT"; then
+        set_writer "$(writer_of "$NEXT")" || true
+        say "could not point tailnet slot $SERVE_SLOT at $PORT; $NEXT keeps serving it and is the writer again"
+        return 1
+      fi
+      say "could not confirm tailnet slot $SERVE_SLOT points at $PORT (it reads: $(slot_target | grep . || echo nothing)); the next --check looks again"
+    fi
+  fi
+  stop_next
+  [ -z "$(rest_problems)" ]
+}
+
+on_signal() { # INT/TERM mid-run: leave a state that writes, then exit
+  # The trap runs inside whatever redirection the interrupted command had
+  # (route's >/dev/null): write to the script's own output, saved as fd 3.
+  trap - INT TERM
+  exec 1>&3 2>&4
+  say "interrupted; returning to a state where the notes can be written"
+  if serves "$NAME"; then
+    settle || say "NOT SETTLED: run deploy.sh --check"
+  elif [ -n "$SPARE_PORT" ] && serves "$NEXT" "$SPARE_PORT" && [ -n "$SERVE_SLOT" ] && slot_points_at "$SPARE_PORT"; then
+    set_writer "$(writer_of "$NEXT")" || true
+    say "$NEXT serves tailnet slot $SERVE_SLOT and is the writer; deploy.sh --start moves it back to $PORT"
+  else
+    say "$NAME does not serve; the next preview pass (or deploy.sh --start) starts it"
+  fi
+  exit 130
+}
+
 beside_blocker() { # $1 new image; prints why it cannot start beside the serving container, nothing if it can
   [ -n "$SPARE_PORT" ] || { echo "WISENOTES_SPARE_PORT is unset"; return; }
   [ -n "$SERVE_SLOT" ] || { echo "WISENOTES_SERVE_SLOT is unset"; return; }
@@ -288,16 +402,20 @@ hand_back() { # $NEXT serves and writes; make $NAME (running fenced on $PORT) th
   next_id=$(writer_of "$NEXT")
   set_writer "$(writer_of "$NAME")" || { say "writes on $NEXT did not finish within ${DRAIN_SECONDS}s"; return 1; }
   if ! route "$PORT"; then
-    say "could not point tailnet slot $SERVE_SLOT back at $PORT; $NEXT stays the writer"
-    set_writer "$next_id" || say "AND could not make $NEXT the writer again: NOTHING CAN WRITE until a deploy or --start"
-    return 1
+    if slot_points_at "$SPARE_PORT"; then
+      say "could not point tailnet slot $SERVE_SLOT back at $PORT; $NEXT stays the writer"
+      set_writer "$next_id" || say "AND could not make $NEXT the writer again: NOTHING CAN WRITE until deploy.sh --check"
+      return 1
+    fi
+    # Not on the spare port: the route applied but did not verify, or the slot
+    # reads as nothing. $NAME is the writer either way; --check looks again.
+    say "could not confirm tailnet slot $SERVE_SLOT points at $PORT (it reads: $(slot_target | grep . || echo nothing)); $NAME is the writer"
   fi
   stop_next
 }
 
 deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
-  local img="$NAME:$1" old_id id
-  old_id=$(writer_of "$NAME")
+  local img="$NAME:$1" id
   say "starting $1 as $NEXT on $SPARE_PORT beside $NAME, which keeps serving; $NEXT cannot write until it serves"
   stop_next
   id=$(new_writer_id "$NEXT")
@@ -314,9 +432,11 @@ deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
     return 1
   fi
   if ! route "$SPARE_PORT"; then
-    set_writer "$old_id" || say "AND could not make $NAME the writer again: NOTHING CAN WRITE until a deploy or --start"
-    stop_next
-    say "could not point tailnet slot $SERVE_SLOT at $SPARE_PORT; $NAME still serves; $1 was NOT deployed"
+    # The slot may have moved after all; settle on what it reads, never on the
+    # exit status (a route that applied and timed out is a route that applied).
+    say "could not confirm tailnet slot $SERVE_SLOT points at $SPARE_PORT (it reads: $(slot_target | grep . || echo nothing)); bringing everything back to $NAME"
+    settle || say "NOT SETTLED: run deploy.sh --check"
+    say "$NAME serves and is the writer; $1 was NOT deployed"
     return 1
   fi
   # $1 passed the smoke and serves the slot: it is the current image from here on.
@@ -335,7 +455,27 @@ deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
   return 1
 }
 
+if [ "$MODE" != status ] && [ "$DRY" != 1 ]; then
+  if ! take_deploy_lock; then
+    if [ "$MODE" = check ]; then exit 0; fi  # a deploy in progress is not a state to repair
+    say "another deploy.sh for $NAME is running (pid $LOCK_HOLDER, lock $DEPLOY_LOCK); not starting a second"
+    exit 75
+  fi
+  exec 3>&1 4>&2
+  trap on_signal INT TERM
+fi
+
 case "$MODE" in
+  check)
+    # Only while $NAME serves: a $NAME that does not serve is preview.sh's
+    # --start, which restarts it; this never restarts anything.
+    serves "$NAME" || exit 0
+    problems=$(rest_problems)
+    [ -n "$problems" ] || exit 0
+    say "NOT AT REST, repairing:"; printf '%s\n' "$problems" | sed 's/^/    /'
+    if settle; then say "at rest: $NAME serves on $PORT and is the writer"; exit 0; fi
+    say "NOT REPAIRED; still:"; rest_problems | sed 's/^/    /'
+    exit 1 ;;
   status)
     if have_container "$NAME"; then
       podman ps -a --filter "name=^$NAME$" --format 'container {{.Names}}  {{.Status}}  image {{.Image}}'
@@ -348,6 +488,13 @@ case "$MODE" in
         podman ps -a --filter "name=^$NEXT$" --format 'beside: container {{.Names}}  {{.Status}}  image {{.Image}}'
       fi
       [ -z "$SERVE_SLOT" ] || printf 'tailnet slot %s -> %s\n' "$SERVE_SLOT" "$(slot_target | grep . || echo nothing)"
+      if fence_container "$NAME"; then
+        if [ "$(head -n 1 "$FENCE" 2>/dev/null)" = "$(writer_of "$NAME")" ]; then
+          echo "writer: $NAME"
+        else
+          echo "writer: NOT $NAME (the file names $(head -n 1 "$FENCE" 2>/dev/null || echo nobody)); $NAME refuses writes; run deploy.sh --check"
+        fi
+      fi
     else
       say "no container named $NAME"; exit 1
     fi
@@ -389,7 +536,7 @@ say "ref $REF -> fetch"
 run git -C "$repo" fetch -q origin
 sha=$(git -C "$repo" rev-parse --short "$REF") || { say "unknown ref $REF"; exit 2; }
 say "building $NAME:$sha from git archive"
-ctx=$(mktemp -d); trap 'rm -rf "$ctx"' EXIT
+ctx=$(mktemp -d); CLEANUP+=("$ctx")
 if [ "$DRY" = 1 ]; then
   printf '  + git archive %s | tar -x -C %s && podman build -t %s:%s %s\n' "$sha" "$ctx" "$NAME" "$sha" "$ctx"
 else

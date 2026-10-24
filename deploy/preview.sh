@@ -111,6 +111,10 @@ pass() {
     "$here/deploy.sh" --start || echo "preview: current image failed to start"
     serving=$(serving_sha)
   fi
+  # Every pass, serving or not: a deploy cut short (a stopped unit, a reboot)
+  # can leave the container answering while it refuses every write. Quiet at
+  # rest, and a no-op while a deploy holds the lock (20261022-036 review).
+  "$here/deploy.sh" --check || echo "preview: the rest-state repair did not finish; see the lines above"
   git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping ${serving:-nothing}"; return 0; }
   tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
   tried=$(cat "$last_tried_file" 2>/dev/null || true)
