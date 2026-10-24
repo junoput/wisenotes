@@ -1187,3 +1187,13 @@ def test_harness_control_a_route_that_never_applies_brings_everything_back(besid
     r = run_beside(beside, sha="bbb")
     assert r.returncode == 1 and "NOT deployed" in r.stdout
     at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_a_slot_left_on_the_spare_port_alone_is_pointed_home(beside):
+    # the slot is the only thing out of place: no -next, the writer is right
+    serving_aaa(beside)
+    (beside / "state/slot").write_text("http://127.0.0.1:20260\n")
+    r = check(beside)
+    assert r.returncode == 0 and "points at the spare port 20260" in r.stdout, r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+    assert not restarted(beside)
