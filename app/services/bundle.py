@@ -389,7 +389,8 @@ def _undo(service: NoteService, created_ids: list[str]) -> list[str]:
             logger.exception("import rollback could not delete note %s", note_id)
             kept.append(f"{titles.get(note_id, 'a note')} (could not be removed)")
     if kept:
-        logger.warning("import rollback kept %s", "; ".join(kept))
+        # The count only: each entry names a note by its title (the page shows them).
+        logger.warning("import rollback kept %d note(s)", len(kept))
     return kept
 
 

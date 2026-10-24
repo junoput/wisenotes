@@ -374,21 +374,62 @@ measured findings, cited where they appear above.
 
 ## Where wisenotes stands (outside the generated section)
 
-Adopting this document records the target. wisenotes does not meet it
-today. Measured on `develop` e656ea7, 2026-10-20:
+Operator decision 2026-10-22 (ticket 20261020-042): JSON logs in this
+vocabulary; keep `/health`; metrics and security events waived, as recorded
+below.
 
-- **Log lines** are plain text from `logging.basicConfig(level=logging.INFO)`
-  in `app/main.py`, plus uvicorn's access log. They are not one structured
-  record per line with the field names above.
-- **Health** is one endpoint, `GET /health`, answering `ok`. There is no
-  `/healthz` or `/readyz` split. The deploy smoke check and the preview loop
-  both read `/health` (`deploy/deploy.sh`, `deploy/preview.sh`), so renaming
-  it is a deploy change too.
-- **Metrics:** none.
-- **Security events:** none apply yet. wisenotes has no login and no users:
-  it is reached only over the tailnet, by one operator (`deploy/README.md`,
-  "Accepted risks"). For the same reason `docs/IDENTITY.md` is not rendered
-  here; declaring it exempt needs `conventions_exempt=docs/IDENTITY.md` in
-  `.devbox-git-profile`, a file wisenotes does not have.
+**Logs: met.** `app/logs.py` writes every record, uvicorn's included, as one
+JSON object per line on standard output, with the required fields under their
+exact names. The values come from:
 
-The gap is ticket 20261020-042.
+- `service.name`: `wisenotes`, or `OTEL_SERVICE_NAME` when set.
+- `service.version`: `WISENOTES_VERSION`, which `deploy/deploy.sh` passes to
+  the image build as the commit. It is `unknown` when the build was not told.
+- `deployment.environment`: `WISENOTES_ENVIRONMENT`. The image sets `prod`,
+  and a run from a checkout defaults to `dev`. A value off the scale logs as
+  `dev`, with a warning.
+
+There is one record per request (logger `wisenotes.request`). It carries the
+routed path (`url.path`), the route template (`http.route`), the method, the
+status and `duration_ms`. Severity follows the outcome: INFO below 400, WARN
+for a 4xx, ERROR for a 5xx. The record never carries the query string or the
+Host header. uvicorn's access log is off, because its line carries the query
+string. `/health` is not logged. Every record logged while a request is
+served carries that request's `correlation_id`. There is no trace, so there
+is no `trace_id`.
+
+An exception record carries `exception.type`, an `exception.message` taken
+from the fixed reason table in `app/services/reasons.py`, the stack frames
+without the final message line, and an `error.fingerprint` on the type and the
+innermost frame. The exception's own text is left out: an `OSError` names a
+path in the data directory, and a note's folder is named after its title.
+For the same reason, no record names a note's title or folder, or an import
+entry. `tests/test_logs.py` holds each of these rules with a sentinel.
+
+What it does not do: there is no OTLP exporter, so
+`OTEL_EXPORTER_OTLP_ENDPOINT` changes nothing. Records go to standard output,
+where podman and the systemd user unit keep them (`podman logs`). The
+document allows this: no endpoint configured is a valid mode. A routed path
+can still contain an image's file name (`/notes/{note_id}/media/{filename}`),
+which is what the rules above call the routed path.
+
+**Health: `/health` kept, by decision.** `GET /health` answers `ok` with
+no dependency check. That is the liveness answer under another name. There is
+no `/readyz`, because the app has no dependency outside its own process to
+wait for: notes are files in its data directory. `deploy/deploy.sh` (the smoke check)
+and `deploy/preview.sh` (the deaf check) read `/health`, so a rename would be a
+deploy change in all three places at once.
+
+**Metrics and security events: waived** while wisenotes is single-user and
+reached only over the tailnet (`deploy/README.md`, "Accepted risks"). There is
+no login, so there is no authentication, authorisation or session event to
+emit. One operator on one box does not need a `/metrics` series. The waiver
+ends, and this section must be revisited, at the first of:
+
+- a second user;
+- a login of any kind;
+- exposure beyond the tailnet.
+
+`docs/IDENTITY.md` is out of scope for the same reason. The declaration
+(`conventions_exempt=docs/IDENTITY.md` in `.devbox-git-profile`) is merge
+request 20261022-043, ticket 20261022-037.

@@ -8,7 +8,12 @@ COPY app ./app
 RUN pip install --upgrade pip && pip install .
 
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WISENOTES_DATA_DIR=/app/data
+# service.version and deployment.environment on every log record (app/logs.py);
+# deploy/deploy.sh passes the commit as WISENOTES_VERSION. The image is built
+# only to serve the operator's notes, so it says prod; -e overrides it.
+ARG WISENOTES_VERSION=unknown
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WISENOTES_DATA_DIR=/app/data \
+    WISENOTES_VERSION=$WISENOTES_VERSION WISENOTES_ENVIRONMENT=prod
 WORKDIR /app
 COPY --from=build /usr/local/lib/python3.12 /usr/local/lib/python3.12
 COPY --from=build /usr/local/bin /usr/local/bin

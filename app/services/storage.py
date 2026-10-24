@@ -11,6 +11,7 @@ from filelock import FileLock
 
 from app.schemas import Note
 from app.schemas import NoteDocument
+from app.services.reasons import failure_reason
 
 # A note being deleted is first renamed to this prefix, which list_notes skips:
 # the note is gone at once, and a removal that then fails leaves a visible
@@ -177,8 +178,9 @@ class JsonNoteRepository:
 
                     notes.append(Note.model_validate(raw))
 
-                except Exception as e:
-                    logger.error("Failed to read note folder %s: %s", entry.name, e)
+                except Exception:
+                    # Not the folder's name: it is the note's title. The page lists it.
+                    logger.error("Failed to read a note folder", exc_info=True)
                     unreadable.append(entry.name)
                     continue
             self.unreadable = unreadable
@@ -287,8 +289,11 @@ class JsonNoteRepository:
             try:
                 shutil.rmtree(doomed)
             except OSError as e:
+                # The leftover's name carries the title; the caller reports it on the page.
                 logger.error(
-                    "note %s deleted, but %s was not fully removed: %s", note_id, doomed.name, e
+                    "note %s deleted, but its folder was not fully removed (%s)",
+                    note_id,
+                    failure_reason(e),
                 )
                 return doomed.name
             return None
