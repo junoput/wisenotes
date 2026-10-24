@@ -1503,3 +1503,18 @@ def test_the_unreadable_notice_says_the_fix_is_on_disk(client, service):
         "1 note could not be read and is not listed: Broken. Until it is repaired or "
         "removed on disk, no image or note can be deleted."
     ) in page
+
+
+def test_a_math_block_labels_its_source_and_other_blocks_do_not(client, service):
+    # With scripts off (or KaTeX not loaded) the raw LaTeX needs a label; app.js hides
+    # it by adding .math-rendered once KaTeX has typeset the block (20261022-041).
+    chapters = [
+        {"id": "m", "title": "", "order": 0, "type": "math", "content": "x^2"},
+        {"id": "c", "title": "", "order": 1, "type": "code", "content": "x = 2"},
+    ]
+    note = service.create_note(NoteCreate(title="Formulas", chapters=chapters))
+    html = client.get(f"/notes/{note.id}").text
+    assert html.count('class="math-source-caption">Formula source</div>') == 1
+    math = html.index("math-block-display")
+    assert math < html.index("math-source-caption") < html.index("math-formula-content")
+    assert "math-rendered" not in html  # only the script adds it
