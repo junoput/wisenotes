@@ -58,6 +58,31 @@ def test_light_text_meets_wcag_aa_on_the_page_surfaces():
     assert contrast(p["--code-fg"], p["--code-bg"]) >= 4.5
 
 
+def rule(selector: str) -> str:
+    """The declarations of the rule whose selector is exactly `selector`."""
+    found = re.findall(r"^" + re.escape(selector) + r"\s*\{([^}]*)\}", CSS, re.M)
+    assert len(found) == 1, (selector, len(found))
+    return found[0]
+
+
+def test_the_formula_source_caption_draws_the_colour_that_is_tested():
+    # M2, 20261027-021: the contrast test below checks --muted; this ties the caption to it.
+    assert re.search(r"color:\s*var\(--muted\)\s*;", rule(".math-source-caption"))
+
+
+def test_the_caption_is_hidden_once_a_formula_is_typeset():
+    # Without this rule, "Formula source" stays above a rendered formula.
+    hidden = rule(".math-block-display.math-rendered .math-source-caption")
+    assert re.search(r"display:\s*none\s*;", hidden)
+    # premise: rule() can tell a rule that is there from one that is not
+    try:
+        rule(".math-block-display.math-rendered .no-such-caption")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("rule() found a rule that does not exist")
+
+
 def test_the_formula_source_caption_is_readable_in_both_themes():
     # .math-source-caption draws --muted on a math block: --field, or --card on hover.
     dark, light = block(":root"), light_chosen()

@@ -34,7 +34,7 @@
           {% if chapter.type == 'code' %}
             <pre class="block-content code-block-display" data-language="{{ chapter.language or 'python' }}"><code>{{ chapter.content }}</code></pre>
           {% elif chapter.type == 'math' %}
-            <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}"><div class="math-source-caption">Formula source</div><div class="math-formula-content">{{ chapter.content }}</div></div>
+            <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}">{% if chapter.content.strip() %}<div class="math-source-caption">Formula source</div>{% endif %}<div class="math-formula-content">{{ chapter.content }}</div></div>
           {% elif chapter.type == 'graph' %}
             {# Slice 1 of 20261022-064: the definition as text; slice 2 draws it. #}
             <figure class="block-content graph-block-display"><figcaption class="graph-source-caption">Graph definition</figcaption><pre class="graph-spec">{{ chapter.content }}</pre></figure>

@@ -5,11 +5,14 @@ import html
 from markupsafe import escape
 
 from app.blocks import BLOCKS
+from app.graph_spec import SpecError
+from app.routes import pages
 from app.schemas import NoteCreate
 
 HX = {"HX-Request": "true"}
 GOOD = "view 2d  x -5..5  y -3..3\na = slider(0, 5, value 1)\nf(x) = a*sin(x)\nP = (1, f(1))"
 BAD = "a = slider(5, 1)\nf(x) = 2x"
+CHAIN = "+".join(["1"] * 2000)  # 4 KB: under the 20k cap, and no parenthesis in sight
 SENTINEL = '<img src=x onerror="alert(1)">'
 
 
@@ -137,8 +140,80 @@ def test_the_edit_form_explains_the_language(client, service):
 
 
 def test_a_stored_definition_is_escaped_on_the_page(client, service):
-    # The save refuses '<', but an import or a hand-edited file can still carry it.
+    # A comment may carry any text, '<' included, and an import or a hand-edited file
+    # can carry a definition the save would refuse; the page escapes all of it.
     note = graph_note(service, "# " + SENTINEL)
     page = client.get(f"/notes/{note.id}").text
     assert SENTINEL not in page
     assert str(escape("# " + SENTINEL)) in page
+
+
+def test_a_long_chain_is_refused_by_line_on_every_path_and_never_a_500(client, service):
+    # 20261027-021 G1: 2000 terms raised RecursionError in the checker on save.
+    note = graph_note(service, GOOD)
+    typed = f"a = slider(0, {CHAIN})"
+    r = client.post(
+        f"/notes/{note.id}/chapters/g/edit",
+        data={"title": "Wave", "content_text": typed},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    assert "line 1: longer than" in r.text
+    assert typed in r.text  # the typed text comes back, as for any refused line
+    assert stored(service, note.id).content == GOOD
+
+    chapters = [
+        {"id": "ch", "title": "Top", "order": 0, "type": "chapter"},
+        {"id": "g", "title": "", "order": 0, "type": "graph", "parent_id": "ch", "content": typed},
+    ]
+    r = client.post("/api/notes", json={"title": "Chain", "chapters": chapters})
+    assert r.status_code == 400 and "g: line 1: longer than" in r.json()["detail"]
+    r = client.put(f"/api/notes/{note.id}", json={"chapters": chapters})
+    assert r.status_code == 400
+
+
+def test_a_refusal_message_is_escaped_in_the_form(client, service, monkeypatch):
+    # 20261027-021 G2: the form lists reasons with {{ err }}; a "|safe" there would pass
+    # every other test, because no real message carries markup. Force one that does.
+    note = graph_note(service, GOOD)
+    hostile = SpecError(3, "hostile", SENTINEL)
+    monkeypatch.setattr(pages.graph_spec, "validate", lambda text: [hostile])
+    r = client.post(f"/notes/{note.id}/chapters/g/edit", data={"content_text": BAD})
+    assert r.status_code == 400
+    assert SENTINEL not in r.text
+    assert str(escape(f"line 3: {SENTINEL}")) in r.text
+    r = client.post(f"/notes/{note.id}/chapters/g/edit", data={"content_text": BAD}, headers=HX)
+    assert SENTINEL not in r.text and str(escape(SENTINEL)) in r.text
+
+
+def test_a_stored_bad_graph_can_be_sent_back_unchanged_but_not_changed_to_another(client, service):
+    # 20261027-021 G3: an import stores a definition the save would refuse (it does not
+    # check). PUT must not then refuse the note's own chapters sent back as they are.
+    note = graph_note(service, BAD)
+    chapters = [c.model_dump(mode="json") for c in service.get_note(note.id).chapters]
+    r = client.put(f"/api/notes/{note.id}", json={"title": "Renamed", "chapters": chapters})
+    assert r.status_code == 200, r.text
+    assert service.get_note(note.id).title == "Renamed"
+    # the quiet side: change that block to another bad definition and it is refused
+    chapters[1]["content"] = BAD + "\nb = slider(9, 1)"
+    r = client.put(f"/api/notes/{note.id}", json={"chapters": chapters})
+    assert r.status_code == 400 and "g: line 1:" in r.json()["detail"]
+    assert stored(service, note.id).content == BAD
+    # and a new block with a bad definition is refused, though another block is unchanged
+    chapters[1]["content"] = BAD
+    chapters.append({**chapters[1], "id": "g2"})
+    assert client.put(f"/api/notes/{note.id}", json={"chapters": chapters}).status_code == 400
+
+
+def test_an_empty_math_block_has_no_caption(client, service):
+    # M1: renderMath skips an empty formula, so a "Formula source" label would stay
+    # over nothing, with scripts on or off.
+    chapters = [
+        {"id": "m", "title": "", "order": 0, "type": "math", "content": ""},
+        {"id": "w", "title": "", "order": 1, "type": "math", "content": "  \n"},
+        {"id": "f", "title": "", "order": 2, "type": "math", "content": "x^2"},
+    ]
+    note = service.create_note(NoteCreate(title="Formulas", chapters=chapters))
+    html_page = client.get(f"/notes/{note.id}").text
+    assert html_page.count("math-source-caption") == 1
+    assert html_page.index("math-source-caption") < html_page.index("x^2")

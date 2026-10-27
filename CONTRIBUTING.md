@@ -80,6 +80,18 @@ review criterion, checked per change:
   `LD_LIBRARY_PATH=$HOME/.local/chromium-libs/extracted/usr/lib/x86_64-linux-gnu`
   and `FONTCONFIG_FILE` pointing at a `fonts.conf` whose `<dir>` is
   `$HOME/.local/chromium-libs/extracted/usr/share/fonts`.
+- The one thing a server-side test cannot see is app.js letting a refused graph
+  save (a 400 with the edit form) through htmx. `tests/graph_refusal.py` drives
+  it in both arms against the same running server, and exits 1 when the reasons
+  do not show. It is not part of `pytest`; run it after any change to the
+  `htmx:beforeSwap` handler in app.js:
+
+  ```sh
+  .venv/bin/python tests/graph_refusal.py http://127.0.0.1:8000
+  ```
+
+  Expected: `VERDICT: PASS` in both arms. Removing the `BLOCK_SAVE` clause from
+  app.js gives `VERDICT: FAIL reasons shown` in the JS-on arm.
 
 ### The JavaScript floor
 
