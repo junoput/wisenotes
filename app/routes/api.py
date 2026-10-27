@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from app import graph_spec
 from app.assets import ASSET_VERSION
 from app.media_urls import media_kind
 from app.media_urls import missing_name
@@ -60,8 +61,24 @@ def _refused_detail(refused: list[str]) -> str:
     )
 
 
+def _refuse_bad_graphs(chapters) -> None:
+    """A graph block whose definition does not parse is refused with every reason,
+    each as "<chapter id>: line <n>: <rule>" (20261024-003)."""
+    reasons = [
+        f"{ch.id}: {err}"
+        for ch in chapters or []
+        if ch.type == "graph"
+        for err in graph_spec.validate(ch.content)
+    ]
+    if reasons:
+        raise HTTPException(
+            status_code=400, detail="Graph definitions refused: " + "; ".join(reasons)
+        )
+
+
 @router.post("/notes")
 async def create_note(payload: NoteCreate, service: NoteService = Depends(get_note_service)):
+    _refuse_bad_graphs(payload.chapters)
     note, refused = service.create_note_checked(payload)
     if refused:
         raise HTTPException(status_code=409, detail=_refused_detail(refused))
@@ -72,6 +89,7 @@ async def create_note(payload: NoteCreate, service: NoteService = Depends(get_no
 async def update_note(
     note_id: str, payload: NoteUpdate, service: NoteService = Depends(get_note_service)
 ):
+    _refuse_bad_graphs(payload.chapters)
     note, gone = service.update_note_checked(note_id, payload)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")

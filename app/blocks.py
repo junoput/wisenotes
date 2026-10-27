@@ -25,6 +25,7 @@ BLOCKS: dict[str, Block] = {
     "code": Block("code", "Code", "{}", "#f59e0b"),
     "math": Block("math", "Math", "∑", "#a78bfa"),
     "media": Block("media", "Media", "🖼️", "#ec4899"),
+    "graph": Block("graph", "Graph", "📈", "#34d399"),  # definition text: app/graph_spec.py
     "text": Block("text", "Text", "📝", "#64748b", show_in_picker=False),  # fallback
 }
 

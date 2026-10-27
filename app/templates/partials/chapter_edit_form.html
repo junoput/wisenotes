@@ -1,7 +1,13 @@
 {# Edit one block. Included inline on the full page and returned alone to htmx. Plain fields; no JSON. #}
 {% set edit_url = '/notes/' ~ note.id ~ '/chapters/' ~ chapter.id %}
-<div class="chapter-edit-mode" data-chapter-type="{{ chapter.type }}" data-note-id="{{ note.id }}"
+<div class="chapter-edit-mode" id="edit-{{ chapter.id }}" data-chapter-type="{{ chapter.type }}" data-note-id="{{ note.id }}"
      {% if chapter.type == 'code' %}data-language="{{ chapter.language or 'python' }}"{% endif %}>
+  {% if edit_errors %}
+    <div class="import-missing edit-errors" role="alert">
+      <p>Not saved. Fix these lines and save again:</p>
+      <ul>{% for err in edit_errors %}<li>{{ err }}</li>{% endfor %}</ul>
+    </div>
+  {% endif %}
   <form class="chapter-edit-form" action="{{ edit_url }}/edit" method="post" hx-post="{{ edit_url }}/edit" hx-target="body" hx-swap="none">
     <div class="field">
       <input type="text" name="title" value="{{ chapter.title }}" placeholder="{% if chapter.type == 'media' %}caption{% else %}add title{% endif %}" {% if chapter.type == 'chapter' %}required{% endif %} aria-label="Title">
@@ -41,8 +47,20 @@
     {% else %}
       <div class="field">
         <textarea name="content_text" rows="14" class="chapter-content-input" autofocus
-                  placeholder="{% if chapter.type == 'code' %}add code{% elif chapter.type == 'math' %}add formula{% else %}add text{% endif %}">{{ chapter.content }}</textarea>
+                  placeholder="{% if chapter.type == 'code' %}add code{% elif chapter.type == 'math' %}add formula{% elif chapter.type == 'graph' %}view 2d  x -5..5  y -3..3&#10;a = slider(0, 5, value 1)&#10;f(x) = a*sin(x)&#10;P = (1, 2){% else %}add text{% endif %}">{{ chapter.content }}</textarea>
       </div>
+      {% if chapter.type == 'graph' %}
+        <details class="field graph-help">
+          <summary>Graph language</summary>
+          <p class="muted">One statement per line; <code>#</code> starts a comment.</p>
+          <pre>view 2d  x -5..5  y -3..3              the default view
+a = slider(0, 5, step 0.1, value 1, play) a slider
+f(x) = a*sin(x)                          a function of x
+P = (1, 2)                               a point
+Q = (3, f(3))                            a point on f</pre>
+          <p class="muted">Write <code>2*x</code>, not <code>2x</code>. Functions: sin cos tan asin acos atan atan2 sqrt abs exp ln log floor ceil min max; constants pi and e. A name must be defined above the line that uses it.</p>
+        </details>
+      {% endif %}
     {% endif %}
 
     <div class="edit-actions">

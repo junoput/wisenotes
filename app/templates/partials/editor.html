@@ -33,7 +33,7 @@
   <div class="chapters-display">
     {% if active.chapters %}
       {% import "components/editor_chapters.html" as editor_chapters %}
-      {{ editor_chapters.render_editor_chapters(active.chapters, active, block_types, editing, media_files|default([]), parent_id=None, depth=0, media_error=media_error) }}
+      {{ editor_chapters.render_editor_chapters(active.chapters, active, block_types, editing, media_files|default([]), parent_id=None, depth=0, media_error=media_error, edit_errors=edit_errors|default(none)) }}
     {% else %}
       <form class="add-form-inline" action="/notes/{{ active.id }}/chapters" method="post" hx-post="/notes/{{ active.id }}/chapters" hx-target="body" hx-swap="none">
         <input type="hidden" name="block_type" value="chapter">

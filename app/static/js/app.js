@@ -149,10 +149,13 @@ document.body.addEventListener('htmx:beforeSwap', (e) => {
 const MEDIA_DELETE = /^\/notes\/[^/]+\/media\/[^/]+\/delete$/;
 const NOTE_DELETE = /^\/notes\/[^/]+\/delete$/;
 const MEDIA_SELECT = /^\/notes\/[^/]+\/chapters\/[^/]+\/media\/select$/;
+// A refused graph definition answers 400 with the edit form and its reasons by line.
+const BLOCK_SAVE = /^\/notes\/[^/]+\/chapters\/[^/]+\/edit$/;
 document.body.addEventListener('htmx:beforeSwap', (e) => {
   const path = e.detail.requestConfig?.path || '';
   const status = e.detail.xhr.status;
   if ((path === '/notes/import' && status === 400)
+      || (BLOCK_SAVE.test(path) && status === 400)
       || ((MEDIA_DELETE.test(path) || NOTE_DELETE.test(path) || MEDIA_SELECT.test(path)) && status === 409)
       || (NOTE_DELETE.test(path) && status === 500)) {
     e.detail.shouldSwap = true; e.detail.isError = false;
