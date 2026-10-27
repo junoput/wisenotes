@@ -217,3 +217,60 @@ def test_an_empty_math_block_has_no_caption(client, service):
     html_page = client.get(f"/notes/{note.id}").text
     assert html_page.count("math-source-caption") == 1
     assert html_page.index("math-source-caption") < html_page.index("x^2")
+
+
+def import_invalid_graph(service, content=BAD):
+    """A definition the save would refuse, stored as an import stores it (unchecked)."""
+    return graph_note(service, content)
+
+
+def test_a_stored_invalid_graph_is_a_visible_error_on_the_page_without_scripts(client, service):
+    # 20261027-036: the block shows why it will not draw, from the server, so it needs no script
+    note = import_invalid_graph(service)
+    page = client.get(f"/notes/{note.id}").text
+    assert '<ul class="graph-errors" role="alert">' in page
+    assert "line 1: the slider must go from low to high" in page
+    assert "line 2: two values without an operator between them" in page
+    good = client.get(f"/notes/{graph_note(service, GOOD).id}").text
+    assert "graph-errors" not in good  # the quiet side
+
+
+def test_the_error_list_escapes_what_it_shows(client, service):
+    note = import_invalid_graph(service, "f(x) = <b>" + SENTINEL)
+    page = client.get(f"/notes/{note.id}").text
+    assert SENTINEL not in page
+
+
+def test_the_block_form_checks_only_a_changed_definition_like_put(client, service):
+    # 20261027-036 item 4: an imported invalid graph sent back unchanged with a new title
+    # was a 400 here and a 200 on PUT.
+    note = import_invalid_graph(service)
+    r = client.post(
+        f"/notes/{note.id}/chapters/g/edit",
+        data={"title": "Renamed", "content_text": BAD},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert stored(service, note.id).title == "Renamed"
+    # a plain form posts CRLF: still unchanged
+    r = client.post(
+        f"/notes/{note.id}/chapters/g/edit",
+        data={"title": "Again", "content_text": BAD.replace("\n", "\r\n")},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    # the quiet side: changed to another invalid definition is refused, and nothing is written
+    r = client.post(
+        f"/notes/{note.id}/chapters/g/edit",
+        data={"title": "Third", "content_text": BAD + "\nb = slider(9, 1)"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 400
+    assert stored(service, note.id).title == "Again"
+    # and a valid new one is saved
+    r = client.post(
+        f"/notes/{note.id}/chapters/g/edit",
+        data={"content_text": GOOD},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and stored(service, note.id).content == GOOD

@@ -18,6 +18,10 @@
 
 export const MAX_DEPTH = 64;
 export const MAX_TOKENS = 256;
+// What one evaluation may cost: an expression's tokens plus the cost of each user function it
+// calls. Bounds chains of functions calling functions and a function calling another twice at
+// every level; the drawing code calls a function hundreds of times per frame.
+export const MAX_COST = 512;
 const BLANK = ' \t\r';
 
 // name -> [arity, implementation]. Math.* already gives the JS values the cases pin:
@@ -101,6 +105,7 @@ class Parser {
     this.functions = functions; // Map: user functions defined above, name -> (x, env) => number
     this.others = others; // Map: names defined as something that is not a number -> what
     this.depth = 0;
+    this.cost = toks.length;
   }
 
   peek() { return this.pos < this.tokens.length ? this.tokens[this.pos] : null; }
@@ -122,6 +127,10 @@ class Parser {
       if (this.peek() === ')') throw new Refused('unexpected', "a ')' has no matching '('");
       throw new Refused('unexpected', 'two values without an operator between them (write 2*x, not 2x)');
     }
+    if (this.cost > MAX_COST) {
+      throw new Refused('too_costly', 'this, with the functions it calls, is too long to evaluate');
+    }
+    node.cost = this.cost;
     return node;
   }
 
@@ -242,6 +251,7 @@ class Parser {
     if (this.functions.has(name)) {
       if (args.length !== 1) throw new Refused('arity', `${name} takes 1 argument`);
       const user = this.functions.get(name);
+      this.cost += user.cost;
       const [a] = args;
       return (env) => user(a(env), env);
     }
@@ -431,11 +441,13 @@ class Checker {
     if (FUNCTIONS.has(name)) throw new Refused('reserved', `${name} is a built-in function and cannot be redefined`);
     const compiled = this.expression(strip(body), 'x');
     this.define(name, 'function');
-    this.spec.functions.set(name, (x, env) => {
+    const fn = (x, env) => {
       const inner = Object.create(env); // env's sliders, and x here only
       inner.x = x;
       return compiled(inner);
-    });
+    };
+    fn.cost = compiled.cost;
+    this.spec.functions.set(name, fn);
   }
 
   point(name, inner) {

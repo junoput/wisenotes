@@ -83,8 +83,9 @@ review criterion, checked per change:
 - The one thing a server-side test cannot see is app.js letting a refused graph
   save (a 400 with the edit form) through htmx. `tests/graph_refusal.py` drives
   it in both arms against the same running server, and exits 1 when the reasons
-  do not show. It is not part of `pytest`; run it after any change to the
-  `htmx:beforeSwap` handler in app.js:
+  do not show. `tests/test_browser_checks.py` runs it, and `tests/graph_draw.py`, as part of
+  `pytest` whenever a chromium launches (it skips, saying why, when none does: CI). To run it by hand
+  after a change to the `htmx:beforeSwap` handler in app.js:
 
   ```sh
   .venv/bin/python tests/graph_refusal.py http://127.0.0.1:8000

@@ -47,6 +47,9 @@ router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
 templates.env.filters["media_kind"] = media_kind
+templates.env.filters["graph_errors"] = lambda text: [
+    str(e) for e in graph_spec.validate(text or "")
+]
 templates.env.filters["missing_name"] = missing_name
 logger = logging.getLogger(__name__)
 
@@ -409,7 +412,7 @@ async def update_chapter(
 ):
     current = service.get_note(note_id)
     block = next((c for c in current.chapters if c.id == chapter_id), None) if current else None
-    if block is not None and block.type == "graph":
+    if block is not None and block.type == "graph" and _changed_definition(block, content_text):
         errors = graph_spec.validate(content_text)
         if errors:
             # Refused, and the text comes back as typed: losing a definition the
@@ -424,6 +427,13 @@ async def update_chapter(
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     return _after_change(request, service, note)
+
+
+def _changed_definition(block: Chapter, text: str) -> bool:
+    """The same rule as PUT /api/notes (api._refuse_bad_graphs): a definition is checked when
+    it differs from the stored one. A plain form posts a textarea with CRLF line ends, so
+    those are compared as the newline the block stores (20261027-036)."""
+    return text.replace("\r\n", "\n") != block.content.replace("\r\n", "\n")
 
 
 def _graph_refused(

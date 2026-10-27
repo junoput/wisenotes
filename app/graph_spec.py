@@ -24,18 +24,24 @@ tests/graph_spec_cases.json, which pin values, error codes and their lines.
 
 The language is ASCII. A digit is 0-9, a name is A-Za-z0-9_, and whitespace is a
 space, a tab or a carriage return (a form posts a textarea with CRLF). Lines are
-split on the newline character only. Anything else outside a "#" comment is the error
-"character". The JS parser can match this with no Unicode tables; Python's isspace,
-regex digit class, float() and splitlines() all accept more than JS does.
+split on the newline character only. Anything else outside a "#" comment is refused: as
+"character" inside an expression, and as "statement" between the parts of a statement
+(a U+00A0 after f, or before the parenthesis of slider), where no pattern matches the line. The JS
+parser can match this with no Unicode tables; Python's isspace, regex digit class,
+float() and splitlines() all accept more than JS does.
 
 Values are IEEE-754 doubles and every operator and function gives what the JS
 operator or Math function of the same name gives for the same doubles, including
 Infinity and NaN (exp(1000) is Infinity, ln(0) is -Infinity, a domain error is NaN,
-1^Infinity is NaN). tests/graph_spec_cases.json pins the cases.
+1^Infinity is NaN), and the sign of a zero (1/ceil(-0.5) and 1/min(0, -0) are -Infinity).
+tests/graph_spec_cases.json pins the cases.
 
 Size is bounded as nesting is: an expression longer than MAX_TOKENS tokens is
 refused ("too_long"), so the closure tree, and the stack of any parser or
-evaluator that walks it, stays shallow. A view line splits on whitespace, so a
+evaluator that walks it, stays shallow. What one evaluation costs is bounded the same way:
+an expression's tokens plus the cost of each user function it calls may not exceed MAX_COST
+("too_costly"), which bounds a chain of functions calling functions, and a function that
+calls another twice at every level. A view line splits on whitespace, so a
 range is written without spaces: x -2*pi..2*pi, not x -2 * pi..2*pi. A definition
 has one view line, which is its default view; a second is refused.
 
@@ -55,6 +61,11 @@ MAX_DEPTH = 64  # nesting of parentheses and calls; deeper is refused, not recur
 # is long, and the checker evaluates constants on save. 256 tokens is a long formula
 # and a closure tree under ~260 frames, well inside Python's 1000 and JS's thousands.
 MAX_TOKENS = 256
+# What one evaluation may cost: the tokens of an expression plus, for each call of a user
+# function, that function's own cost. Chains f1..fN that each call the one above, and
+# f(x) = g(x) + g(x) doubling at every level, would otherwise evaluate as deep or as long as
+# the definition lets them (the evaluator draws a curve by calling it hundreds of times).
+MAX_COST = 512
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+")
 BLANK = " \t\r"  # the whitespace of the language
@@ -164,19 +175,29 @@ def _log(fn: Callable[[float], float]) -> Callable[[float], float]:
 
 
 def _round(fn: Callable[[float], int]) -> Callable[[float], float]:
-    """floor and ceil keep NaN and +-Infinity, as Math.floor and Math.ceil."""
+    """floor and ceil keep NaN, +-Infinity and the sign of a zero result, as Math.floor and
+    Math.ceil do: ceil(-0.5) is -0, and 1/ceil(-0.5) is -Infinity."""
 
     def wrapped(a: float) -> float:
-        return a if math.isnan(a) or math.isinf(a) else float(fn(a))
+        if math.isnan(a) or math.isinf(a):
+            return a
+        r = float(fn(a))
+        return math.copysign(r, a) if r == 0 else r
 
     return wrapped
 
 
 def _extreme(pick: Callable[[float, float], float]) -> Callable[[float, float], float]:
-    """min and max: NaN if either is NaN (Python's min(nan, 1) is nan but min(1, nan) is 1)."""
+    """min and max: NaN if either is NaN (Python's min(nan, 1) is nan but min(1, nan) is 1),
+    and -0 is below +0, as in Math.min and Math.max (Python returns the first of the two)."""
 
     def wrapped(a: float, b: float) -> float:
-        return math.nan if math.isnan(a) or math.isnan(b) else pick(a, b)
+        if math.isnan(a) or math.isnan(b):
+            return math.nan
+        if a == 0 and b == 0:
+            negative = [math.copysign(1.0, v) < 0 for v in (a, b)]
+            return -0.0 if (any(negative) if pick is min else all(negative)) else 0.0
+        return pick(a, b)
 
     return wrapped
 
@@ -259,6 +280,7 @@ class _Parser:
         self.functions = functions  # user functions defined above
         self.others = others  # names defined as something that is not a number, and what
         self.depth = 0
+        self.cost = len(tokens)
 
     def peek(self) -> str | None:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -286,6 +308,11 @@ class _Parser:
             raise _Refused(
                 "unexpected", "two values without an operator between them (write 2*x, not 2x)"
             )
+        if self.cost > MAX_COST:
+            raise _Refused(
+                "too_costly", "this, with the functions it calls, is too long to evaluate"
+            )
+        node.cost = self.cost  # type: ignore[attr-defined]
         return node
 
     def expr(self) -> Compiled:
@@ -398,6 +425,7 @@ class _Parser:
             if len(args) != 1:
                 raise _Refused("arity", f"{name} takes 1 argument")
             user, (a,) = self.functions[name], args
+            self.cost += user.cost  # type: ignore[attr-defined]
             return lambda env: user(a(env), env)
         if name in self.values or name in self.others or name in CONSTANTS:
             raise _Refused("not_a_function", f"{name} is not a function")
@@ -588,7 +616,9 @@ class _Checker:
             raise _Refused("reserved", f"{name} is a built-in function and cannot be redefined")
         compiled = self.expression(body.strip(BLANK), variable="x")
         self.define(name, "function")
-        self.spec.functions[name] = lambda x, env, c=compiled: c({**env, "x": x})
+        fn = lambda x, env, c=compiled: c({**env, "x": x})  # noqa: E731
+        fn.cost = compiled.cost  # type: ignore[attr-defined]
+        self.spec.functions[name] = fn
 
     def point(self, name: str, inner: str) -> None:
         coords = [c.strip(BLANK) for c in _split_top(inner)]

@@ -36,6 +36,9 @@ from app.services.notes import get_note_service
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
 templates.env.filters["media_kind"] = media_kind
+templates.env.filters["graph_errors"] = lambda text: [
+    str(e) for e in graph_spec.validate(text or "")
+]
 templates.env.filters["missing_name"] = missing_name
 
 router = APIRouter(prefix="/api")
