@@ -20,8 +20,6 @@ export const MAX_DEPTH = 64;
 export const MAX_TOKENS = 256;
 const BLANK = ' \t\r';
 
-const odd = (b) => Number.isFinite(b) && b === Math.floor(b) && b % 2 !== 0;
-
 // name -> [arity, implementation]. Math.* already gives the JS values the cases pin:
 // Math.log(0) is -Infinity, Math.floor(Infinity) is Infinity, Math.min(1, NaN) is NaN.
 export const FUNCTIONS = new Map([
@@ -90,13 +88,10 @@ function tokens(text) {
   return out;
 }
 
-function pow(a, b) {
-  // Math.pow is JS's own: NaN for a NaN exponent and for 1 ** Infinity, 0 ** -1 is
-  // Infinity and (-0) ** -1 is -Infinity, an overflow keeps the sign of an odd power.
-  if (Number.isNaN(b) || (!Number.isFinite(b) && Math.abs(a) === 1)) return NaN;
-  if (a === 0 && b < 0) return Object.is(a, -0) && odd(b) ? -Infinity : Infinity;
-  return Math.pow(a, b);
-}
+// JS's own Math.pow is what the cases pin: a NaN exponent and 1 ** Infinity are NaN,
+// 0 ** -1 is Infinity and (-0) ** -1 is -Infinity, an overflow keeps the sign of an odd
+// power. (Python needs a function for each of these; here it is the one call.)
+const pow = (a, b) => Math.pow(a, b);
 
 class Parser {
   constructor(toks, values, functions, others) {
