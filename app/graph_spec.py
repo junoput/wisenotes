@@ -22,6 +22,23 @@ descent below and compiled to Python closures over the math module. The JS
 side (slice 2) implements the same grammar, and both run the shared cases in
 tests/graph_spec_cases.json, which pin values, error codes and their lines.
 
+The language is ASCII. A digit is 0-9, a name is A-Za-z0-9_, and whitespace is a
+space, a tab or a carriage return (a form posts a textarea with CRLF). Lines are
+split on the newline character only. Anything else outside a "#" comment is the error
+"character". The JS parser can match this with no Unicode tables; Python's isspace,
+regex digit class, float() and splitlines() all accept more than JS does.
+
+Values are IEEE-754 doubles and every operator and function gives what the JS
+operator or Math function of the same name gives for the same doubles, including
+Infinity and NaN (exp(1000) is Infinity, ln(0) is -Infinity, a domain error is NaN,
+1^Infinity is NaN). tests/graph_spec_cases.json pins the cases.
+
+Size is bounded as nesting is: an expression longer than MAX_TOKENS tokens is
+refused ("too_long"), so the closure tree, and the stack of any parser or
+evaluator that walks it, stays shallow. A view line splits on whitespace, so a
+range is written without spaces: x -2*pi..2*pi, not x -2 * pi..2*pi. A definition
+has one view line, which is its default view; a second is refused.
+
 Each error carries a stable code (the shared cases assert it) and a message
 for the person editing. A message names the line and the rule, and at most an
 identifier from the line, never a whole expression.
@@ -33,35 +50,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
 
-# name -> (arity, implementation). Both parsers implement exactly this list.
-FUNCTIONS: dict[str, tuple[int, Callable[..., float]]] = {
-    "sin": (1, math.sin),
-    "cos": (1, math.cos),
-    "tan": (1, math.tan),
-    "asin": (1, math.asin),
-    "acos": (1, math.acos),
-    "atan": (1, math.atan),
-    "atan2": (2, math.atan2),
-    "sqrt": (1, math.sqrt),
-    "abs": (1, abs),
-    "exp": (1, math.exp),
-    "ln": (1, math.log),
-    "log": (1, math.log10),
-    "floor": (1, math.floor),
-    "ceil": (1, math.ceil),
-    "min": (2, min),
-    "max": (2, max),
-}
-CONSTANTS = {"pi": math.pi, "e": math.e}
-# Bound variables: x for f(x) now; y, t, u and v are kept for the curves and
-# surfaces of later slices, so no definition may take them.
-VARIABLES = ("x", "y", "t", "u", "v")
-KEYWORDS = ("view", "slider", "step", "value", "play", "in")
-RESERVED = frozenset(FUNCTIONS) | frozenset(CONSTANTS) | frozenset(VARIABLES) | frozenset(KEYWORDS)
-
 MAX_DEPTH = 64  # nesting of parentheses and calls; deeper is refused, not recursed into
+# A chain such as 1+1+1+... nests no parentheses but still builds a tree as deep as it
+# is long, and the checker evaluates constants on save. 256 tokens is a long formula
+# and a closure tree under ~260 frames, well inside Python's 1000 and JS's thousands.
+MAX_TOKENS = 256
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
-NUMBER = re.compile(r"\d+(?:\.\d+)?|\.\d+")
+NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+")
+BLANK = " \t\r"  # the whitespace of the language
 
 
 @dataclass(frozen=True)
@@ -118,7 +114,7 @@ def _tokens(text: str) -> list[str]:
     i = 0
     while i < len(text):
         ch = text[i]
-        if ch.isspace():
+        if ch in BLANK:
             i += 1
             continue
         m = NUMBER.match(text, i)
@@ -136,6 +132,8 @@ def _tokens(text: str) -> list[str]:
             i += 1
             continue
         raise _Refused("character", f"'{ch}' is not part of the graph language")
+    if len(out) > MAX_TOKENS:
+        raise _Refused("too_long", f"longer than {MAX_TOKENS} symbols; split it into parts")
     return out
 
 
@@ -147,6 +145,42 @@ def _safe(fn: Callable[..., float], *args: float) -> float:
         return math.nan
 
 
+def _exp(a: float) -> float:
+    try:
+        return math.exp(a)
+    except OverflowError:
+        return math.inf  # JS: exp(1000) is Infinity
+
+
+def _log(fn: Callable[[float], float]) -> Callable[[float], float]:
+    """ln and log: 0 is -Infinity and below 0 is NaN, as Math.log and Math.log10."""
+
+    def wrapped(a: float) -> float:
+        if math.isnan(a) or a < 0:
+            return math.nan
+        return -math.inf if a == 0 else fn(a)
+
+    return wrapped
+
+
+def _round(fn: Callable[[float], int]) -> Callable[[float], float]:
+    """floor and ceil keep NaN and +-Infinity, as Math.floor and Math.ceil."""
+
+    def wrapped(a: float) -> float:
+        return a if math.isnan(a) or math.isinf(a) else float(fn(a))
+
+    return wrapped
+
+
+def _extreme(pick: Callable[[float, float], float]) -> Callable[[float, float], float]:
+    """min and max: NaN if either is NaN (Python's min(nan, 1) is nan but min(1, nan) is 1)."""
+
+    def wrapped(a: float, b: float) -> float:
+        return math.nan if math.isnan(a) or math.isnan(b) else pick(a, b)
+
+    return wrapped
+
+
 def _div(a: float, b: float) -> float:
     if b == 0:
         if a == 0 or math.isnan(a):
@@ -155,16 +189,51 @@ def _div(a: float, b: float) -> float:
     return a / b
 
 
+def _odd_integer(b: float) -> bool:
+    return math.isfinite(b) and b == math.floor(b) and b % 2 == 1
+
+
 def _pow(a: float, b: float) -> float:
+    """Math.pow / ** in JS: NaN for a NaN exponent, and for a base of 1 or -1 to
+    +-Infinity (math.pow gives 1.0 for both); an overflow takes the sign of an odd power."""
+    if math.isnan(b) or (math.isinf(b) and abs(a) == 1):
+        return math.nan
     if a == 0 and b < 0:
-        return math.inf  # as JS: 0 ** -1 is Infinity, where math.pow raises
+        # 0 ** -1 is Infinity and (-0) ** -1 is -Infinity, where math.pow raises
+        return -math.inf if math.copysign(1.0, a) < 0 and _odd_integer(b) else math.inf
     try:
-        r = math.pow(a, b)
+        return math.pow(a, b)
     except ValueError:
-        return math.nan  # a negative base to a fractional power, as JS gives NaN
+        return math.nan  # a negative base to a fractional power
     except OverflowError:
-        return math.inf
-    return r
+        return -math.inf if a < 0 and _odd_integer(b) else math.inf
+
+
+# name -> (arity, implementation). Both parsers implement exactly this list.
+FUNCTIONS: dict[str, tuple[int, Callable[..., float]]] = {
+    "sin": (1, math.sin),
+    "cos": (1, math.cos),
+    "tan": (1, math.tan),
+    "asin": (1, math.asin),
+    "acos": (1, math.acos),
+    "atan": (1, math.atan),
+    "atan2": (2, math.atan2),
+    "sqrt": (1, math.sqrt),
+    "abs": (1, abs),
+    "exp": (1, _exp),
+    "ln": (1, _log(math.log)),
+    "log": (1, _log(math.log10)),
+    "floor": (1, _round(math.floor)),
+    "ceil": (1, _round(math.ceil)),
+    "min": (2, _extreme(min)),
+    "max": (2, _extreme(max)),
+}
+CONSTANTS = {"pi": math.pi, "e": math.e}
+# Bound variables: x for f(x) now; y, t, u and v are kept for the curves and
+# surfaces of later slices, so no definition may take them.
+VARIABLES = ("x", "y", "t", "u", "v")
+KEYWORDS = ("view", "slider", "step", "value", "play", "in")
+RESERVED = frozenset(FUNCTIONS) | frozenset(CONSTANTS) | frozenset(VARIABLES) | frozenset(KEYWORDS)
 
 
 class _Parser:
@@ -359,10 +428,13 @@ def evaluate(text: str, env: Env | None = None) -> float:
 
 # ---------------------------------------------------------------- statements
 
-FUNCTION_DEF = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(\s*([A-Za-z][A-Za-z0-9_]*)\s*\)\s*=(.*)")
-ASSIGN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*=(.*)")
-SLIDER = re.compile(r"slider\s*\((.*)\)\s*", re.S)
-POINT = re.compile(r"\((.*)\)\s*", re.S)
+_B = r"[ \t\r]*"  # the language's blanks, not \s: Python's matches Unicode spaces and \f \v
+_B_SPLIT = r"[ \t\r]+"
+_N = "[A-Za-z][A-Za-z0-9_]*"
+FUNCTION_DEF = re.compile(rf"({_N}){_B}\({_B}({_N}){_B}\){_B}=(.*)")
+ASSIGN = re.compile(rf"({_N}){_B}=(.*)")
+SLIDER = re.compile(rf"slider{_B}\((.*)\){_B}", re.S)
+POINT = re.compile(rf"\((.*)\){_B}", re.S)
 
 
 def _split_top(text: str) -> list[str]:
@@ -420,17 +492,17 @@ class _Checker:
         self.kinds[name] = kind
 
     def line(self, text: str) -> None:
-        stripped = text.split("#", 1)[0].strip()
+        stripped = text.split("#", 1)[0].strip(BLANK)
         if not stripped:
             return
-        if stripped == "view" or stripped.startswith(("view ", "view\t")):
+        if stripped == "view" or stripped.startswith(("view ", "view\t", "view\r")):
             return self.view(stripped)
         m = FUNCTION_DEF.fullmatch(stripped)
         if m:
             return self.function(m.group(1), m.group(2), m.group(3))
         m = ASSIGN.fullmatch(stripped)
         if m:
-            name, rhs = m.group(1), m.group(2).strip()
+            name, rhs = m.group(1), m.group(2).strip(BLANK)
             s = SLIDER.fullmatch(rhs)
             if s:
                 return self.slider(name, s.group(1))
@@ -449,7 +521,7 @@ class _Checker:
     def view(self, text: str) -> None:
         if self.spec.view is not None:
             raise _Refused("view_twice", "only one view line is allowed")
-        words = text.split()
+        words = [w for w in re.split(_B_SPLIT, text) if w]
         if len(words) < 2:
             raise _Refused("view_kind", "view needs a kind: view 2d")
         if words[1] != "2d":
@@ -476,7 +548,7 @@ class _Checker:
         self.spec.view = view
 
     def slider(self, name: str, args_text: str) -> None:
-        args = [a.strip() for a in _split_top(args_text)]
+        args = [a.strip(BLANK) for a in _split_top(args_text)]
         if len(args) < 2 or not args[0] or not args[1]:
             raise _Refused("slider_range", "slider needs a low and a high end: slider(0, 5)")
         lo, hi = self.constant(args[0]), self.constant(args[1])
@@ -486,11 +558,11 @@ class _Checker:
         play = False
         for opt in args[2:]:
             word, _, rest = opt.partition(" ")
-            if word == "play" and not rest.strip():
+            if word == "play" and not rest.strip(BLANK):
                 if play:
                     raise _Refused("slider_option", "play is given twice")
                 play = True
-            elif word in ("step", "value") and rest.strip():
+            elif word in ("step", "value") and rest.strip(BLANK):
                 if (step if word == "step" else value) is not None:
                     raise _Refused("slider_option", f"{word} is given twice")
                 number = self.constant(rest)
@@ -514,12 +586,12 @@ class _Checker:
             raise _Refused("function_variable", f"a function is written {name}(x) = ...")
         if name in FUNCTIONS:
             raise _Refused("reserved", f"{name} is a built-in function and cannot be redefined")
-        compiled = self.expression(body.strip(), variable="x")
+        compiled = self.expression(body.strip(BLANK), variable="x")
         self.define(name, "function")
         self.spec.functions[name] = lambda x, env, c=compiled: c({**env, "x": x})
 
     def point(self, name: str, inner: str) -> None:
-        coords = [c.strip() for c in _split_top(inner)]
+        coords = [c.strip(BLANK) for c in _split_top(inner)]
         if len(coords) != 2:
             raise _Refused("point", "a point has two coordinates: P = (x, y)")
         compiled = tuple(self.expression(c) for c in coords)
@@ -532,11 +604,18 @@ def parse(text: str) -> GraphSpec:
     1-based line number; a refused line defines nothing, so a later line using
     its name is reported as well."""
     checker = _Checker()
-    for number, line in enumerate(text.splitlines(), start=1):
+    # "\n" only: str.splitlines() also splits on \v \f \x1c-\x1e \x85 and U+2028/9,
+    # which would number the lines differently from the JS parser's split("\n").
+    for number, line in enumerate(text.split("\n"), start=1):
         try:
             checker.line(line)
         except _Refused as e:
             checker.spec.errors.append(SpecError(number, e.code, e.message))
+        except RecursionError:
+            # Belt and braces behind MAX_TOKENS: a definition never fails the save with a 500.
+            checker.spec.errors.append(
+                SpecError(number, "too_deep", "nested or chained too deeply to check")
+            )
     return checker.spec
 
 

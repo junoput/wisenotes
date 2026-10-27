@@ -3,6 +3,7 @@
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,8 +25,8 @@ def same(got: float, want) -> bool:
 
 def test_the_cases_file_is_not_empty():
     # premise: a parametrize over an empty list passes vacuously
-    assert len(CASES["values"]) >= 30
-    assert len(CASES["rejected"]) >= 20
+    assert len(CASES["values"]) >= 60
+    assert len(CASES["rejected"]) >= 40
     assert sum(1 for s in CASES["specs"] if s["errors"]) >= 20
     assert sum(1 for s in CASES["specs"] if not s["errors"]) >= 5
 
@@ -39,7 +40,7 @@ def test_an_expression_has_its_value(case):
 @pytest.mark.parametrize("case", CASES["rejected"], ids=lambda c: c["expr"][:30] or "empty")
 def test_an_expression_is_refused_with_its_code(case):
     with pytest.raises(ValueError) as refused:
-        graph_spec.evaluate(case["expr"], {"a": 1.0})
+        graph_spec.evaluate(case["expr"], case.get("env"))
     assert refused.value.code == case["code"]
 
 
@@ -49,7 +50,12 @@ def test_a_definition_is_refused_on_exactly_its_lines(case):
     assert [[e.line, e.code] for e in spec.errors] == case["errors"]
     for check in case.get("checks", []):
         env = check.get("env", {})
-        if "function" in check:
+        if "view" in check:
+            assert [list(spec.view.x), list(spec.view.y)] == [
+                check["view"]["x"],
+                check["view"]["y"],
+            ]
+        elif "function" in check:
             assert same(spec.functions[check["function"]](check["x"], env), check["value"])
         else:
             got = [c(env) for c in spec.points[check["point"]]]
@@ -84,3 +90,20 @@ def test_user_text_never_reaches_eval():
     calls = re.findall(r"(?<![\w.])(eval|exec|compile|__import__|getattr)\s*\(", source)
     assert calls == []
     assert re.findall(r"(?<![\w.])(eval)\s*\(", "x = eval(t)") == ["eval"]  # the check can see one
+
+
+def test_a_stack_overflow_is_an_error_on_its_line_and_never_escapes(monkeypatch):
+    # The safety net behind MAX_TOKENS: with the cap lifted, a 5000-term sum overflows
+    # the evaluator's stack on save. That must be a reported line, not a 500.
+    chain = "+".join(["1"] * 5000)
+    monkeypatch.setattr(graph_spec, "MAX_TOKENS", 10**6)
+    errors = graph_spec.validate(f"a = slider(0, 1)\nb = slider(0, {chain})\nc = slider(0, 2)")
+    assert [(e.line, e.code) for e in errors] == [(2, "too_deep")]
+
+
+def test_the_token_cap_is_far_below_the_stack_it_protects():
+    # The longest chain the cap allows evaluates, with room to spare under the recursion
+    # limit; if the cap is raised past what Python can walk, this fails before a user does.
+    n = graph_spec.MAX_TOKENS // 2
+    assert graph_spec.evaluate("+".join(["1"] * n)) == n
+    assert n * 4 < sys.getrecursionlimit()
