@@ -61,13 +61,17 @@ def _refused_detail(refused: list[str]) -> str:
     )
 
 
-def _refuse_bad_graphs(chapters) -> None:
+def _refuse_bad_graphs(chapters, stored=()) -> None:
     """A graph block whose definition does not parse is refused with every reason,
-    each as "<chapter id>: line <n>: <rule>" (20261024-003)."""
+    each as "<chapter id>: line <n>: <rule>" (20261024-003). A block sent back with
+    the content it already has is not checked again, as with media: a definition that
+    got in by an import or a hand-edited file would otherwise make the note refuse
+    its own chapters unchanged (20261027-021)."""
+    unchanged = {(c.id, c.content) for c in stored if c.type == "graph"}
     reasons = [
         f"{ch.id}: {err}"
         for ch in chapters or []
-        if ch.type == "graph"
+        if ch.type == "graph" and (ch.id, ch.content) not in unchanged
         for err in graph_spec.validate(ch.content)
     ]
     if reasons:
@@ -89,7 +93,8 @@ async def create_note(payload: NoteCreate, service: NoteService = Depends(get_no
 async def update_note(
     note_id: str, payload: NoteUpdate, service: NoteService = Depends(get_note_service)
 ):
-    _refuse_bad_graphs(payload.chapters)
+    current = service.get_note(note_id)
+    _refuse_bad_graphs(payload.chapters, current.chapters if current else ())
     note, gone = service.update_note_checked(note_id, payload)
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
