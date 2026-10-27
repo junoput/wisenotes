@@ -177,7 +177,8 @@ state below has a test in `tests/test_deploy.py` that reaches it with a real
 | after the writer moved to `-next`, before the slot did | `<name>` serves the slot; `.writer` names `-next` |
 | in the hand-back, after the writer moved back, before the slot did | the slot points at `-next`, which may not write |
 | a reboot after the slot moved | the unit starts `<name>`, unable to write; the slot's config survived and points at a `-next` that is not running |
-| a data directory restored from a backup taken mid-hand-over | `.writer` names a container that is gone |
+| a data directory restored from a backup taken mid-hand-over | `.writer` names a container that is gone, or `.writer.lock` is missing |
+| a reboot after `:current` was retagged, before `<name>` was swapped | the old image serves while `:current` names the new one (see the last bullet below) |
 
 Three things bring it back:
 
@@ -194,9 +195,24 @@ Three things bring it back:
   (status 130). If `<name>` does not serve but `<name>-next` serves the slot,
   `<name>-next` is made the writer instead. A `SIGKILL`, or a stop that runs
   out of time, skips the trap, and then the next preview pass's `--check`
-  settles.
+  settles. `demo@wisenotes-preview` has `TimeoutStopUSec=15s` and
+  `KillMode=control-group`, so the trap runs on short timeouts: a drain of 3 s
+  (not `WISENOTES_DRAIN_SECONDS`), 3 s for the `tailscale serve` command, 2 s
+  per slot read, one read after a repoint and 1 s per probe. It does the same
+  steps and waits less for each; what it cannot finish says `NOT SETTLED`.
+  Its worst case, every step timing out, is longer than 15 s, so a stop can
+  still end in `SIGKILL`. After `demos down` nothing runs `--check` until the
+  preview unit starts again (`demos up`), and until then a half-finished
+  hand-over refuses writes. That is the same state the table lists, and the
+  first pass after `demos up` repairs it.
 - **`deploy.sh status`** prints `writer: <name>`, or `writer: NOT <name>` with
   the name the file holds.
+
+- **`preview.sh`, after `--check`**, compares the image that serves with the
+  image `:current` names. If they differ, a hand-over was cut short after the
+  new image passed its smoke, and the tip's "failed smoke earlier" marker would
+  keep it from ever being deployed: the marker is cleared and the pass deploys
+  the tip again.
 
 A slot repoint is judged by reading the slot again, up to three times, and
 never by the command's exit status. A `tailscale serve` that applied and then
@@ -204,17 +220,32 @@ timed out has applied, and treating it as not applied put the writer on one
 container and the slot on the other. If the slot cannot be confirmed on the
 spare port, the deploy settles back on `<name>` and says `NOT deployed`.
 
+The slot read has three answers: a target, `nothing` (the slot exists and
+proxies nowhere) and `cannot be read` (no `jq`, `tailscale` failed or timed
+out, or its output is not JSON). An unreadable slot is never taken for an
+empty one: `<name>-next` is kept, a deploy that ends there prints `NOT
+CONFIRMED` and exits 1 instead of claiming `no gap`, and `--check` lists the
+slot as a difference. The same holds for a writer: a container whose writer
+label cannot be read is not given a name, and `.writer` is never written empty.
+
 ### One deploy at a time
 
 Every mode except `status` and `--dry-run` takes a lock for the whole run. The
-lock is the directory `$XDG_RUNTIME_DIR/wisenotes-deploy-<name>.lock`, with
-the owner's pid inside, and can be overridden with `WISENOTES_DEPLOY_LOCK`.
-A second `deploy.sh`, by hand or from the loop, prints `another deploy.sh for
-<name> is running (pid N, lock ...)` and exits 75. `--check` exits 0 quietly
-while the lock is held, because a deploy in progress is not a state to
-repair. A lock whose owner has died (`SIGKILL`) is taken over. It is a
-directory, not a `flock`, because a flock's descriptor is inherited by every
-child, and conmon outlives the script by days.
+lock is an `flock` on the file `$XDG_RUNTIME_DIR/wisenotes-deploy-<name>.lock`
+(overridden by `WISENOTES_DEPLOY_LOCK`), held on fd 9 for the life of the
+script, with the owner's pid written into the file for the message. A second
+`deploy.sh`, by hand or from the loop, prints `another deploy.sh for <name> is
+running (pid N, lock ...)` and exits 75. `--check` exits 0 quietly while the
+lock is held, because a deploy in progress is not a state to repair. The kernel
+drops the lock when its process dies, however it dies, so there is no stale
+lock to take over and so nothing to race: an earlier version renamed a
+directory into place and took over a dead owner's by moving it aside, and two
+runs both held the lock in 17 of 300 runs with two racers (review F3). The
+file is never removed, which would itself be a race. A flock's descriptor is
+inherited by children, and conmon outlives the script by days; the script's
+`run` closes fd 9, and the fds that carry its own output, for every command it
+starts, and `tests/test_deploy.py` checks that a `podman start` has none of
+them open.
 
 ## What happens on a bad deploy
 

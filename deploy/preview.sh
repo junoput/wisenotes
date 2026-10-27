@@ -96,7 +96,7 @@ checkout_tip() {
 }
 
 pass() {
-  local tip serving tried
+  local tip serving tried current
   # Judged before the fetch, so a deaf container is restarted even while
   # origin is unreachable.
   if [ -n "${WISENOTES_PREVIEW_JUDGED:-}" ]; then
@@ -115,6 +115,14 @@ pass() {
   # can leave the container answering while it refuses every write. Quiet at
   # rest, and a no-op while a deploy holds the lock (20261022-036 review).
   "$here/deploy.sh" --check || echo "preview: the rest-state repair did not finish; see the lines above"
+  # A hand-over cut short between the retag and the container swap (a reboot) leaves
+  # the OLD image serving while :current names the new one; the tip's "failed smoke
+  # earlier" marker would then keep it from ever being deployed (20261022-036 F6).
+  current=$(podman image inspect -f '{{index .Labels "wisenotes.sha"}}' "$NAME:current" 2>/dev/null || true)
+  if [ -n "$serving" ] && [ -n "$current" ] && [ "$current" != "$serving" ]; then
+    echo "preview: $NAME serves $serving but its current image is $current, which passed smoke before a deploy was cut short; deploying again"
+    rm -f "$last_tried_file"
+  fi
   git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping ${serving:-nothing}"; return 0; }
   tip=$(git -C "$repo" rev-parse --short "origin/$BRANCH")
   tried=$(cat "$last_tried_file" 2>/dev/null || true)

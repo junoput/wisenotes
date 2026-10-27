@@ -198,3 +198,31 @@ def test_harness_control_an_allowed_write_logs_no_refusal(client, fenced, caplog
     with caplog.at_level("WARNING", logger="app.write_fence"):
         client.post("/notes", data={"title": "Kept"})
     assert not [r for r in caplog.records if r.name == "app.write_fence"]
+
+
+def request_records(caplog):
+    return [r for r in caplog.records if r.name == "wisenotes.request"]
+
+
+def test_a_planned_fence_refusal_is_a_warning_not_an_error(client, fenced, caplog):
+    # 036 review F5: the 503 of a hand-over is not a failure of ours, so it must not
+    # page anyone as ERROR "POST /notes 503".
+    name_writer(fenced, "the-other-container")
+    with caplog.at_level("INFO", logger="wisenotes.request"):
+        assert client.post("/notes", data={"title": "Lost"}).status_code == 503
+    (record,) = request_records(caplog)
+    assert (record.levelname, record.getMessage()) == ("WARNING", "POST /notes 503")
+
+
+def test_harness_control_a_real_5xx_is_still_an_error(client, fenced, service, caplog, monkeypatch):
+    # the quiet side of F5: only the fence's own refusal is downgraded
+    name_writer(fenced, "me")
+
+    def broken(*args, **kwargs):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(service, "create_note", broken)
+    with caplog.at_level("INFO", logger="wisenotes.request"):
+        assert client.post("/notes", data={"title": "Boom"}).status_code == 500
+    (record,) = request_records(caplog)
+    assert record.levelname == "ERROR"

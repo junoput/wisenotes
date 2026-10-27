@@ -35,6 +35,9 @@ async def write_fence_check(request: Request, call_next):
         return await call_next(request)
     fd, allowed = await run_in_threadpool(write_fence.acquire, get_settings().data_dir)
     if not allowed:
+        # Planned, and already logged by write_fence with its reason: the request
+        # record reads this and logs WARN, not the ERROR a real 5xx gets.
+        request.scope[logs.PLANNED_REFUSAL] = True
         return PlainTextResponse(
             "Wisenotes is switching to a new version and this copy no longer saves changes. "
             "Try again in a moment.",
@@ -98,7 +101,9 @@ async def log_request(request: Request, call_next):
             route = request.scope.get("route")
             status = response.status_code
             request_logger.log(
-                logs.request_severity(status),
+                logs.request_severity(
+                    status, planned=bool(request.scope.get(logs.PLANNED_REFUSAL))
+                ),
                 "%s %s %s",
                 request.method,
                 path,
