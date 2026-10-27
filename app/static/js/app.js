@@ -3,6 +3,7 @@
  * pane state, confirm dialogs, CodeMirror in code-block editors, KaTeX for
  * math blocks, and re-runs those after htmx swaps. */
 import { initDragAndDrop } from '/static/js/drag-drop.js';
+import { renderGraphs, redrawOnThemeChange } from '/static/js/graph.js';
 
 const NARROW = '(max-width: 960px)';
 const isNarrow = () => window.matchMedia(NARROW).matches;
@@ -211,6 +212,12 @@ async function mountCodeEditors() {
   }
 }
 
+// Graph blocks: JSXGraph is loaded the first time one is on the page, like CodeMirror.
+function drawGraphs() {
+  renderGraphs(loadOnce).catch((err) => console.warn('graphs not drawn, their definitions stay as text', err));
+}
+redrawOnThemeChange(loadOnce);
+
 function renderMath() {
   if (typeof katex === 'undefined') return;
   for (const el of document.querySelectorAll('.math-block-display .math-formula-content')) {
@@ -235,6 +242,7 @@ function enhance() {
   positionDropdown();
   mountCodeEditors();
   renderMath();
+  drawGraphs();
   initDragAndDrop();
 }
 
