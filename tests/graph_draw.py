@@ -25,6 +25,7 @@ import time
 import uuid
 from pathlib import Path
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 SPEC = (
@@ -146,7 +147,7 @@ def drive(p, base, js, shots):
             ).is_visible()
             checks["the point's name is SVG text, not an HTML label"] = (
                 page.locator(".graph-board svg text", has_text="P").count() >= 1
-                and page.locator(".graph-board .JXGtext").count() == 0
+                and page.locator(".graph-board div.JXGtext").count() == 0
             )
             checks["JessieCode compile is off"] = page.evaluate(
                 "() => window.JXG.Options.jc.compile === false"
@@ -162,14 +163,22 @@ def drive(p, base, js, shots):
             # a gesture on the board is not a request to edit
             page.locator(".graph-board").click(position={"x": 60, "y": 60})
             page.wait_for_timeout(500)
-            checks["clicking the board does not open the editor"] = (
-                page.locator("form.chapter-edit-form").count() == 0
-            )
+            opened = page.locator("form.chapter-edit-form").count() != 0
+            checks["clicking the board does not open the editor"] = not opened
+            if opened:  # a failed check must not stop the run: back to the page
+                page.goto(f"{base}/notes/{good}")
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(1500)
             if shots:
                 page.screenshot(path=str(Path(shots) / "graph-dark.png"), full_page=False)
             page.locator(".graph-source-caption").click()
-            page.wait_for_selector("form.chapter-edit-form", timeout=4000)
-            checks["clicking beside the board opens the editor"] = True
+            try:
+                page.wait_for_selector("form.chapter-edit-form", timeout=4000)
+            except PlaywrightTimeout:
+                pass
+            checks["clicking beside the board opens the editor"] = (
+                page.locator("form.chapter-edit-form").count() == 1
+            )
             checks["no CSP violation"] = page.evaluate("() => window.__csp.length") == 0
             checks["no console error or uncaught error"] = not problems
 

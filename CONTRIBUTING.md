@@ -93,6 +93,22 @@ review criterion, checked per change:
   Expected: `VERDICT: PASS` in both arms. Removing the `BLOCK_SAVE` clause from
   app.js gives `VERDICT: FAIL reasons shown` in the JS-on arm.
 
+- A graph block is drawn by JSXGraph under the app's real Content-Security-Policy
+  (no `unsafe-eval`), and nothing but a browser shows whether it is. `tests/graph_draw.py`
+  drives it against a running server, scripts off and on, and exits 1 on a failed
+  check: the board draws a curve and a point, JessieCode compiling is off, a slider moves
+  the curve, no CSP violation or console error, a click on the board does not open the
+  editor, hostile comment text is not turned into markup, and a definition with errors
+  draws nothing and lists its lines. Run it after a change to `graph.js`, `graph-spec.js`
+  or the vendored library (`--shots DIR` saves a screenshot in the dark palette):
+
+  ```sh
+  .venv/bin/python tests/graph_draw.py http://127.0.0.1:8000
+  ```
+
+  The JS parser is also run by `pytest` (it needs `node`): `tests/test_graph_spec_js.py`
+  gives it the same `tests/graph_spec_cases.json` as the Python parser.
+
 ### The JavaScript floor
 
 Fourteen script files are tracked, and that is the floor while CodeMirror
