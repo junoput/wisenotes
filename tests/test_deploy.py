@@ -1483,3 +1483,21 @@ def test_the_trap_settles_inside_systemds_stop_timeout(beside):
     assert r.returncode == 130, r.stdout + r.stderr
     assert took < 12, (took, r.stdout)  # the full drain alone is 20 s
     assert "not settled" in r.stdout and "NOT SETTLED" in r.stdout  # it says so; --check repairs it
+
+
+def test_an_unreadable_slot_at_otherwise_rest_is_listed_not_ignored(beside):
+    # F1: nothing else is wrong (no -next, the writer is right): the slot alone cannot be read
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert "cannot be confirmed to point at wisenotes on 20250" in c.stdout
+    assert not restarted(beside)
+
+
+def test_a_deploy_does_not_go_beside_when_the_slot_cannot_be_read(beside):
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in place" in r.stdout and "tailnet slot 8094 cannot be read" in r.stdout
