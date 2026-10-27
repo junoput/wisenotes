@@ -58,6 +58,14 @@ def test_light_text_meets_wcag_aa_on_the_page_surfaces():
     assert contrast(p["--code-fg"], p["--code-bg"]) >= 4.5
 
 
+def test_the_formula_source_caption_is_readable_in_both_themes():
+    # .math-source-caption draws --muted on a math block: --field, or --card on hover.
+    dark, light = block(":root"), light_chosen()
+    for p in (dark, light):
+        for bg in ("--field", "--card"):
+            assert contrast(p["--muted"], p[bg]) >= 4.5, (bg, p[bg])
+
+
 def test_light_delete_button_is_readable():
     # .btn.danger draws --danger text on a .btn, whose light background is --raised.
     # With #dc2626 that pair was 3.92:1, measured in the browser (20261019).

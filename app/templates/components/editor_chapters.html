@@ -34,7 +34,7 @@
           {% if chapter.type == 'code' %}
             <pre class="block-content code-block-display" data-language="{{ chapter.language or 'python' }}"><code>{{ chapter.content }}</code></pre>
           {% elif chapter.type == 'math' %}
-            <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}"><div class="math-formula-content">{{ chapter.content }}</div></div>
+            <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}"><div class="math-source-caption">Formula source</div><div class="math-formula-content">{{ chapter.content }}</div></div>
           {% elif chapter.type == 'media' %}
             <div class="block-content media-block-display">
               {% if chapter.content|media_kind in ('image', 'inline') %}

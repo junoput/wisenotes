@@ -215,7 +215,11 @@ function renderMath() {
     const formula = el.textContent.trim();
     if (!formula) continue;
     const displayMode = el.parentElement.dataset.language !== 'asciimath';
-    try { katex.render(formula, el, { displayMode, throwOnError: false }); el._rendered = true; }
+    try {
+      katex.render(formula, el, { displayMode, throwOnError: false });
+      el._rendered = true;
+      el.parentElement.classList.add('math-rendered');
+    }
     catch (err) { el.textContent = formula; }
   }
 }
