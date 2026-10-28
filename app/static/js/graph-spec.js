@@ -293,6 +293,19 @@ const FUNCTION_DEF = new RegExp(`^(${N})${B}\\(${B}(${N})${B}\\)${B}=(.*)$`, 's'
 const ASSIGN = new RegExp(`^(${N})${B}=(.*)$`, 's');
 const SLIDER = new RegExp(`^slider${B}\\((.*)\\)${B}$`, 's');
 const POINT = new RegExp(`^\\((.*)\\)${B}$`, 's');
+const CURVE_RANGE = new RegExp(`^${B},${B}t[ \\t\\r]+in[ \\t\\r]+([^ \\t\\r]+)${B}$`, 's');
+const CURVE_FORM = 'a curve is written c(t) = (x, y), t in 0..2*pi';
+
+/** Index of the ')' that closes the '(' at the start of text; -1 when there is none. */
+function matchingParen(text) {
+  if (!text.startsWith('(')) return -1;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')' && --depth === 0) return i;
+  }
+  return -1;
+}
 
 function splitTop(text) {
   const parts = [];
@@ -309,7 +322,7 @@ function splitTop(text) {
 
 class Checker {
   constructor() {
-    this.spec = { view: null, sliders: new Map(), functions: new Map(), points: new Map(), errors: [] };
+    this.spec = { view: null, sliders: new Map(), functions: new Map(), points: new Map(), curves: new Map(), errors: [] };
     this.kinds = new Map(); // every name defined, and what it is
   }
 
@@ -354,7 +367,7 @@ class Checker {
     if (!stripped) return;
     if (stripped === 'view' || /^view[ \t\r]/.test(stripped)) return this.view(stripped);
     let m = FUNCTION_DEF.exec(stripped);
-    if (m) return this.function(m[1], m[2], m[3]);
+    if (m) return m[2] === 't' ? this.curve(m[1], m[3]) : this.function(m[1], m[2], m[3]);
     m = ASSIGN.exec(stripped);
     if (m) {
       const name = m[1];
@@ -367,7 +380,8 @@ class Checker {
     }
     throw new Refused(
       'statement',
-      'not a statement: expected view, a slider, a function f(x) = ... or a point P = (x, y)',
+      'not a statement: expected view, a slider, a function f(x) = ..., a curve ' +
+        'c(t) = (x, y), t in a..b, or a point P = (x, y)',
     );
   }
 
@@ -437,7 +451,9 @@ class Checker {
   }
 
   function(name, variable, body) {
-    if (variable !== 'x') throw new Refused('function_variable', `a function is written ${name}(x) = ...`);
+    if (variable !== 'x') {
+      throw new Refused('function_variable', `a function is written ${name}(x) = ..., a curve ${name}(t) = (x, y), t in a..b`);
+    }
     if (FUNCTIONS.has(name)) throw new Refused('reserved', `${name} is a built-in function and cannot be redefined`);
     const compiled = this.expression(strip(body), 'x');
     this.define(name, 'function');
@@ -448,6 +464,33 @@ class Checker {
     };
     fn.cost = compiled.cost;
     this.spec.functions.set(name, fn);
+  }
+
+  curve(name, body) {
+    if (FUNCTIONS.has(name)) throw new Refused('reserved', `${name} is a built-in function and cannot be redefined`);
+    const text = strip(body);
+    const close = matchingParen(text);
+    const tail = close > 0 ? CURVE_RANGE.exec(text.slice(close + 1)) : null;
+    if (!tail) throw new Refused('curve_form', CURVE_FORM);
+    const coords = splitTop(text.slice(1, close)).map(strip);
+    if (coords.length !== 2) throw new Refused('curve_point', 'a curve has two coordinates: c(t) = (x, y), t in a..b');
+    const at = tail[1].indexOf('..');
+    if (at < 0) throw new Refused('curve_range', 'a curve needs a range for t, as t in 0..2*pi');
+    const lo = this.constant(tail[1].slice(0, at));
+    const hi = this.constant(tail[1].slice(at + 2));
+    if (!(lo < hi)) throw new Refused('curve_range', 'the range of t must go from low to high');
+    const [fx, fy] = coords.map((c) => this.expression(c, 't'));
+    this.define(name, 'curve');
+    const at1 = (compiled) => {
+      const fn = (t, env) => {
+        const inner = Object.create(env); // env's sliders, and t here only
+        inner.t = t;
+        return compiled(inner);
+      };
+      fn.cost = compiled.cost;
+      return fn;
+    };
+    this.spec.curves.set(name, { x: at1(fx), y: at1(fy), lo, hi });
   }
 
   point(name, inner) {

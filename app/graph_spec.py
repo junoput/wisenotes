@@ -11,11 +11,14 @@ instead of storing something the graph cannot draw. Slice 1 of the plan on
     f(x) = a*sin(x)
     P = (1, 2)
     Q = (3, f(3))
+    c(t) = (2*cos(3*t), 2*sin(2*t)), t in 0..2*pi
 
 One statement per line. Expressions allow numbers, + - * / ^ and parentheses, the
 functions in FUNCTIONS, the constants pi and e, the sliders and functions already
-defined above the line, and, inside f(x) = ..., the variable x. Nothing else:
-no attribute access, no implicit multiplication (write 2*x, not 2x).
+defined above the line, inside f(x) = ... the variable x, and inside a curve c(t) = ...
+the variable t. Nothing else: no attribute access, no implicit multiplication (write
+2*x, not 2x). A curve's range, like a view's, is written without spaces and is fixed
+by the text alone (numbers and constants, no slider): t in 0..2*pi.
 
 USER TEXT IS NEVER EVALUATED AS CODE. An expression is parsed by the recursive
 descent below and compiled to Python closures over the math module. The JS
@@ -106,11 +109,22 @@ class Slider:
 
 
 @dataclass
+class Curve:
+    """c(t) = (x, y), t in lo..hi: x and y take the parameter and the sliders' values."""
+
+    x: Callable[[float, dict[str, float]], float]
+    y: Callable[[float, dict[str, float]], float]
+    lo: float
+    hi: float
+
+
+@dataclass
 class GraphSpec:
     view: View | None = None
     sliders: dict[str, Slider] = field(default_factory=dict)
     functions: dict[str, Callable[[float, dict[str, float]], float]] = field(default_factory=dict)
     points: dict[str, tuple[Callable[[dict[str, float]], float], ...]] = field(default_factory=dict)
+    curves: dict[str, Curve] = field(default_factory=dict)
     errors: list[SpecError] = field(default_factory=list)
 
 
@@ -463,6 +477,23 @@ FUNCTION_DEF = re.compile(rf"({_N}){_B}\({_B}({_N}){_B}\){_B}=(.*)")
 ASSIGN = re.compile(rf"({_N}){_B}=(.*)")
 SLIDER = re.compile(rf"slider{_B}\((.*)\){_B}", re.S)
 POINT = re.compile(rf"\((.*)\){_B}", re.S)
+CURVE_RANGE = re.compile(rf"{_B},{_B}t{_B_SPLIT}in{_B_SPLIT}([^ \t\r]+){_B}")
+CURVE_FORM = "a curve is written c(t) = (x, y), t in 0..2*pi"
+
+
+def _matching_paren(text: str) -> int:
+    """Index of the ')' that closes the '(' at the start of text; -1 when there is none."""
+    if not text.startswith("("):
+        return -1
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
 
 
 def _split_top(text: str) -> list[str]:
@@ -527,6 +558,8 @@ class _Checker:
             return self.view(stripped)
         m = FUNCTION_DEF.fullmatch(stripped)
         if m:
+            if m.group(2) == "t":
+                return self.curve(m.group(1), m.group(3))
             return self.function(m.group(1), m.group(2), m.group(3))
         m = ASSIGN.fullmatch(stripped)
         if m:
@@ -543,7 +576,8 @@ class _Checker:
             )
         raise _Refused(
             "statement",
-            "not a statement: expected view, a slider, a function f(x) = ... or a point P = (x, y)",
+            "not a statement: expected view, a slider, a function f(x) = ..., a curve "
+            "c(t) = (x, y), t in a..b, or a point P = (x, y)",
         )
 
     def view(self, text: str) -> None:
@@ -611,7 +645,10 @@ class _Checker:
 
     def function(self, name: str, variable: str, body: str) -> None:
         if variable != "x":
-            raise _Refused("function_variable", f"a function is written {name}(x) = ...")
+            raise _Refused(
+                "function_variable",
+                f"a function is written {name}(x) = ..., a curve {name}(t) = (x, y), t in a..b",
+            )
         if name in FUNCTIONS:
             raise _Refused("reserved", f"{name} is a built-in function and cannot be redefined")
         compiled = self.expression(body.strip(BLANK), variable="x")
@@ -619,6 +656,33 @@ class _Checker:
         fn = lambda x, env, c=compiled: c({**env, "x": x})  # noqa: E731
         fn.cost = compiled.cost  # type: ignore[attr-defined]
         self.spec.functions[name] = fn
+
+    def curve(self, name: str, body: str) -> None:
+        if name in FUNCTIONS:
+            raise _Refused("reserved", f"{name} is a built-in function and cannot be redefined")
+        text = body.strip(BLANK)
+        close = _matching_paren(text)
+        tail = CURVE_RANGE.fullmatch(text[close + 1 :]) if close > 0 else None
+        if tail is None:
+            raise _Refused("curve_form", CURVE_FORM)
+        coords = [c.strip(BLANK) for c in _split_top(text[1:close])]
+        if len(coords) != 2:
+            raise _Refused("curve_point", "a curve has two coordinates: c(t) = (x, y), t in a..b")
+        lo_text, sep, hi_text = tail.group(1).partition("..")
+        if not sep:
+            raise _Refused("curve_range", "a curve needs a range for t, as t in 0..2*pi")
+        lo, hi = self.constant(lo_text), self.constant(hi_text)
+        if not lo < hi:
+            raise _Refused("curve_range", "the range of t must go from low to high")
+        fx, fy = (self.expression(c, variable="t") for c in coords)
+        self.define(name, "curve")
+
+        def at(compiled):
+            fn = lambda t, env, c=compiled: c({**env, "t": t})  # noqa: E731
+            fn.cost = compiled.cost  # type: ignore[attr-defined]
+            return fn
+
+        self.spec.curves[name] = Curve(at(fx), at(fy), lo, hi)
 
     def point(self, name: str, inner: str) -> None:
         coords = [c.strip(BLANK) for c in _split_top(inner)]

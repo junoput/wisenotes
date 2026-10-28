@@ -67,6 +67,20 @@ function drawBoard(box, spec, env, colors, label, work) {
       fixed: true,
     });
   }
+  for (const [name, c] of spec.curves) {
+    if (!admitCurve(work)) continue;
+    board.create(
+      'curve',
+      [(t) => (overBudget(work) ? NaN : finite(c.x(t, env))), (t) => (overBudget(work) ? NaN : finite(c.y(t, env))), c.lo, c.hi],
+      {
+        strokeColor: colors.curves[n++ % colors.curves.length],
+        strokeWidth: 2,
+        highlight: false,
+        withLabel: false,
+        fixed: true,
+      },
+    );
+  }
   for (const [name, [px, py]] of spec.points) {
     board.create('point', [() => (overBudget(work) ? NaN : finite(px(env))), () => (overBudget(work) ? NaN : finite(py(env)))], {
       name, // an identifier, by the grammar
@@ -103,7 +117,7 @@ function sliderControls(spec, env, onChange) {
 }
 
 function describe(spec) {
-  const names = [...spec.functions.keys(), ...spec.points.keys()];
+  const names = [...spec.functions.keys(), ...spec.curves.keys(), ...spec.points.keys()];
   return names.length ? `Graph of ${names.join(', ')}` : 'Graph';
 }
 
@@ -132,7 +146,7 @@ export async function renderGraphs(loadOnce) {
     const source = figure.querySelector('.graph-spec')?.textContent ?? '';
     const spec = parse(source);
     if (spec.errors.length) { showErrors(figure, spec.errors); continue; }
-    if (spec.functions.size + spec.points.size === 0) continue; // nothing to draw: the text stays
+    if (spec.functions.size + spec.curves.size + spec.points.size === 0) continue; // nothing to draw: the text stays
     drawable.push({ figure, spec });
   }
   if (!drawable.length) return;
