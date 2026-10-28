@@ -83,8 +83,9 @@ review criterion, checked per change:
 - The one thing a server-side test cannot see is app.js letting a refused graph
   save (a 400 with the edit form) through htmx. `tests/graph_refusal.py` drives
   it in both arms against the same running server, and exits 1 when the reasons
-  do not show. It is not part of `pytest`; run it after any change to the
-  `htmx:beforeSwap` handler in app.js:
+  do not show. `tests/test_browser_checks.py` runs it, and `tests/graph_draw.py`, as part of
+  `pytest` whenever a chromium launches (it skips, saying why, when none does: CI). To run it by hand
+  after a change to the `htmx:beforeSwap` handler in app.js:
 
   ```sh
   .venv/bin/python tests/graph_refusal.py http://127.0.0.1:8000
@@ -93,9 +94,25 @@ review criterion, checked per change:
   Expected: `VERDICT: PASS` in both arms. Removing the `BLOCK_SAVE` clause from
   app.js gives `VERDICT: FAIL reasons shown` in the JS-on arm.
 
+- A graph block is drawn by JSXGraph under the app's real Content-Security-Policy
+  (no `unsafe-eval`), and nothing but a browser shows whether it is. `tests/graph_draw.py`
+  drives it against a running server, scripts off and on, and exits 1 on a failed
+  check: the board draws a curve and a point, JessieCode compiling is off, a slider moves
+  the curve, no CSP violation or console error, a click on the board does not open the
+  editor, hostile comment text is not turned into markup, and a definition with errors
+  draws nothing and lists its lines. Run it after a change to `graph.js`, `graph-spec.js`
+  or the vendored library (`--shots DIR` saves a screenshot in the dark palette):
+
+  ```sh
+  .venv/bin/python tests/graph_draw.py http://127.0.0.1:8000
+  ```
+
+  The JS parser is also run by `pytest` (it needs `node`): `tests/test_graph_spec_js.py`
+  gives it the same `tests/graph_spec_cases.json` as the Python parser.
+
 ### The JavaScript floor
 
-Eleven script files are tracked, and that is the floor while CodeMirror
+Fourteen script files are tracked, and that is the floor while CodeMirror
 stays, not a number to drive down:
 
 | file | why it stays |
@@ -103,10 +120,12 @@ stays, not a number to drive down:
 | `static/vendor/htmx/htmx.min.js` | the enhancement layer itself: fragments instead of full reloads |
 | `static/js/app.js` (~190 lines) | pane state, keyboard, confirms, mounts CodeMirror and KaTeX, re-runs after swaps |
 | `static/js/drag-drop.js` | drag-to-reorder; the reorder buttons are the plain path it enhances |
+| `static/js/graph.js`, `static/js/graph-spec.js` | the graph block: draws a definition with JSXGraph, and the JS parser that shares `tests/graph_spec_cases.json` with `app/graph_spec.py`; without scripts the block shows its definition |
+| `static/vendor/jsxgraph/jsxgraphcore.js` | JSXGraph 1.14.1, unmodified, loaded the first time a graph is on the page; `jc.compile` is false (see its README) |
 | `static/js/init-layout.js` (8 lines) | sets the sidebar width before first paint; must be a blocking script, and CSP forbids inline scripts, so it is a file |
 | `static/vendor/codemirror/` (7 files) | editor core, close-brackets, and one mode per offered language (python, javascript for JS and TS, clike for Java, go, rust) |
 
-Delete CodeMirror and the floor is four. That is a product decision (the
+Delete CodeMirror and the floor is seven. That is a product decision (the
 code editor becomes a plain textarea, which already works with scripts
 off), not a cleanup; make it on a ticket, not in passing.
 

@@ -156,6 +156,65 @@ a { color: var(--accent); }
   font-size: 13px;
 }
 
+.graph-live {
+  margin: 0 0 6px;
+}
+
+.graph-board {
+  width: 100%;
+  height: 320px;
+  max-height: 70vh;
+  /* !important: JSXGraph writes touch-action: none into the element's style attribute
+     (on init and on every pointerdown), which would stop one finger from scrolling the page. */
+  touch-action: pan-y !important;
+  /* JSXGraph's own sheet (.jxgbox) is not applied to the container: the board takes the page's palette here. */
+  background-color: var(--field);
+  border: 1px solid var(--border);
+}
+
+.graph-block-display.graph-rendered .graph-spec {
+  display: none;
+}
+
+.graph-sliders {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.graph-slider {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) 7ch;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.graph-slider input[type="range"] {
+  width: 100%;
+  min-height: 32px;
+  accent-color: var(--accent);
+}
+
+.graph-slider output {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.graph-errors {
+  margin: 0 0 6px;
+  padding-left: 20px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
 .graph-help pre {
   white-space: pre-wrap;
   font-size: 12px;
@@ -1171,3 +1230,10 @@ details#note-list:not([open]) .pane-title { display: none; }
 details#note-list:not([open]) .sidebar-toggle-btn { transform: rotate(180deg); }
 .layout:has(details#note-list:not([open])) { --notes-col: 48px; }  /* CSS-only narrow rail; JS sets the same variable */
 .noscript-note { margin: 0; padding: 8px 16px; background: var(--raised); color: var(--text); font-size: 13px; border-bottom: 1px solid var(--border); }
+
+/* After the narrow-pane block above: tests/test_narrow_layout.py reads the first media block. */
+@media (max-width: 960px) {
+  .graph-board {
+    height: 260px;
+  }
+}

@@ -3,6 +3,7 @@
  * pane state, confirm dialogs, CodeMirror in code-block editors, KaTeX for
  * math blocks, and re-runs those after htmx swaps. */
 import { initDragAndDrop } from '/static/js/drag-drop.js';
+import { renderGraphs, redrawOnThemeChange } from '/static/js/graph.js';
 
 const NARROW = '(max-width: 960px)';
 const isNarrow = () => window.matchMedia(NARROW).matches;
@@ -168,13 +169,26 @@ const CM = '/static/vendor/codemirror';
 const CM_MODE = { python: 'python', javascript: 'javascript', typescript: 'javascript', go: 'go', rust: 'rust', java: 'clike' };
 const CM_MIME = { python: 'text/x-python', javascript: 'text/javascript', typescript: 'text/typescript', go: 'text/x-go', rust: 'text/x-rustsrc', java: 'text/x-java' };
 
+// One promise per file: a second caller waits for the load event of the first, it does
+// not get a resolved promise because the tag exists. A failed load is forgotten (the
+// tag is removed) so that a later call tries again.
+const loading = new Map();
 function loadOnce(tag, attrs) {
   const key = attrs.src || attrs.href;
-  if (document.querySelector(`${tag}[${attrs.src ? 'src' : 'href'}="${key}"]`)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const el = Object.assign(document.createElement(tag), attrs, { onload: resolve, onerror: reject });
+  if (loading.has(key)) return loading.get(key);
+  const promise = new Promise((resolve, reject) => {
+    const el = Object.assign(document.createElement(tag), attrs, {
+      onload: () => resolve(),
+      onerror: () => {
+        loading.delete(key);
+        el.remove();
+        reject(new Error(`could not load ${key}`));
+      },
+    });
     document.head.appendChild(el);
   });
+  loading.set(key, promise);
+  return promise;
 }
 
 async function loadCodeMirror(lang) {
@@ -211,6 +225,12 @@ async function mountCodeEditors() {
   }
 }
 
+// Graph blocks: JSXGraph is loaded the first time one is on the page, like CodeMirror.
+function drawGraphs() {
+  renderGraphs(loadOnce).catch((err) => console.warn('graphs not drawn, their definitions stay as text', err));
+}
+redrawOnThemeChange(loadOnce);
+
 function renderMath() {
   if (typeof katex === 'undefined') return;
   for (const el of document.querySelectorAll('.math-block-display .math-formula-content')) {
@@ -235,6 +255,7 @@ function enhance() {
   positionDropdown();
   mountCodeEditors();
   renderMath();
+  drawGraphs();
   initDragAndDrop();
 }
 

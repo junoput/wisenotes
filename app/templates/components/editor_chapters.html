@@ -37,7 +37,7 @@
             <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}">{% if chapter.content.strip() %}<div class="math-source-caption">Formula source</div>{% endif %}<div class="math-formula-content">{{ chapter.content }}</div></div>
           {% elif chapter.type == 'graph' %}
             {# Slice 1 of 20261022-064: the definition as text; slice 2 draws it. #}
-            <figure class="block-content graph-block-display"><figcaption class="graph-source-caption">Graph definition</figcaption><pre class="graph-spec">{{ chapter.content }}</pre></figure>
+            <figure class="block-content graph-block-display"><figcaption class="graph-source-caption">Graph definition</figcaption>{% set graph_problems = chapter.content|graph_errors %}{% if graph_problems %}<ul class="graph-errors" role="alert">{% for err in graph_problems %}<li>{{ err }}</li>{% endfor %}</ul>{% endif %}<pre class="graph-spec">{{ chapter.content }}</pre></figure>
           {% elif chapter.type == 'media' %}
             <div class="block-content media-block-display">
               {% if chapter.content|media_kind in ('image', 'inline') %}

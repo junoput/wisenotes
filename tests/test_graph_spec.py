@@ -97,6 +97,7 @@ def test_a_stack_overflow_is_an_error_on_its_line_and_never_escapes(monkeypatch)
     # the evaluator's stack on save. That must be a reported line, not a 500.
     chain = "+".join(["1"] * 5000)
     monkeypatch.setattr(graph_spec, "MAX_TOKENS", 10**6)
+    monkeypatch.setattr(graph_spec, "MAX_COST", 10**6)
     errors = graph_spec.validate(f"a = slider(0, 1)\nb = slider(0, {chain})\nc = slider(0, 2)")
     assert [(e.line, e.code) for e in errors] == [(2, "too_deep")]
 
