@@ -700,7 +700,7 @@ for c in "$S"/c/*; do
   [ -f "$c" ] || continue
   read -r id st p _ <"$c"
   [ "$p" = "$port" ] && [ "$st" = running ] || continue
-  if grep -qx "$id" "$S/bad" 2>/dev/null; then printf 500; else printf 200; fi
+  if grep -qx "$id" "$S/bad" 2>/dev/null || { grep -qx "$port" "$S/bad_port" 2>/dev/null && grep -q running "$S/c/wisenotes-next" 2>/dev/null; }; then printf 500; else printf 200; fi
   exit 0
 done
 printf 000; exit 7
@@ -1656,6 +1656,20 @@ def test_a_hand_back_that_returns_1_does_not_remove_a_healthy_name(beside):
     c = check(beside)  # the next pass hands it back
     assert c.returncode == 0, c.stdout + c.stderr
     at_rest(beside)
+
+
+def test_a_name_that_does_not_come_back_leaves_next_serving_and_the_exit_says_deployed(beside):
+    # bbb passes smoke beside, becomes :current, and then fails on $PORT (the stub answers 500
+    # on bad_port only while -next runs, so the deploy still goes beside): it IS deployed,
+    # -next serves it, and the exit is 3, not 1
+    serving_aaa(beside)
+    state_file(beside, "bad_port", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert (
+        "bbb IS DEPLOYED but serves from wisenotes-next" in r.stdout and "20250 is down" in r.stdout
+    )
+    assert next_is_kept(beside) and slot(beside).endswith(":20260")
 
 
 def test_settle_says_there_is_no_next_to_keep_when_there_is_none(beside):
