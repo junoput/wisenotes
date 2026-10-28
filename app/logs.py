@@ -8,7 +8,9 @@ collector to configure or to wait for (20261020-042).
 
 An exception record carries its type, a fixed reason (failure_reason, never the
 exception's own text), the stack frames without the final message line, and a
-fingerprint on the type and the innermost frame. The exception text is left
+fingerprint on the type and the innermost frame under app/ (a library frame such as
+pathlib's open() is the same whichever app function called it, and moves with the Python
+version; with no app frame it is the innermost frame). The exception text is left
 out because an OSError's message carries the data directory's paths, which are
 note titles.
 """
@@ -22,10 +24,12 @@ import sys
 import traceback
 from datetime import UTC
 from datetime import datetime
+from pathlib import Path
 
 from app.services.reasons import failure_reason
 
 SERVICE_NAME = "wisenotes"
+APP_DIR = Path(__file__).resolve().parent  # frames under here are the app's own
 ENVIRONMENTS = ("dev", "staging", "prod")
 
 # (severity_text, severity_number) by the stdlib level at or below which a record falls
@@ -60,9 +64,18 @@ def service_identity() -> dict[str, str]:
     }
 
 
+def _site(frames: traceback.StackSummary) -> str:
+    """file:function of the innermost frame under app/, else of the innermost frame."""
+    if not frames:
+        return "?"
+    inside = [f for f in frames if Path(f.filename).is_relative_to(APP_DIR)]
+    frame = (inside or frames)[-1]
+    return f"{frame.filename.rsplit('/', 1)[-1]}:{frame.name}"
+
+
 def _exception_fields(exc: BaseException, tb) -> dict[str, str]:
     frames = traceback.extract_tb(tb)
-    site = f"{frames[-1].filename.rsplit('/', 1)[-1]}:{frames[-1].name}" if frames else "?"
+    site = _site(frames)
     kind = f"{type(exc).__module__}.{type(exc).__qualname__}"
     stack = "".join(traceback.format_list(frames))
     return {
