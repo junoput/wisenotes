@@ -127,7 +127,7 @@ def test_jsxgraph_is_only_handed_closures_and_numbers():
     # a string term ('sin(a*x)') would go to JessieCode and be compiled with eval
     code = code_of("graph.js")
     creates = re.findall(r"board\.create\(\s*'(\w+)'\s*,\s*\[(.*?)\]\s*,", code, flags=re.S)
-    assert {kind for kind, _ in creates} == {"functiongraph", "point"}
+    assert {kind for kind, _ in creates} == {"functiongraph", "curve", "point"}
     for kind, args in creates:
         assert not re.search(r"['\"`]", args), (kind, args)
 

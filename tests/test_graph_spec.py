@@ -55,6 +55,13 @@ def test_a_definition_is_refused_on_exactly_its_lines(case):
                 check["view"]["x"],
                 check["view"]["y"],
             ]
+        elif "curve" in check:
+            curve = spec.curves[check["curve"]]
+            if "range" in check:
+                assert [curve.lo, curve.hi] == check["range"]
+            else:
+                got = [curve.x(check["t"], env), curve.y(check["t"], env)]
+                assert all(same(g, w) for g, w in zip(got, check["value"], strict=True)), got
         elif "function" in check:
             assert same(spec.functions[check["function"]](check["x"], env), check["value"])
         else:

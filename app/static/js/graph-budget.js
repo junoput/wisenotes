@@ -42,7 +42,7 @@ export function admitCurve(work) {
 /** What a board left out, for its hint; '' when nothing. */
 export function leftOutText(work) {
   const parts = [];
-  if (work.skipped) parts.push(`Only the first ${work.curves} of ${work.curves + work.skipped} functions are drawn.`);
+  if (work.skipped) parts.push(`Only the first ${work.curves} of ${work.curves + work.skipped} curves are drawn.`);
   if (work.overran) parts.push('Part of a graph is left out: it takes too much work.');
   return parts.join(' ');
 }

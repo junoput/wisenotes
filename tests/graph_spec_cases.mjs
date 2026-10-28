@@ -61,6 +61,14 @@ for (const c of cases.specs) {
     if (check.view) {
       const v = parsed.view ?? { x: [-5, 5], y: [-5, 5] };
       if (JSON.stringify([v.x, v.y]) !== JSON.stringify([check.view.x, check.view.y])) fail('check', c.name, `view ${JSON.stringify([v.x, v.y])}`);
+    } else if (check.curve) {
+      const curve = parsed.curves.get(check.curve);
+      if (check.range) {
+        if (JSON.stringify([curve.lo, curve.hi]) !== JSON.stringify(check.range)) fail('check', c.name, `range ${curve.lo}..${curve.hi}`);
+      } else {
+        const got3 = [curve.x(check.t, env), curve.y(check.t, env)];
+        if (!got3.every((g, i) => same(g, check.value[i]))) fail('check', c.name, `curve ${got3}`);
+      }
     } else if (check.function) {
       if (!same(parsed.functions.get(check.function)(check.x, env), check.value)) fail('check', c.name, 'function value');
     } else {

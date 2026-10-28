@@ -47,6 +47,7 @@ CHEAP = "f(x) = sin(x)\n"
 MANY = [CHEAP] * 40
 HEAVY = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(800))
 HEAVY_AND_CHEAP = [HEAVY, "a = slider(0, 3, value 1)\ng(x) = a*sin(x)\n"]
+CURVE = "a = slider(1, 4, value 2)\nc(t) = (2*cos(a*t), 2*sin(t)), t in 0..2*pi\nP = (2, 0)\n"
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -139,6 +140,33 @@ def check_sampling_is_bounded(browser, base, note):
     print(f"  (long tasks: {drawn:.0f} ms drawing, {total:.0f} ms with a pan)")
     return {
         f"sampling is bounded: long tasks under {LONG_TASK_LIMIT_MS} ms": total < LONG_TASK_LIMIT_MS
+    }
+
+
+def check_a_parametric_curve(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    problems = []
+    page.on(
+        "console", lambda m: problems.append(m.text) if m.type in ("error", "warning") else None
+    )
+    page.on("pageerror", lambda e: problems.append(str(e)))
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(800)
+        before = curve_d(page)
+        page.locator(".graph-slider input[type=range]").fill("3")
+        page.wait_for_timeout(500)
+        after = curve_d(page)
+        label = page.locator(".graph-board").get_attribute("aria-label") or ""
+    finally:
+        ctx.close()
+    return {
+        "a parametric curve is drawn": len(before) > 200,
+        "moving the slider changes the parametric curve": bool(before) and after != before,
+        "a parametric curve: no console error": not problems,
+        "a parametric curve is named in the board's label": label.startswith("Graph of c"),
     }
 
 
@@ -345,6 +373,7 @@ def drive(p, base, js, shots):
     slow = make_note(ctx, base, f"Graph slow {stamp}", SLOW)
     many = make_note(ctx, base, f"Graph many {stamp}", MANY)
     mixed = make_note(ctx, base, f"Graph mixed {stamp}", HEAVY_AND_CHEAP)
+    curve = make_note(ctx, base, f"Graph curve {stamp}", CURVE)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -450,11 +479,12 @@ def drive(p, base, js, shots):
                 "pre.graph-spec"
             ).is_visible()
             checks.update(check_sampling_is_bounded(browser, base, slow))
+            checks.update(check_a_parametric_curve(browser, base, curve))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
-        for nid in (good, hostile, broken, slow, many, mixed):
+        for nid in (good, hostile, broken, slow, many, mixed, curve):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
     return result
