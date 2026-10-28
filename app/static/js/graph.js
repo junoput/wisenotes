@@ -12,6 +12,7 @@ import { parse, newEnv } from '/static/js/graph-spec.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
+const HINT = 'Mouse: drag to pan, shift and scroll to zoom. Touch: one finger scrolls the page; two fingers pan, and pinching zooms.';
 const boards = new Set(); // { figure, board, box, resize }
 
 function palette() {
@@ -36,6 +37,21 @@ function el(tag, attrs = {}, text = null) {
 /** A finite number, or NaN: JSXGraph leaves a gap at NaN, and Infinity would draw a line to nowhere. */
 const finite = (v) => (Number.isFinite(v) ? v : NaN);
 
+/* The cost of a drawing is bounded twice. JSXGraph samples a curve adaptively, down to a
+ * recursion depth, so sin(1000000*x) would otherwise take it seconds of one task (the
+ * default depths are 17 and 15): the depths are lowered in renderGraphs. And the
+ * evaluations of every board on the page in one task share a budget; past it a function
+ * answers NaN (a gap), which JSXGraph handles cheaply. The budget refills each task. */
+const MAX_EVALS = 50000;
+let spent = 0;
+let leftOut = false; // the budget ran out since the last time a board looked
+function overBudget() {
+  if (spent === 0) setTimeout(() => { spent = 0; }, 0);
+  if (++spent <= MAX_EVALS) return false;
+  leftOut = true;
+  return true;
+}
+
 function drawBoard(box, spec, env, colors, label) {
   const JXG = window.JXG;
   const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
@@ -56,7 +72,7 @@ function drawBoard(box, spec, env, colors, label) {
   });
   let n = 0;
   for (const [name, f] of spec.functions) {
-    board.create('functiongraph', [(x) => finite(f(x, env))], {
+    board.create('functiongraph', [(x) => (overBudget() ? NaN : finite(f(x, env)))], {
       strokeColor: colors.curves[n++ % colors.curves.length],
       strokeWidth: 2,
       highlight: false,
@@ -65,7 +81,7 @@ function drawBoard(box, spec, env, colors, label) {
     });
   }
   for (const [name, [px, py]] of spec.points) {
-    board.create('point', [() => finite(px(env)), () => finite(py(env))], {
+    board.create('point', [() => (overBudget() ? NaN : finite(px(env))), () => (overBudget() ? NaN : finite(py(env)))], {
       name, // an identifier, by the grammar
       size: 3,
       fixed: true,
@@ -106,7 +122,8 @@ function describe(spec) {
 
 function showErrors(figure, errors) {
   figure.querySelector('.graph-errors')?.remove();
-  const list = el('ul', { class: 'graph-errors', role: 'alert' });
+  // data-drawn marks the list the script made, so a check can tell it from the server's
+  const list = el('ul', { class: 'graph-errors', role: 'alert', 'data-drawn': 'script' });
   for (const e of errors) list.append(el('li', {}, `line ${e.line}: ${e.message}`));
   figure.insertBefore(list, figure.querySelector('.graph-spec'));
 }
@@ -136,6 +153,8 @@ export async function renderGraphs(loadOnce) {
     await loadOnce('link', { rel: 'stylesheet', href: `${JSX}/jsxgraph.css` });
     await loadOnce('script', { src: `${JSX}/jsxgraphcore.js` });
     window.JXG.Options.jc.compile = false; // before any board exists; see the header
+    window.JXG.Options.curve.recursionDepthHigh = 10; // from 17: see MAX_EVALS
+    window.JXG.Options.curve.recursionDepthLow = 8; // from 15
     window.JXG.Options.text.display = 'internal';
   } catch (err) {
     console.warn('JSXGraph unavailable, the definition stays as text', err);
@@ -153,10 +172,17 @@ export async function renderGraphs(loadOnce) {
       live = el('div', { class: 'graph-live' });
       const box = el('div', { class: 'graph-board' });
       let board = null;
-      const sliders = sliderControls(spec, env, () => board?.fullUpdate());
-      live.append(box, sliders, el('p', { class: 'graph-hint' }, 'Drag to pan. Shift and scroll, or pinch, to zoom.'));
+      const hint = el('p', { class: 'graph-hint' }, HINT);
+      const warn = () => {
+        if (!leftOut) return;
+        leftOut = false;
+        hint.textContent = 'Part of this graph is left out: drawing it takes too much work. ' + HINT;
+      };
+      const sliders = sliderControls(spec, env, () => { board?.fullUpdate(); warn(); });
+      live.append(box, sliders, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
       board = drawBoard(box, spec, env, colors, describe(spec));
+      warn();
       const entry = { figure, board, box, extras: [live] };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);

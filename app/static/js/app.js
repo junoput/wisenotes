@@ -169,13 +169,26 @@ const CM = '/static/vendor/codemirror';
 const CM_MODE = { python: 'python', javascript: 'javascript', typescript: 'javascript', go: 'go', rust: 'rust', java: 'clike' };
 const CM_MIME = { python: 'text/x-python', javascript: 'text/javascript', typescript: 'text/typescript', go: 'text/x-go', rust: 'text/x-rustsrc', java: 'text/x-java' };
 
+// One promise per file: a second caller waits for the load event of the first, it does
+// not get a resolved promise because the tag exists. A failed load is forgotten (the
+// tag is removed) so that a later call tries again.
+const loading = new Map();
 function loadOnce(tag, attrs) {
   const key = attrs.src || attrs.href;
-  if (document.querySelector(`${tag}[${attrs.src ? 'src' : 'href'}="${key}"]`)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const el = Object.assign(document.createElement(tag), attrs, { onload: resolve, onerror: reject });
+  if (loading.has(key)) return loading.get(key);
+  const promise = new Promise((resolve, reject) => {
+    const el = Object.assign(document.createElement(tag), attrs, {
+      onload: () => resolve(),
+      onerror: () => {
+        loading.delete(key);
+        el.remove();
+        reject(new Error(`could not load ${key}`));
+      },
+    });
     document.head.appendChild(el);
   });
+  loading.set(key, promise);
+  return promise;
 }
 
 async function loadCodeMirror(lang) {
