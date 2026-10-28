@@ -30,6 +30,8 @@
 #      old one served throughout); in place, remove it and start `current`
 #      again (untouched, so still the last good image). Exit 1 either way. If
 #      there is no current image, nothing serves and the exit says so.
+#      Beside, exit 3 means the new image IS deployed but the hand-over did not
+#      finish cleanly (`deploy.sh --check` settles it); preview.sh logs it so.
 #
 # Beside, with no gap (20261022-035): after the smoke, hand over to <NAME>-next
 # (it becomes the writer, then the tailnet slot $WISENOTES_SERVE_SLOT points at
@@ -506,7 +508,7 @@ hand_back() { # $NEXT serves and writes; make $NAME (running fenced on $PORT) th
   stop_next
 }
 
-deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
+deploy_beside() { # $1 sha; 0 deployed, 1 not deployed, 3 deployed but not cleanly handed over (the exit says which to preview.sh)
   local img="$NAME:$1" id rc
   say "starting $1 as $NEXT on $SPARE_PORT beside $NAME, which keeps serving; $NEXT cannot write until it serves"
   stop_next
@@ -544,17 +546,17 @@ deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
     fi
     if [ "$rc" = 2 ]; then
       say "$1 is running as $NAME on $PORT, but tailnet slot $SERVE_SLOT is NOT CONFIRMED there; this is not a clean deploy. deploy.sh --check settles it"
-      return 1
+      return 3
     fi
     # rc 1: $NAME passed its smoke and is left running; $NEXT keeps the slot and the writer
     say "$1 IS DEPLOYED and $NAME runs on $PORT, but $NEXT keeps tailnet slot $SERVE_SLOT and is the writer (the hand-back did not happen); deploy.sh --check hands it back"
-    return 1
+    return 3
   fi
   say "$NAME did not come back on $PORT; last log lines:"
   podman logs --tail 20 "$NAME" 2>&1 | sed 's/^/    /' || true
   stop_container
   say "$1 IS DEPLOYED but serves from $NEXT on $SPARE_PORT (tailnet slot $SERVE_SLOT); $PORT is down. deploy.sh --start moves it back."
-  return 1
+  return 3
 }
 
 if [ "$MODE" != status ] && [ "$DRY" != 1 ]; then
@@ -614,7 +616,7 @@ case "$MODE" in
         rc=0; hand_back || rc=$?
         [ "$rc" = 0 ] && exit 0
         if [ "$rc" = 2 ]; then
-          say "$NAME serves on $PORT as the writer, but tailnet slot $SERVE_SLOT is NOT CONFIRMED there; deploy.sh --check settles it"
+          say "$NAME runs on $PORT, but tailnet slot $SERVE_SLOT is NOT CONFIRMED there; this is not a clean start. deploy.sh --check settles it"
           exit 1
         fi
       fi

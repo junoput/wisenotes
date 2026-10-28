@@ -62,6 +62,7 @@ serving_sha() {
   fi
 }
 last_tried_file="$here/.preview-last-tried"   # gitignored; a tip that failed smoke is not retried every pass
+retried_file="$here/.preview-retried"         # gitignored; the :current image a cut-short hand-over was retried for
 deaf_file="$here/.preview-deaf"               # gitignored; set by one failed /health pass
 
 # Move the checkout to $1, so the deploy below is the tip's own deploy.sh.
@@ -96,7 +97,7 @@ checkout_tip() {
 }
 
 pass() {
-  local tip serving tried current
+  local tip serving tried current rc
   # Judged before the fetch, so a deaf container is restarted even while
   # origin is unreachable.
   if [ -n "${WISENOTES_PREVIEW_JUDGED:-}" ]; then
@@ -121,9 +122,13 @@ pass() {
   current=$(podman image inspect -f '{{index .Labels "wisenotes.sha"}}' "$NAME:current" 2>/dev/null || true)
   # Only a marker that names :current is cleared: a tip that failed smoke is never
   # retagged, so its marker names something else and stays (no build every pass).
+  # And once per :current image: if :current itself fails smoke now, the retry writes
+  # the marker again and the next pass leaves it, instead of building every pass.
   if [ -n "$serving" ] && [ -n "$current" ] && [ "$current" != "$serving" ] \
-    && [ "$(cat "$last_tried_file" 2>/dev/null || true)" = "$current" ]; then
-    echo "preview: $NAME serves $serving but its current image is $current, which passed smoke before a deploy was cut short; deploying again"
+    && [ "$(cat "$last_tried_file" 2>/dev/null || true)" = "$current" ] \
+    && [ "$(cat "$retried_file" 2>/dev/null || true)" != "$current" ]; then
+    echo "preview: $NAME serves $serving but its current image is $current, which passed smoke before a deploy was cut short; deploying it once more"
+    printf '%s\n' "$current" >"$retried_file"
     rm -f "$last_tried_file"
   fi
   git -C "$repo" fetch -q origin "$BRANCH" || { echo "preview: fetch failed; keeping ${serving:-nothing}"; return 0; }
@@ -134,7 +139,12 @@ pass() {
   echo "preview: $BRANCH moved ${serving:-none} -> $tip; deploying with the deploy scripts at $tip"
   checkout_tip "$tip" || return 0
   printf '%s\n' "$tip" >"$last_tried_file"
-  "$here/deploy.sh" --ref "$tip" || echo "preview: $tip refused by smoke; serving $(serving_sha)"
+  rc=0; "$here/deploy.sh" --ref "$tip" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) echo "preview: $tip IS DEPLOYED but the hand-over did not finish cleanly (see the lines above); deploy.sh --check settles it; serving $(serving_sha)" ;;
+    *) echo "preview: $tip refused (exit $rc, see the lines above); serving $(serving_sha)" ;;
+  esac
 }
 
 if [ "$LOOP" = 1 ]; then

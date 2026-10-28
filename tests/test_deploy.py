@@ -373,7 +373,7 @@ def loop(box):
     (work / "deploy").mkdir()
     for script in ("deploy.sh", "preview.sh"):
         shutil.copy(REPO / "deploy" / script, work / "deploy" / script)
-    (work / ".gitignore").write_text(".env\n.preview-last-tried\n.preview-deaf\n")
+    (work / ".gitignore").write_text(".env\n.preview-last-tried\n.preview-retried\n.preview-deaf\n")
     (work / "Dockerfile").write_text("FROM scratch\n")
     a = commit(work, "A")
     git(box, "clone", "-q", "-b", "develop", str(origin), str(checkout))
@@ -1336,7 +1336,7 @@ def test_an_unreadable_slot_never_removes_next_and_is_never_a_clean_deploy(besid
     state_file(beside, "route_fail_to", "20250")
     state_file(beside, "unreadable_after_route", "20250")
     r = run_beside(beside, sha="bbb")
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "no gap" not in r.stdout and "NOT CONFIRMED" in r.stdout
     assert next_is_kept(beside)
     assert slot(beside).endswith(":20260")
@@ -1387,7 +1387,7 @@ def test_an_unreadable_label_in_the_hand_back_changes_nothing(beside):
     # -next's label cannot be read when the hand-back wants to give the writer back
     state_file(beside, "label_fail", "wisenotes-next")
     r = run_beside(beside, sha="bbb")
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "cannot read the writer label" in r.stdout
     next_id = containers(beside)["wisenotes-next"][3]
     assert writer(beside) == next_id  # -next is still the writer, and still serves the slot
@@ -1420,7 +1420,7 @@ def test_a_hand_back_that_cannot_repoint_gives_the_writer_back_to_next(beside):
     serving_aaa(beside)
     state_file(beside, "route_fail_to", "20250")
     r = run_beside(beside, sha="bbb")
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "stays the writer" in r.stdout
     assert writer(beside) == containers(beside)["wisenotes-next"][3]
     assert slot(beside).endswith(":20260") and next_is_kept(beside)
@@ -1525,13 +1525,76 @@ def test_preview_does_not_build_every_pass_when_the_tip_fails_smoke_in_the_f6_st
     mark(beside, "bad", "id-wisenotes:ccc")
     first = run_beside(beside, script="preview.sh", sha="ccc")
     assert "deploying with the deploy scripts at ccc" in first.stdout, first.stdout + first.stderr
-    assert "refused by smoke" in first.stdout
+    assert "refused (exit 1" in first.stdout
     assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "ccc"
     reset_log(beside)
     second = run_beside(beside, script="preview.sh", sha="ccc")
     assert "failed smoke earlier" in second.stdout, second.stdout + second.stderr
     assert "podman build" not in log(beside) and "deploying again" not in second.stdout
     assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+
+
+def f6_state(box, sha):
+    """aaa serves; :current, the marker and the tip are all `sha`, and `sha` fails smoke now."""
+    serving_aaa(box)
+    state_file(box, "images/wisenotes_current", f"id-wisenotes:{sha} fence")
+    state_file(box, "images/wisenotes_" + sha, f"id-wisenotes:{sha} fence")
+    mark(box, "bad", f"id-wisenotes:{sha}")
+    (box / "repo/deploy/.preview-last-tried").write_text(sha + "\n")
+
+
+def builds_over_passes(box, sha, passes):
+    got = []
+    for _ in range(passes):
+        reset_log(box)
+        run_beside(box, script="preview.sh", sha=sha)
+        got.append(log(box).count("podman build"))
+    return got
+
+
+def test_preview_retries_a_current_that_itself_fails_smoke_once_not_every_pass(beside):
+    # aaa serves, :current = marker = tip = bbb (a hand-over cut short), and bbb now fails
+    # smoke: the first pass builds it again, the next ones leave it (it was [1, 1, 1, 1])
+    f6_state(beside, "bbb")
+    assert builds_over_passes(beside, "bbb", 4) == [1, 0, 0, 0]
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+    assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "bbb"
+
+
+def test_a_different_current_gets_its_own_retry(beside):
+    f6_state(beside, "bbb")
+    assert builds_over_passes(beside, "bbb", 2) == [1, 0]
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:ccc fence")
+    state_file(beside, "images/wisenotes_ccc", "id-wisenotes:ccc fence")
+    mark(beside, "bad", "id-wisenotes:ccc")
+    (beside / "repo/deploy/.preview-last-tried").write_text("ccc\n")
+    assert builds_over_passes(beside, "ccc", 3) == [1, 0, 0]
+
+
+def test_preview_says_a_tip_is_deployed_when_only_the_hand_over_did_not_finish(beside):
+    serving_aaa(beside)
+    state_file(beside, "label_fail", "wisenotes")  # $NAME passes smoke, the hand-back cannot start
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "bbb IS DEPLOYED but the hand-over did not finish cleanly" in r.stdout, r.stdout
+    assert "refused" not in r.stdout
+
+
+def test_preview_says_refused_with_the_exit_code_when_the_tip_fails_smoke(beside):
+    serving_aaa(beside)
+    mark(beside, "bad", "id-wisenotes:bbb")
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "bbb refused (exit 1" in r.stdout and "IS DEPLOYED" not in r.stdout, r.stdout
+
+
+def test_start_with_an_unconfirmed_slot_does_not_claim_the_writer(beside):
+    # hand_back's ? branch gave the writer back to -next, so --start must not say NAME has it
+    next_id = left_beside(beside)
+    state_file(beside, "route_fail_to", "20250")
+    state_file(beside, "unreadable_after_route", "20250")
+    r = run_beside(beside, "--start", sha="aaa")
+    assert r.returncode == 1 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
+    assert "wisenotes runs on 20250" in r.stdout and "as the writer" not in r.stdout
+    assert writer(beside) == next_id
 
 
 def left_beside(box):
@@ -1552,10 +1615,9 @@ def test_settle_leaves_the_writer_alone_when_the_slot_cannot_be_read(beside):
     state_file(beside, "status_fail", "999")
     c = check(beside)
     assert c.returncode == 1, c.stdout + c.stderr
-    assert (
-        "the writer is left as it is" in c.stdout
-        and "$NAME serves and is the writer" not in c.stdout
-    )
+    assert "the writer is left as it is" in c.stdout
+    # no claim for the real name (the literal "$NAME" is never printed, so it proves nothing)
+    assert "wisenotes serves" not in c.stdout and "at rest" not in c.stdout
     assert writer(beside) == next_id
     assert next_is_kept(beside)
 
@@ -1573,7 +1635,7 @@ def test_a_hand_back_that_cannot_read_the_slot_keeps_next_as_the_writer(beside):
     state_file(beside, "route_fail_to", "20250")
     state_file(beside, "unreadable_after_route", "20250")
     r = run_beside(beside, sha="bbb")
-    assert r.returncode == 1 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
+    assert r.returncode == 3 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
     assert writer(beside) == containers(beside)["wisenotes-next"][3]  # the last confirmed route
     assert "wisenotes is the writer" not in r.stdout  # no claim for $NAME
     assert next_is_kept(beside)
@@ -1585,7 +1647,7 @@ def test_a_hand_back_that_returns_1_does_not_remove_a_healthy_name(beside):
     serving_aaa(beside)
     state_file(beside, "label_fail", "wisenotes")
     r = run_beside(beside, sha="bbb")
-    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.returncode == 3, r.stdout + r.stderr
     assert "did not come back" not in r.stdout and "IS DEPLOYED" in r.stdout
     assert containers(beside)["wisenotes"][1] == "running"
     assert next_is_kept(beside) and slot(beside).endswith(":20260")

@@ -211,8 +211,20 @@ Three things bring it back:
 - **`preview.sh`, after `--check`**, compares the image that serves with the
   image `:current` names. If they differ, a hand-over was cut short after the
   new image passed its smoke, and the tip's "failed smoke earlier" marker would
-  keep it from ever being deployed: the marker is cleared and the pass deploys
-  the tip again.
+  keep it from ever being deployed: when the marker names `:current` it is
+  cleared and the pass deploys the tip again. That happens **once for each
+  `:current` image** (`deploy/.preview-retried` holds the last one retried): if
+  `:current` itself fails smoke now, the retry writes the marker again and the
+  passes after it say `failed smoke earlier` and build nothing, until the tip
+  moves or a different `:current` is left behind. A marker that names anything
+  else (a tip that failed smoke and was never retagged) is never cleared.
+- **`deploy.sh --ref` exits 0 when the new image is deployed and handed over, 1 when
+  it is not deployed (rolled back, or refused by smoke), and 3 when it IS deployed
+  but the hand-over did not finish cleanly** (`$NEXT` keeps the slot, or the slot
+  cannot be confirmed; `deploy.sh --check` settles it). `preview.sh` logs
+  `IS DEPLOYED but the hand-over did not finish cleanly` for a 3 and
+  `refused (exit N, ...)` for anything else, so the log never says a deployed tip was
+  refused.
 
 A slot repoint is judged by reading the slot again, up to three times, and
 never by the command's exit status. A `tailscale serve` that applied and then
