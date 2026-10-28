@@ -14,7 +14,7 @@ const out = { sweep: p.SWEEP_SECONDS };
 const range = { lo: 0, hi: 5 };
 
 // a whole sweep takes SWEEP_SECONDS, at any frame rate
-for (const fps of [10, 30, 60, 144]) {
+for (const fps of [4, 10, 30, 60, 144]) {
   let s = { value: 0, dir: 1 };
   const dt = 1 / fps;
   let t = 0;
@@ -32,7 +32,7 @@ for (let i = 0; i < 2000; i++) {
 }
 out.min = min; out.max = max; out.turns = turns;
 
-// a frame after a long sleep moves at most 0.1 s of a sweep, and the first frame (dt 0) none
+// a frame after a long sleep moves at most 0.5 s of a sweep, and the first frame (dt 0) none
 out.afterSleep = p.advance({ value: 1, dir: 1 }, 60, range).value - 1;
 out.firstFrame = p.advance({ value: 1, dir: 1 }, 0, range).value;
 out.backwardsClock = p.advance({ value: 1, dir: 1 }, -5, range).value;
@@ -42,6 +42,13 @@ out.snapStep = p.snap(0.34, { lo: 0, hi: 5, step: 0.1 });
 out.snapGridFromLow = p.snap(1.3, { lo: 1, hi: 2, step: 0.25 });
 out.snapClamped = p.snap(5.2, { lo: 0, hi: 5, step: 0.5 });
 out.snapNoStep = p.snap(2.718, { lo: 0, hi: 5, step: null });
+
+// pacing: at most 30 frames a second, and a board that is slow to draw is left idle for as
+// long as it took (at most half of the time busy)
+out.frameMs = p.FRAME_MS;
+out.cheap = p.nextFrameAt(1000, 2) - 1000;
+out.slow = p.nextFrameAt(1000, 80) - 1000;
+out.verySlow = p.nextFrameAt(1000, 400) - 1000;
 console.log(JSON.stringify(out));
 """
 
@@ -61,12 +68,22 @@ def run(tmp_path: Path, source: Path = PLAY) -> dict:
 def test_a_slider_sweeps_and_bounces_inside_its_range(tmp_path):
     got = run(tmp_path)
     assert got["sweep"] == 4  # the instrument ran this file, with this constant
-    for fps in (10, 30, 60, 144):
+    for fps in (4, 10, 30, 60, 144):
         assert abs(got[f"sweep{fps}"] - got["sweep"]) <= 1 / fps + 1e-9, (fps, got)
     assert 0 <= got["min"] and got["max"] <= 5
     assert got["max"] > 4.9 and got["min"] < 0.1 and got["turns"] >= 4
-    assert abs(got["afterSleep"] - 5 * 0.1 / got["sweep"]) < 1e-9
+    assert abs(got["afterSleep"] - 5 * 0.5 / got["sweep"]) < 1e-9
     assert got["firstFrame"] == 1 and got["backwardsClock"] == 1
+
+
+def test_a_play_is_paced_by_what_a_frame_costs(tmp_path):
+    got = run(tmp_path)
+    assert abs(got["frameMs"] - 1000 / 30) < 1e-9  # the instrument ran this file
+    assert abs(got["cheap"] - got["frameMs"]) < 1e-6  # never faster than 30 frames a second
+    assert got["slow"] == 160  # 80 ms of work, 80 ms left to the page
+    assert got["verySlow"] == 800
+    for cost in ("slow", "verySlow"):
+        assert got[cost] >= 2 * {"slow": 80, "verySlow": 400}[cost]  # busy at most half the time
 
 
 def test_the_shown_value_is_on_the_step_grid(tmp_path):
@@ -87,3 +104,12 @@ def test_harness_control_a_sweep_that_ignores_the_frame_time_is_seen(tmp_path):
     broken.write_text(bad)
     got = run(tmp_path, broken)
     assert abs(got["sweep10"] - got["sweep"]) > 0.1
+
+
+def test_harness_control_a_play_that_ignores_the_cost_of_a_frame_is_seen(tmp_path):
+    broken = tmp_path / "broken.js"
+    source = PLAY.read_text()
+    bad = source.replace("Math.max(FRAME_MS, costMs / BUSY_AT_MOST)", "FRAME_MS")
+    assert bad != source
+    broken.write_text(bad)
+    assert run(tmp_path, broken)["slow"] != 160

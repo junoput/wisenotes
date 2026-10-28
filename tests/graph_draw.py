@@ -59,6 +59,19 @@ NAMED = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(12)) + "".join(
     f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(14)
 )
 PLAY = "view 2d  x -4..4  y -3..3\na = slider(0, 5, value 1, play)\nf(x) = a*sin(x)\n"
+# play beside enough other blocks that the page scrolls and the board can be off the screen
+PLAY_TALL = [PLAY, *[CHEAP] * 30]
+# a board that is slow to redraw: 24 curves that all move with the playing slider
+PLAY_HEAVY = "a = slider(0, 6, value 0, play)\n" + "".join(
+    f"f{i}(x) = sin(a*x + {i})\n" for i in range(24)
+)
+# a slider that ends at 2*pi, and lines with their own spacing that a save must not touch
+IRRATIONAL = (
+    "view 2d  x -4..4   y -3..3\n"
+    "  a  =  slider(0, 2*pi, play)\n"
+    "  b = slider( 0 , 5 , value 2 )\n"
+    "f(x) = a*sin(x) + b\n"
+)
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -351,6 +364,149 @@ def check_play(browser, base, note):
         "play: touching the slider takes over": taken == taken_later,
         "play: reduced motion offers no play button, and keeps the slider": offered == 0
         and slider_there == 1,
+    }
+
+
+def check_play_waits_when_it_cannot_be_seen(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 700})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(500)
+        out = lambda: float(page.locator(".graph-slider output").inner_text())  # noqa: E731
+        pressed = lambda: page.locator(".graph-play").get_attribute("aria-pressed")  # noqa: E731
+        start = out()
+        page.locator(".graph-play").click()
+        page.wait_for_timeout(700)
+        on_screen = out()
+        # scroll the last block into view: the board is off the screen
+        page.evaluate(
+            "() => [...document.querySelectorAll('section.chapter-section')].at(-1).scrollIntoView()"
+        )
+        page.wait_for_timeout(600)
+        really_away = page.evaluate(
+            "() => document.querySelector('.graph-board').getBoundingClientRect().bottom < 0"
+        )
+        away_1 = out()
+        page.wait_for_timeout(700)
+        away_2 = out()
+        still_wanted = pressed() == "true"
+        page.evaluate("() => document.querySelector('.graph-board').scrollIntoView()")
+        page.wait_for_timeout(700)
+        back = out()
+        # a tab that is hidden: the page says so
+        page.evaluate(
+            "() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });"
+            " document.dispatchEvent(new Event('visibilitychange')); }"
+        )
+        page.wait_for_timeout(500)
+        hidden_1 = out()
+        page.wait_for_timeout(700)
+        hidden_2 = out()
+        page.evaluate(
+            "() => { delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); }"
+        )
+        page.wait_for_timeout(700)
+        shown_again = out()
+        page.locator(".graph-play").click()
+    finally:
+        ctx.close()
+    return {
+        "play: it moves while the board is on the screen": on_screen != start,
+        "play: the board is really off the screen (the premise)": really_away,
+        "play: it stops drawing while the board is off the screen": away_1 == away_2,
+        "play: off the screen it is still wanted (the button stays pressed)": still_wanted,
+        "play: it goes on when the board is back": back != away_2,
+        "play: it stops drawing while the tab is hidden": hidden_1 == hidden_2,
+        "play: it goes on when the tab is shown again": shown_again != hidden_2,
+    }
+
+
+def check_play_leaves_the_page_usable(browser, base, note):
+    """A board that is slow to redraw is redrawn at its own pace: half the time stays idle.
+    The probe counts timer ticks a second with and without the play, in one page."""
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(500)
+        cost = page.evaluate(
+            "() => { const b = Object.values(window.JXG.boards)[0]; b.fullUpdate();"
+            " const t = performance.now(); for (let i = 0; i < 5; i++) b.fullUpdate();"
+            " return (performance.now() - t) / 5; }"
+        )
+        page.evaluate("() => { window.__ticks = 0; setInterval(() => { window.__ticks++; }, 10); }")
+
+        def ticks(ms):
+            before = page.evaluate("() => window.__ticks")
+            page.wait_for_timeout(ms)
+            return page.evaluate("() => window.__ticks") - before
+
+        idle = ticks(1500)
+        page.locator(".graph-play").click()
+        page.wait_for_timeout(300)
+        moved_1 = page.locator(".graph-slider output").inner_text()
+        playing = ticks(1500)
+        moved_2 = page.locator(".graph-slider output").inner_text()
+        page.locator(".graph-play").click()
+    finally:
+        ctx.close()
+    return {
+        # the premise: one redraw is slow enough that back-to-back frames would starve the page
+        f"play: the heavy board takes real work per redraw ({cost:.0f} ms)": cost >= 15,
+        "play: the heavy board still plays": moved_1 != moved_2,
+        f"play: half the time stays idle ({playing} of {idle} timer ticks)": idle > 50
+        and playing >= 0.4 * idle,
+    }
+
+
+def check_saving_at_an_irrational_end(browser, base, note, ctx_for_api):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    sent = []
+    try:
+        page.route(
+            "**/graph-view",
+            lambda route: (sent.append(route.request.post_data), route.continue_())[1],
+        )
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(500)
+        # drag the thumb of a to the right end, as a person does
+        slider = page.locator(".graph-slider input[type=range]").first
+        box = slider.bounding_box()
+        page.mouse.move(box["x"] + 5, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] + 40, box["y"] + box["height"] / 2, steps=6)
+        page.mouse.up()
+        value = slider.input_value()
+        page.locator(".graph-save").click()
+        page.wait_for_timeout(1500)
+        status = (
+            page.locator(".graph-status").inner_text()
+            if page.locator(".graph-status").count()
+            else ""
+        )
+        stored = ctx_for_api.request.get(
+            f"{base}/notes/{note}/chapters/g0/edit", headers={"HX-Request": "true"}
+        ).text()
+    finally:
+        ctx.close()
+    body = sent[0] if sent else ""
+    return {
+        f"save: the thumb is at the right end, 2*pi ({value}) (the premise)": abs(
+            float(value) - 2 * 3.141592653589793
+        )
+        < 1e-6,
+        "save: a slider dragged to an irrational end saves": bool(sent)
+        and "Not saved" not in status
+        and "a  =  slider(0, 2*pi, play, value 6.28318530717" in stored.replace("&#39;", "'"),
+        "save: only the slider that changed is sent": "slider=a%3D" in body
+        and "slider=b" not in body,
+        "save: the lines that did not change keep their spacing": "  b = slider( 0 , 5 , value 2 )"
+        in stored,
     }
 
 
@@ -681,6 +837,9 @@ def drive(p, base, js, shots):
     view = make_note(ctx, base, f"Graph view {stamp}", PLAY)
     played = make_note(ctx, base, f"Graph play {stamp}", PLAY)
     refused = make_note(ctx, base, f"Graph refused {stamp}", PLAY)
+    tall = make_note(ctx, base, f"Graph play tall {stamp}", PLAY_TALL)
+    heavy_play = make_note(ctx, base, f"Graph play heavy {stamp}", PLAY_HEAVY)
+    irrational = make_note(ctx, base, f"Graph irrational {stamp}", IRRATIONAL)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -790,13 +949,32 @@ def drive(p, base, js, shots):
             checks.update(check_the_default_view(browser, base, view, ctx))
             checks.update(check_a_refused_save_says_so(browser, base, refused))
             checks.update(check_play(browser, base, played))
+            checks.update(check_play_waits_when_it_cannot_be_seen(browser, base, tall))
+            checks.update(check_play_leaves_the_page_usable(browser, base, heavy_play))
+            checks.update(check_saving_at_an_irrational_end(browser, base, irrational, ctx))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_a_theme_change_while_drawing(browser, base, many))
             checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
-        for nid in (good, hostile, broken, slow, many, mixed, curve, circles, named, view, played, refused):
+        for nid in (
+            good,
+            hostile,
+            broken,
+            slow,
+            many,
+            mixed,
+            curve,
+            circles,
+            named,
+            view,
+            played,
+            refused,
+            tall,
+            heavy_play,
+            irrational,
+        ):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
     return result
