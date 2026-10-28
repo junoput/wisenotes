@@ -10,6 +10,7 @@
  * text: the DOM is made with createElement and textContent. */
 import { parse, newEnv } from '/static/js/graph-spec.js';
 import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
+import { advance, snap } from '/static/js/graph-play.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -96,8 +97,14 @@ function drawBoard(box, spec, env, colors, label, work) {
   return board;
 }
 
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** The sliders of a board, with a play button on those declared `play` (not offered when
+ * the person asked for reduced motion). `reset()` puts every slider back to its declared
+ * value; `values()` is what each shows now. */
 function sliderControls(spec, env, onChange) {
   const wrap = el('div', { class: 'graph-sliders' });
+  const parts = [];
   for (const s of spec.sliders.values()) {
     const input = el('input', {
       type: 'range', min: String(s.lo), max: String(s.hi), step: s.step === null ? 'any' : String(s.step),
@@ -105,16 +112,87 @@ function sliderControls(spec, env, onChange) {
     });
     const out = el('output', {}, String(s.value));
     env[s.name] = s.value;
-    input.addEventListener('input', () => {
+    const show = () => {
       env[s.name] = Number(input.value);
       out.textContent = String(Number(input.value));
-      onChange();
-    });
+    };
+    input.addEventListener('input', () => { show(); onChange(); });
     const label = el('label', { class: 'graph-slider' });
     label.append(el('span', { class: 'graph-slider-name' }, s.name), input, out);
+    let stop = () => {};
+    if (s.play && !reducedMotion()) {
+      const button = el('button', { type: 'button', class: 'graph-play', 'aria-label': `Play ${s.name}`, 'aria-pressed': 'false' }, '\u25B6');
+      let frame = null;
+      stop = () => {
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = null;
+        button.setAttribute('aria-pressed', 'false');
+        button.setAttribute('aria-label', `Play ${s.name}`);
+        button.textContent = '\u25B6';
+      };
+      button.addEventListener('click', () => {
+        if (frame !== null) { stop(); return; }
+        let state = { value: Number(input.value), dir: Number(input.value) >= s.hi ? -1 : 1 };
+        let last = null;
+        const tick = (now) => {
+          // gone from the page, or the person asked for less motion since: stop
+          if (!input.isConnected || reducedMotion()) { stop(); return; }
+          state = advance(state, last === null ? 0 : (now - last) / 1000, s);
+          last = now;
+          input.value = String(snap(state.value, s));
+          show();
+          onChange();
+          frame = requestAnimationFrame(tick);
+        };
+        button.setAttribute('aria-pressed', 'true');
+        button.setAttribute('aria-label', `Pause ${s.name}`);
+        button.textContent = '\u23F8';
+        frame = requestAnimationFrame(tick);
+      });
+      // touching the slider takes over
+      input.addEventListener('pointerdown', stop);
+      input.addEventListener('keydown', stop);
+      label.append(button);
+    }
+    parts.push({ s, input, show, stop });
     wrap.append(label);
   }
-  return wrap;
+  return {
+    node: wrap,
+    reset() { for (const { s, input, show, stop } of parts) { stop(); input.value = String(s.value); show(); } },
+    values() { return parts.map(({ s, input }) => `${s.name}=${Number(input.value)}`); },
+    stop() { for (const { stop } of parts) stop(); },
+  };
+}
+
+/** Reset view, and (when the page says where) Save view: the box on the screen and the
+ * sliders' values go to the server, which writes them into the definition. */
+function viewControls(figure, getBoard, view, sliders) {
+  const bar = el('div', { class: 'graph-controls' });
+  const reset = el('button', { type: 'button', class: 'graph-reset' }, 'Reset view');
+  const status = el('span', { class: 'graph-status', role: 'status' });
+  reset.addEventListener('click', () => {
+    sliders.reset();
+    getBoard().setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
+    getBoard().fullUpdate();
+    status.textContent = '';
+  });
+  bar.append(reset);
+  const url = figure.dataset.viewUrl;
+  if (url && window.htmx) {
+    const save = el('button', { type: 'button', class: 'graph-save' }, 'Save view');
+    save.addEventListener('click', () => {
+      const [x0, y1, x1, y0] = getBoard().getBoundingBox();
+      status.textContent = 'Saving\u2026';
+      window.htmx.ajax('POST', url, { source: save, target: 'body', swap: 'none', values: { x0, x1, y0, y1, slider: sliders.values() } });
+    });
+    save.addEventListener('htmx:responseError', (e) => {
+      status.textContent = `Not saved: ${e.detail.xhr.responseText || e.detail.xhr.status}`;
+    });
+    bar.append(save);
+  }
+  bar.append(status);
+  return bar;
 }
 
 function describe(spec) {
@@ -131,6 +209,7 @@ function showErrors(figure, errors) {
 }
 
 function release(entry) {
+  entry.stop?.();
   entry.resize?.disconnect();
   try { window.JXG?.JSXGraph.freeBoard(entry.board); } catch { /* the container is gone already */ }
   boards.delete(entry);
@@ -190,12 +269,14 @@ export async function renderGraphs(loadOnce) {
         if (hint.textContent !== want) hint.textContent = want;
       };
       const sliders = sliderControls(spec, env, () => board?.fullUpdate());
-      live.append(box, sliders, hint);
+      const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
+      const controls = viewControls(figure, () => board, view, sliders);
+      live.append(box, sliders.node, controls, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
       board = drawBoard(box, spec, env, colors, describe(spec), work);
       settle();
       board.on('update', settle); // after the first draw, which settles by hand
-      const entry = { figure, board, box, extras: [live] };
+      const entry = { figure, board, box, extras: [live], stop: () => sliders.stop() };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);
       boards.add(entry);

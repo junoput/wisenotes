@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from app import graph_spec
 from app.config import get_settings
 from app.media_urls import is_data_url
 from app.media_urls import media_kind
@@ -271,6 +272,29 @@ class NoteService:
             if chapter is not None and chapter.type == "media":
                 content = chapter.content
             return self.update_chapter(note_id, chapter_id, title, content, language, source)
+
+    def save_graph_view(
+        self,
+        note_id: str,
+        chapter_id: str,
+        x: tuple[float, float],
+        y: tuple[float, float],
+        values: dict[str, float],
+    ) -> Note | None:
+        """Save a graph block's default view and slider values into its definition
+        (20261022-064, slice 3). The text is rewritten from what is stored NOW, under the
+        lock, so a view saved from a stale page cannot put back an older definition.
+        None when there is no such block; ValueError when it is not a graph block or
+        the numbers cannot be saved."""
+        with self.repo.lock:
+            note = self.repo.get_note(note_id)
+            chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
+            if chapter is None:
+                return None
+            if chapter.type != "graph":
+                raise ValueError("only a graph block has a view to save")
+            content = graph_spec.with_view(chapter.content, x, y, values)
+            return self.update_chapter(note_id, chapter_id, chapter.title, content)
 
     def _media_exists(self, note_id: str, filename: str) -> bool:
         owner = self.repo.get_note(note_id)

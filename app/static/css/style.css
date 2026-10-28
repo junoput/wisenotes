@@ -184,7 +184,7 @@ a { color: var(--accent); }
 
 .graph-slider {
   display: grid;
-  grid-template-columns: 3ch minmax(0, 1fr) 7ch;
+  grid-template-columns: 3ch minmax(0, 1fr) 7ch auto;
   align-items: center;
   gap: 8px;
   font-size: 14px;
@@ -200,6 +200,25 @@ a { color: var(--accent); }
 .graph-slider output {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.graph-controls button,
+.graph-play {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.graph-status {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .graph-hint {

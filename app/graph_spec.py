@@ -715,3 +715,87 @@ def parse(text: str) -> GraphSpec:
 
 def validate(text: str) -> list[SpecError]:
     return parse(text).errors
+
+
+# ---------------------------------------------------------------- the saved view
+
+
+def _places(span: float) -> int:
+    """Decimals that keep six significant digits of a range this wide (never an exponent)."""
+    return min(15, max(0, 5 - math.floor(math.log10(span)))) if span > 0 else 0
+
+
+def _plain(value: float, places: int) -> str:
+    text = f"{round(value, places):.{places}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "") else text
+
+
+def with_view(
+    text: str,
+    x: tuple[float, float],
+    y: tuple[float, float],
+    values: dict[str, float] | None = None,
+) -> str:
+    """The definition with its default view set to x and y, and each named slider's value
+    set to the given one. Nothing else changes: comments, other lines and their order
+    stay (the view line is replaced where it is, or put first when there is none).
+    Raises ValueError when the definition has errors, a number is not finite or not
+    in order, a name is not a slider, or a value is outside its slider's range."""
+    spec = parse(text)
+    if spec.errors:
+        raise ValueError("the definition has errors; fix them before saving a view")
+    values = values or {}
+    for lo, hi, axis in ((*x, "x"), (*y, "y")):
+        if not (math.isfinite(lo) and math.isfinite(hi)) or not lo < hi:
+            raise ValueError(f"the {axis} range must be finite and go from low to high")
+    for name, value in values.items():
+        slider = spec.sliders.get(name)
+        if slider is None:
+            raise ValueError(f"{name} is not a slider")
+        if not math.isfinite(value) or not slider.lo <= value <= slider.hi:
+            raise ValueError(f"the value of {name} must be within its range")
+    view = (
+        f"view 2d  x {_plain(x[0], _places(x[1] - x[0]))}..{_plain(x[1], _places(x[1] - x[0]))}"
+        f"  y {_plain(y[0], _places(y[1] - y[0]))}..{_plain(y[1], _places(y[1] - y[0]))}"
+    )
+    out: list[str] = []
+    placed = False
+    for line in text.split("\n"):
+        head, hash_, comment = line.partition("#")
+        stripped = head.strip(BLANK)
+        rest = (
+            head[len(head.rstrip(BLANK)) :] + hash_ + comment
+        )  # blanks, a CR, the comment: as they were
+        if not placed and (
+            stripped == "view" or stripped.startswith(("view ", "view\t", "view\r"))
+        ):
+            out.append(view + rest)
+            placed = True
+            continue
+        m = ASSIGN.fullmatch(stripped)
+        s = (
+            SLIDER.fullmatch(m.group(2).strip(BLANK))
+            if m and not FUNCTION_DEF.fullmatch(stripped)
+            else None
+        )
+        if m and s and m.group(1) in values:
+            slider = spec.sliders[m.group(1)]
+            span = slider.step if slider.step is not None else (slider.hi - slider.lo) / 1000
+            value = _plain(values[m.group(1)], _places(span))
+            args = [a.strip(BLANK) for a in _split_top(s.group(1))]
+            new_value = f"value {value}"
+            if any(a.partition(" ")[0] == "value" for a in args[2:]):
+                args = [new_value if a.partition(" ")[0] == "value" else a for a in args]
+            else:
+                args.append(new_value)
+            out.append(f"{m.group(1)} = slider({', '.join(args)}){rest}")
+            continue
+        out.append(line)
+    if not placed:
+        out.insert(0, view)
+    result = "\n".join(out)
+    if errors := validate(result):
+        raise ValueError(f"the saved view would not parse: {errors[0]}")
+    return result

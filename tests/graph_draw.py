@@ -23,6 +23,7 @@ import json
 import sys
 import time
 import uuid
+from itertools import pairwise
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -57,6 +58,7 @@ CIRCLES = "a = slider(0.5, 2, step 0.1, value 1)\n" + "".join(
 NAMED = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(12)) + "".join(
     f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(14)
 )
+PLAY = "view 2d  x -4..4  y -3..3\na = slider(0, 5, value 1, play)\nf(x) = a*sin(x)\n"
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -198,6 +200,157 @@ def check_a_parametric_curve(browser, base, note):
         "moving the slider changes the parametric curve": bool(before) and after != before,
         "a parametric curve: no console error": not problems,
         "a parametric curve is named in the board's label": label.startswith("Graph of c"),
+    }
+
+
+def board_box(page):
+    return page.evaluate("() => Object.values(window.JXG.boards)[0].getBoundingBox()")
+
+
+def close(got, want, tol=1e-3):
+    return all(abs(g - w) <= tol * max(1, abs(w)) for g, w in zip(got, want, strict=True))
+
+
+def check_the_default_view(browser, base, note, ctx_for_api):
+    """Pan, set a slider, save: the page comes back drawn from the new default. Reset goes there."""
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(500)
+        first = board_box(page)
+        box = page.locator(".graph-board").bounding_box()
+
+        def pan():
+            page.mouse.move(box["x"] + 150, box["y"] + 150)
+            page.mouse.down()
+            page.mouse.move(box["x"] + 230, box["y"] + 190, steps=8)
+            page.mouse.up()
+            page.wait_for_timeout(400)
+
+        pan()
+        panned = board_box(page)
+        page.locator(".graph-slider input[type=range]").fill("3")
+        page.locator(".graph-save").click()
+        page.wait_for_function(
+            "() => document.querySelector('.graph-board') && !document.querySelector('.graph-status')?.textContent",
+            timeout=10000,
+        )
+        page.wait_for_timeout(1000)
+        saved_box = board_box(page)
+        saved_value = page.locator(".graph-slider output").inner_text()
+        stored = ctx_for_api.request.get(
+            f"{base}/notes/{note}/chapters/g0/edit", headers={"HX-Request": "true"}
+        ).text()
+        # a reload draws the saved view too
+        page.reload()
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(500)
+        reloaded = board_box(page)
+        reloaded_value = page.locator(".graph-slider output").inner_text()
+        # move away, then reset
+        pan()
+        page.locator(".graph-slider input[type=range]").fill("1")
+        away = board_box(page)
+        page.locator(".graph-reset").click()
+        page.wait_for_timeout(300)
+        back = board_box(page)
+        back_value = page.locator(".graph-slider output").inner_text()
+    finally:
+        ctx.close()
+    return {
+        "view: panning moved the box": not close(panned, first),
+        "view: Save view draws the page again from the saved box": close(saved_box, panned, 1e-3),
+        "view: the saved slider value is shown": saved_value == "3",
+        "view: the definition now holds the view line": "view 2d  x " in stored,
+        "view: a reload draws the saved box": close(reloaded, panned, 1e-3),
+        "view: a reload shows the saved slider value": reloaded_value == "3",
+        "view: Reset view goes back to the saved box": close(back, panned, 1e-3)
+        and not close(away, panned),
+        "view: Reset view goes back to the saved slider value": back_value == "3",
+    }
+
+
+def check_a_refused_save_says_so(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    try:
+        page.route(
+            "**/graph-view",
+            lambda route: route.fulfill(
+                status=400, content_type="text/plain", body="the x range must be finite"
+            ),
+        )
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.locator(".graph-save").click()
+        page.wait_for_function(
+            "() => /Not saved/.test(document.querySelector('.graph-status').textContent)",
+            timeout=5000,
+        )
+        said = page.locator(".graph-status").inner_text()
+        still_drawn = page.locator(".graph-board svg").count() == 1
+    finally:
+        ctx.close()
+    return {
+        "view: a refused save says why and leaves the board": "x range must be finite" in said
+        and still_drawn
+    }
+
+
+def check_play(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    reduced = browser.new_context(viewport={"width": 900, "height": 900}, reduced_motion="reduce")
+    rpage = reduced.new_page()
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        out = lambda: float(page.locator(".graph-slider output").inner_text())  # noqa: E731
+        start = out()
+        page.locator(".graph-play").click()
+        page.wait_for_timeout(1200)
+        playing = out()
+        pressed = page.locator(".graph-play").get_attribute("aria-pressed")
+        page.locator(".graph-play").click()
+        page.wait_for_timeout(300)
+        paused_at = out()
+        page.wait_for_timeout(500)
+        still = out()
+        # it bounces: over 9 s of play the value has been seen going up and down
+        page.locator(".graph-play").click()
+        seen = []
+        for _ in range(20):
+            page.wait_for_timeout(450)
+            seen.append(out())
+        page.locator(".graph-play").click()
+        ups = sum(1 for a, b in pairwise(seen) if b > a)
+        downs = sum(1 for a, b in pairwise(seen) if b < a)
+        # touching the slider takes over
+        page.locator(".graph-play").click()
+        page.wait_for_timeout(300)
+        page.locator(".graph-slider input[type=range]").focus()
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_timeout(200)
+        taken = out()
+        page.wait_for_timeout(500)
+        taken_later = out()
+        rpage.goto(f"{base}/notes/{note}")
+        rpage.wait_for_selector(".graph-board svg", timeout=15000)
+        offered = rpage.locator(".graph-play").count()
+        slider_there = rpage.locator(".graph-slider input[type=range]").count()
+    finally:
+        ctx.close()
+        reduced.close()
+    return {
+        "play: the slider moves and the button says it is pressed": playing != start
+        and pressed == "true",
+        "play: pausing holds the value": paused_at == still,
+        "play: it bounces": ups > 0 and downs > 0,
+        "play: touching the slider takes over": taken == taken_later,
+        "play: reduced motion offers no play button, and keeps the slider": offered == 0
+        and slider_there == 1,
     }
 
 
@@ -525,6 +678,9 @@ def drive(p, base, js, shots):
     curve = make_note(ctx, base, f"Graph curve {stamp}", CURVE)
     circles = make_note(ctx, base, f"Graph circles {stamp}", CIRCLES)
     named = make_note(ctx, base, f"Graph named {stamp}", NAMED)
+    view = make_note(ctx, base, f"Graph view {stamp}", PLAY)
+    played = make_note(ctx, base, f"Graph play {stamp}", PLAY)
+    refused = make_note(ctx, base, f"Graph refused {stamp}", PLAY)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -631,13 +787,16 @@ def drive(p, base, js, shots):
             ).is_visible()
             checks.update(check_sampling_is_bounded(browser, base, slow))
             checks.update(check_a_parametric_curve(browser, base, curve))
+            checks.update(check_the_default_view(browser, base, view, ctx))
+            checks.update(check_a_refused_save_says_so(browser, base, refused))
+            checks.update(check_play(browser, base, played))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_a_theme_change_while_drawing(browser, base, many))
             checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
-        for nid in (good, hostile, broken, slow, many, mixed, curve, circles, named):
+        for nid in (good, hostile, broken, slow, many, mixed, curve, circles, named, view, played, refused):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
     return result
