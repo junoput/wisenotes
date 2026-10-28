@@ -9,7 +9,7 @@
  * policy allows inline event-handler attributes. Nothing here builds markup from user
  * text: the DOM is made with createElement and textContent. */
 import { parse, newEnv } from '/static/js/graph-spec.js';
-import { admitCurve, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
+import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -58,20 +58,21 @@ function drawBoard(box, spec, env, colors, label, work) {
   });
   let n = 0;
   for (const [name, f] of spec.functions) {
-    if (!admitCurve(work)) continue;
-    board.create('functiongraph', [(x) => (overBudget(work) ? NaN : finite(f(x, env)))], {
+    if (!admitCurve(work, name)) continue;
+    creating(work, () => board.create('functiongraph', [(x) => (overBudget(work) ? NaN : finite(f(x, env)))], {
       strokeColor: colors.curves[n++ % colors.curves.length],
       strokeWidth: 2,
       highlight: false,
       withLabel: false,
       fixed: true,
-    });
+    }));
   }
   for (const [name, c] of spec.curves) {
-    if (!admitCurve(work)) continue;
-    board.create(
+    if (!admitCurve(work, name)) continue;
+    // x and y of a sample are one evaluation: x is charged, y follows x (a gap is a gap)
+    creating(work, () => board.create(
       'curve',
-      [(t) => (overBudget(work) ? NaN : finite(c.x(t, env))), (t) => (overBudget(work) ? NaN : finite(c.y(t, env))), c.lo, c.hi],
+      [(t) => (overBudget(work) ? NaN : finite(c.x(t, env))), (t) => (work.overran ? NaN : finite(c.y(t, env))), c.lo, c.hi],
       {
         strokeColor: colors.curves[n++ % colors.curves.length],
         strokeWidth: 2,
@@ -79,7 +80,7 @@ function drawBoard(box, spec, env, colors, label, work) {
         withLabel: false,
         fixed: true,
       },
-    );
+    ));
   }
   for (const [name, [px, py]] of spec.points) {
     board.create('point', [() => (overBudget(work) ? NaN : finite(px(env))), () => (overBudget(work) ? NaN : finite(py(env)))], {
@@ -162,7 +163,6 @@ export async function renderGraphs(loadOnce) {
     for (const { figure } of drawable) figure._graph = false;
     return;
   }
-  const colors = palette();
   let first = true;
   for (const { figure, spec } of drawable) {
     // One task per board: a page of many blocks stays responsive while it is drawn.
@@ -170,6 +170,7 @@ export async function renderGraphs(loadOnce) {
     first = false;
     // The page may have swapped while the library loaded or while earlier boards were drawn.
     if (!figure.isConnected) continue;
+    const colors = palette(); // this board's, read now: the theme may have changed while earlier boards were drawn
     let live = null;
     try {
       const env = newEnv();

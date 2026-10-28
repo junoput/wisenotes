@@ -48,6 +48,12 @@ MANY = [CHEAP] * 40
 HEAVY = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(800))
 HEAVY_AND_CHEAP = [HEAVY, "a = slider(0, 3, value 1)\ng(x) = a*sin(x)\n"]
 CURVE = "a = slider(1, 4, value 2)\nc(t) = (2*cos(a*t), 2*sin(t)), t in 0..2*pi\nP = (2, 0)\n"
+# 24 parametric circles: they all fit one update's allowance, and all are drawn
+CIRCLES = "".join(f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(24))
+# 12 functions and 14 circles: 26 curves, the first 24 in the order of the definition
+NAMED = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(12)) + "".join(
+    f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(14)
+)
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -228,6 +234,115 @@ def check_each_board_says_its_own_limits(browser, base, many, mixed):
     }
 
 
+# the colour of a path, as the browser computes it, so a hex and an rgb() compare (this text
+# is put in front of a script: the page's policy forbids eval)
+NORM = (
+    "const norm = (c) => { const e = document.createElement('i'); e.style.color = c;"
+    " document.body.append(e); const v = getComputedStyle(e).color; e.remove(); return v; };"
+)
+
+
+def stroke_colors(page):
+    """Per board: the set of its path strokes, normalised."""
+    return page.evaluate(
+        "() => { " + NORM + " return [...document.querySelectorAll('.graph-board')]"
+        ".map((b) => [...new Set([...b.querySelectorAll('svg path')]"
+        ".map((p) => p.getAttribute('stroke')).filter(Boolean).map(norm))]); }"
+    )
+
+
+def check_a_theme_change_while_drawing(browser, base, many):
+    """The palette is read for each board, not once before the drawing loop yields."""
+    ctx = browser.new_context(viewport={"width": 900, "height": 900}, color_scheme="dark")
+    page = ctx.new_page()
+    try:
+        # the premise, on a page with no board (flipping the theme redraws every board): the
+        # two themes have different accents, so a board drawn with the old palette is seen
+        page.goto(f"{base}/")
+        accents = page.evaluate(
+            "() => { " + NORM + " const r = document.documentElement; const out = {};"
+            " for (const t of ['light', 'dark']) { r.dataset.theme = t;"
+            " out[t] = norm(getComputedStyle(r).getPropertyValue('--accent').trim() || 'rgb(0,0,0)'); }"
+            " return out; }"
+        )
+        page.goto(f"{base}/notes/{many}")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.graph-board svg').length >= 1", timeout=30000
+        )
+        page.evaluate("() => { document.documentElement.dataset.theme = 'light'; }")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.graph-board svg').length === 40", timeout=30000
+        )
+        page.wait_for_timeout(1500)
+        light = page.evaluate(
+            "() => { " + NORM + " return norm(getComputedStyle(document.documentElement)"
+            ".getPropertyValue('--accent').trim()); }"
+        )
+        colors = stroke_colors(page)
+    finally:
+        ctx.close()
+    with_light = sum(1 for c in colors if light in c)
+    return {
+        "theme: the light and dark accents differ (the premise)": accents["light"]
+        != accents["dark"],
+        f"theme: all 40 boards use the new theme's accent ({with_light} of {len(colors)})": len(
+            colors
+        )
+        == 40
+        and with_light == 40,
+    }
+
+
+def check_the_curve_cap_and_its_hint(browser, base, circles, named):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{base}/notes/{circles}")
+        page.wait_for_selector(".graph-board svg", timeout=30000)
+        page.wait_for_timeout(1500)
+        circles_hint = hints(page)
+        circle_paths = page.evaluate(
+            "() => { const b = document.querySelector('.graph-board');"
+            " const w = [...b.querySelectorAll('svg path')].filter((p) => p.getAttribute('stroke-width') === '2px');"
+            " return w.length; }"
+        )
+        # every pan is an update with a fresh allowance: after six of them (24,600 evaluations
+        # each, 147,600 in all) the circles are still drawn, and nothing says "too much work"
+        box = page.locator(".graph-board").bounding_box()
+        for i in range(6):
+            page.mouse.move(box["x"] + 100, box["y"] + 100)
+            page.mouse.down()
+            page.mouse.move(box["x"] + 130 + i, box["y"] + 110, steps=3)
+            page.mouse.up()
+            page.wait_for_timeout(400)
+        after_pans = hints(page)
+        still_drawn = page.evaluate(
+            "() => [...document.querySelectorAll('.graph-board svg path')]"
+            ".filter((p) => p.getAttribute('stroke-width') === '2px' && (p.getAttribute('d') || '').length > 100).length"
+        )
+        page.goto(f"{base}/notes/{named}")
+        page.wait_for_selector(".graph-board svg", timeout=30000)
+        page.wait_for_timeout(1500)
+        named_hint = hints(page)
+    finally:
+        ctx.close()
+    return {
+        "curves: 24 parametric circles are all drawn, and the hint says nothing": circles_hint
+        and left_out(circles_hint) == []
+        and circle_paths >= 24,
+        "curves: 26 curves say which two are left out, in the order of the definition": len(
+            left_out(named_hint)
+        )
+        == 1
+        and "first 24 of 26" in named_hint[0]
+        and "left out: c12, c13." in named_hint[0]
+        and "functions, then curves" in named_hint[0],
+        "update: after six pans the 24 circles are still drawn and nothing is left out": still_drawn
+        >= 24
+        and left_out(after_pans) == [],
+    }
+
+
 def check_one_finger_scrolls(browser, base, note):
     """On a phone one finger on a board scrolls the page. JSXGraph writes touch-action: none
     into the element's style on init and on every pointerdown; the stylesheet must win."""
@@ -374,6 +489,8 @@ def drive(p, base, js, shots):
     many = make_note(ctx, base, f"Graph many {stamp}", MANY)
     mixed = make_note(ctx, base, f"Graph mixed {stamp}", HEAVY_AND_CHEAP)
     curve = make_note(ctx, base, f"Graph curve {stamp}", CURVE)
+    circles = make_note(ctx, base, f"Graph circles {stamp}", CIRCLES)
+    named = make_note(ctx, base, f"Graph named {stamp}", NAMED)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -481,10 +598,12 @@ def drive(p, base, js, shots):
             checks.update(check_sampling_is_bounded(browser, base, slow))
             checks.update(check_a_parametric_curve(browser, base, curve))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
+            checks.update(check_a_theme_change_while_drawing(browser, base, many))
+            checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
-        for nid in (good, hostile, broken, slow, many, mixed, curve):
+        for nid in (good, hostile, broken, slow, many, mixed, curve, circles, named):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
     return result
