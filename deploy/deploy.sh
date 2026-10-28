@@ -349,7 +349,11 @@ route_home() { # after $NAME serves on $PORT as the writer: a slot left on $NEXT
     route "$PORT" || say "could not point tailnet slot $SERVE_SLOT at $PORT; it still points at $SPARE_PORT"
   fi
   if slot_may_need_next; then
-    say "tailnet slot $SERVE_SLOT may still point at $NEXT (it reads: $(slot_says)); keeping $NEXT"
+    if have_container "$NEXT"; then
+      say "tailnet slot $SERVE_SLOT may still point at $NEXT (it reads: $(slot_says)); keeping $NEXT"
+    else
+      say "tailnet slot $SERVE_SLOT cannot be read (it reads: $(slot_says)); there is no $NEXT to keep"
+    fi
   elif have_container "$NEXT"; then
     stop_next
   fi
@@ -390,7 +394,16 @@ settle() { # $NAME serves: make it the writer and the slot's target, then remove
   # $NAME is not restarted, so nothing serving goes away. Every step is safe to
   # repeat, and a failed step leaves the writer where the slot points. $NEXT is
   # removed only when the slot is SEEN off the spare port: unreadable is not off.
-  local id t
+  local id t=""
+  if [ -n "$SERVE_SLOT" ] && [ -n "$SPARE_PORT" ]; then
+    # Read the slot before the writer moves: with the slot unreadable it may point
+    # at $NEXT, and the writer stays where the last confirmed route left it.
+    t=$(slot_target)
+    if [ "$t" = '?' ]; then
+      say "tailnet slot $SERVE_SLOT cannot be read; the writer is left as it is and any $NEXT is kept; not settled; the next --check looks again"
+      return 1
+    fi
+  fi
   if fence_container "$NAME"; then
     id=$(writer_of "$NAME")
     if [ -z "$id" ]; then
@@ -400,7 +413,6 @@ settle() { # $NAME serves: make it the writer and the slot's target, then remove
     set_writer "$id" || { say "writes in flight did not finish within ${DRAIN_SECONDS}s; not settled"; return 1; }
   fi
   if [ -n "$SERVE_SLOT" ] && [ -n "$SPARE_PORT" ]; then
-    t=$(slot_target)
     if target_is "$t" "$SPARE_PORT"; then
       say "tailnet slot $SERVE_SLOT points at $SPARE_PORT; pointing it at $NAME on $PORT"
       if ! route "$PORT"; then
@@ -481,8 +493,10 @@ hand_back() { # $NEXT serves and writes; make $NAME (running fenced on $PORT) th
       return 1
     fi
     if [ "$t" = '?' ]; then
-      # $NEXT may still be the slot's target: it stays, and $NAME is the writer either way
-      say "could not read tailnet slot $SERVE_SLOT after pointing it at $PORT; $NAME is the writer and $NEXT is kept; run deploy.sh --check"
+      # $NEXT may still be the slot's target: it stays, and so does the writer it
+      # had (the last confirmed route); --check moves both once the slot reads.
+      say "could not read tailnet slot $SERVE_SLOT after pointing it at $PORT; $NEXT is kept and stays the writer; run deploy.sh --check"
+      set_writer "$next_id" || say "AND could not make $NEXT the writer again: NOTHING CAN WRITE until deploy.sh --check"
       return 2
     fi
     say "could not confirm tailnet slot $SERVE_SLOT points at $PORT (it reads: $(slot_says)); $NAME is the writer"
@@ -529,9 +543,12 @@ deploy_beside() { # $1 sha; 0 deployed, 1 not deployed
       return 0
     fi
     if [ "$rc" = 2 ]; then
-      say "$1 is running as $NAME on $PORT and is the writer, but tailnet slot $SERVE_SLOT is NOT CONFIRMED there; this is not a clean deploy. deploy.sh --check settles it"
+      say "$1 is running as $NAME on $PORT, but tailnet slot $SERVE_SLOT is NOT CONFIRMED there; this is not a clean deploy. deploy.sh --check settles it"
       return 1
     fi
+    # rc 1: $NAME passed its smoke and is left running; $NEXT keeps the slot and the writer
+    say "$1 IS DEPLOYED and $NAME runs on $PORT, but $NEXT keeps tailnet slot $SERVE_SLOT and is the writer (the hand-back did not happen); deploy.sh --check hands it back"
+    return 1
   fi
   say "$NAME did not come back on $PORT; last log lines:"
   podman logs --tail 20 "$NAME" 2>&1 | sed 's/^/    /' || true

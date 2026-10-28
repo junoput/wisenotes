@@ -691,6 +691,11 @@ esac
 """,
     "curl": r"""#!/usr/bin/env bash
 S=$STUB_STATE; url=${!#}; hp=${url#http://}; hp=${hp%%/*}; port=${hp##*:}
+# hang "curl": no answer, so curl gives up after its own --max-time, as the real one does
+if grep -qx curl "$S/hang" 2>/dev/null; then
+  mt=0; prev=; for a in "$@"; do [ "$prev" = --max-time ] && mt=$a; prev=$a; done
+  /bin/sleep "$mt"; printf 000; exit 28
+fi
 for c in "$S"/c/*; do
   [ -f "$c" ] || continue
   read -r id st p _ <"$c"
@@ -723,6 +728,8 @@ echo "systemd-run $*" >>"$STUB_STATE/log"; podman start "${!#}"
 S=$STUB_STATE; echo "tailscale $*" >>"$S/log"
 case "$*" in
   "serve status --json")
+    # hang "status": the command never returns; only the caller's timeout ends it
+    grep -qx status "$S/hang" 2>/dev/null && exec /bin/sleep 30
     if [ -s "$S/status_fail" ]; then  # fail this many reads, then answer
       n=$(cat "$S/status_fail"); echo $((n - 1)) >"$S/status_fail"; [ "$n" -gt 0 ] && exit 1
     fi
@@ -738,10 +745,13 @@ case "$*" in
         echo $! >"$S/holder.pid"
         for _ in $(seq 100); do flock -n -x "$WISENOTES_DATA/.writer.lock" true || break; /bin/sleep 0.02; done
       fi
+      # hang_after_signal: the commands it names hang from the moment of the signal (the trap's own calls)
+      [ -f "$S/hang_after_signal" ] && cp "$S/hang_after_signal" "$S/hang"
       kill -s "$sig" "$(ps -o ppid= -p "$PPID" | tr -d ' ')"
       [ "$sig" = KILL ] && exit 1
       exit 1  # TERM: deploy.sh runs its trap once this command returns; not applied
     fi
+    grep -qx route "$S/hang" 2>/dev/null && exec /bin/sleep 30
     # unreadable_after_route "<port>": from the first route to that port on, status cannot be read
     if [ -f "$S/unreadable_after_route" ] && [ "$(cat "$S/unreadable_after_route")" = "${t##*:}" ]; then echo 999 >"$S/status_fail"; fi
     [ -f "$S/route_fail" ] && exit 1
@@ -1501,3 +1511,147 @@ def test_a_deploy_does_not_go_beside_when_the_slot_cannot_be_read(beside):
     r = run_beside(beside, sha="bbb")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "in place" in r.stdout and "tailnet slot 8094 cannot be read" in r.stdout
+
+
+# ---- MR 20261022-036, second send-back (2026-10-28)
+
+
+def test_preview_does_not_build_every_pass_when_the_tip_fails_smoke_in_the_f6_state(beside):
+    # F6 state: aaa serves, :current names bbb (a hand-over cut short), and the tip ccc
+    # fails smoke. ccc is never retagged, so the marker naming it must survive: the old
+    # code cleared it on every pass (current != serving) and built and smoked ccc again.
+    serving_aaa(beside)
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:bbb fence")
+    mark(beside, "bad", "id-wisenotes:ccc")
+    first = run_beside(beside, script="preview.sh", sha="ccc")
+    assert "deploying with the deploy scripts at ccc" in first.stdout, first.stdout + first.stderr
+    assert "refused by smoke" in first.stdout
+    assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "ccc"
+    reset_log(beside)
+    second = run_beside(beside, script="preview.sh", sha="ccc")
+    assert "failed smoke earlier" in second.stdout, second.stdout + second.stderr
+    assert "podman build" not in log(beside) and "deploying again" not in second.stdout
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+
+
+def left_beside(box):
+    """-next serves the slot as the writer; $NAME is back up on 20250, fenced (the unit started it)."""
+    serving_aaa(box)
+    state_file(box, "route_fail_to", "20250")
+    run_beside(box, sha="bbb")
+    (box / "state/route_fail_to").unlink()
+    (box / "state/c/wisenotes").write_text("id-wisenotes:aaa running 20250 wisenotes.1.2.3\n")
+    next_id = containers(box)["wisenotes-next"][3]
+    assert writer(box) == next_id and slot(box).endswith(":20260")
+    return next_id
+
+
+def test_settle_leaves_the_writer_alone_when_the_slot_cannot_be_read(beside):
+    # the slot may point at -next: moving the writer to $NAME would refuse every write there
+    next_id = left_beside(beside)
+    state_file(beside, "status_fail", "999")
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert (
+        "the writer is left as it is" in c.stdout
+        and "$NAME serves and is the writer" not in c.stdout
+    )
+    assert writer(beside) == next_id
+    assert next_is_kept(beside)
+
+
+def test_harness_control_settle_moves_the_writer_once_the_slot_reads(beside):
+    next_id = left_beside(beside)
+    c = check(beside)
+    assert c.returncode == 0, c.stdout + c.stderr
+    assert writer(beside) != next_id
+    at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_a_hand_back_that_cannot_read_the_slot_keeps_next_as_the_writer(beside):
+    serving_aaa(beside)
+    state_file(beside, "route_fail_to", "20250")
+    state_file(beside, "unreadable_after_route", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 1 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # the last confirmed route
+    assert "wisenotes is the writer" not in r.stdout  # no claim for $NAME
+    assert next_is_kept(beside)
+
+
+def test_a_hand_back_that_returns_1_does_not_remove_a_healthy_name(beside):
+    # $NAME passed its smoke; only its label cannot be read, so nothing is handed back.
+    # The old code fell through to "did not come back" and removed it.
+    serving_aaa(beside)
+    state_file(beside, "label_fail", "wisenotes")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "did not come back" not in r.stdout and "IS DEPLOYED" in r.stdout
+    assert containers(beside)["wisenotes"][1] == "running"
+    assert next_is_kept(beside) and slot(beside).endswith(":20260")
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]
+    (beside / "state/label_fail").unlink()
+    c = check(beside)  # the next pass hands it back
+    assert c.returncode == 0, c.stdout + c.stderr
+    at_rest(beside)
+
+
+def test_settle_says_there_is_no_next_to_keep_when_there_is_none(beside):
+    # route_home, reached by --start with the slot unreadable and no -next beside
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    r = run_beside(beside, "--start", sha="aaa")
+    assert "there is no wisenotes-next to keep" in r.stdout, r.stdout + r.stderr
+    assert "keeping wisenotes-next" not in r.stdout
+
+
+# F7, one test per shortened timeout of the trap. A stub that hangs from the moment of
+# the signal makes the timeout the only thing that ends the call; the lower bound
+# proves the hang was reached, the upper bound that the short value is the one in use.
+
+
+def trapped(box, signal_port, hang):
+    serving_aaa(box)
+    signal_at_route(box, signal_port, "TERM")
+    state_file(box, "hang_after_signal", hang)
+    started = time.time()
+    r = run_beside(box, sha="bbb")
+    return r, time.time() - started
+
+
+def status_reads_after_the_last_route(box):
+    n = 0
+    for line in reversed(log(box).splitlines()):
+        if line == "tailscale serve status --json":
+            n += 1
+        elif n or line.startswith("tailscale serve --bg"):
+            return n if n else 0
+    return n
+
+
+def test_the_trap_reads_the_slot_with_the_short_read_timeout(beside):
+    r, took = trapped(beside, 20260, "status")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 1.8 <= took < 8, (took, r.stdout)  # READ_SECONDS=2 in the trap; 10 outside it
+    assert "cannot be read" in r.stdout and "NOT SETTLED" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # not moved on a guess
+
+
+def test_the_trap_routes_with_the_short_tailscale_timeout_and_reads_the_slot_once(beside):
+    r, took = trapped(beside, 20250, "route")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 2.8 <= took < 9, (took, r.stdout)  # TS_SECONDS=3 in the trap; 20 outside it
+    assert "NOT SETTLED" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # still serves the slot
+    # ROUTE_READS=1 in the trap (3 outside it) plus settle's own read of the slot
+    assert status_reads_after_the_last_route(beside) == 2, log(beside)
+
+
+def test_the_trap_probes_with_the_short_probe_timeout(beside):
+    r, took = trapped(beside, 20260, "curl")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 1.8 <= took < 6, (
+        took,
+        r.stdout,
+    )  # two probes of PROBE_SECONDS=1; 5 each outside the trap
+    assert "does not serve" in r.stdout

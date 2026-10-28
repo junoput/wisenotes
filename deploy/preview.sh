@@ -119,7 +119,10 @@ pass() {
   # the OLD image serving while :current names the new one; the tip's "failed smoke
   # earlier" marker would then keep it from ever being deployed (20261022-036 F6).
   current=$(podman image inspect -f '{{index .Labels "wisenotes.sha"}}' "$NAME:current" 2>/dev/null || true)
-  if [ -n "$serving" ] && [ -n "$current" ] && [ "$current" != "$serving" ]; then
+  # Only a marker that names :current is cleared: a tip that failed smoke is never
+  # retagged, so its marker names something else and stays (no build every pass).
+  if [ -n "$serving" ] && [ -n "$current" ] && [ "$current" != "$serving" ] \
+    && [ "$(cat "$last_tried_file" 2>/dev/null || true)" = "$current" ]; then
     echo "preview: $NAME serves $serving but its current image is $current, which passed smoke before a deploy was cut short; deploying again"
     rm -f "$last_tried_file"
   fi
