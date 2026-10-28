@@ -61,8 +61,12 @@ LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
 )
-# a limit generous enough for a slow runner; without the bound these take 8 to 12 s each
-LONG_TASK_LIMIT_MS = 3000
+# The limit is in units of UNIT_JS, timed in the same page: how long the box takes for a fixed
+# piece of plain work, so a loaded box and an idle one are judged alike (an absolute 3000 ms
+# failed once at CPU PSI 55-73). Measured here (unit about 500 ms, PSI 40): bounded, the
+# sampling definition is 0.4-0.6 units and 800 functions 1.7-2.5; with the bound removed they
+# are 14.6 and 14.0 (8 to 12 s and 5 s before the bounds). 8 is between.
+LONG_TASK_LIMIT_UNITS = 8
 
 
 def make_note(ctx, base, title, spec, unchecked=False):
@@ -126,12 +130,27 @@ def curve_d(page):
     )
 
 
+# A fixed piece of plain work, timed in the page being judged: how fast this box is right
+# now. A limit in units of it holds on a loaded box and on an idle one (20261028-084 1b).
+UNIT_JS = (
+    "() => { const t = performance.now(); let s = 0;"
+    " for (let i = 0; i < 2e7; i++) s += Math.sin(i); return performance.now() - t + (s > 1e9 ? 1 : 0); }"
+)
+
+
+def unit_ms(page):
+    """The median of three timings of UNIT_JS."""
+    return sorted(page.evaluate(UNIT_JS) for _ in range(3))[1]
+
+
 def check_sampling_is_bounded(browser, base, note):
     """Two short definitions that took JSXGraph 8 to 12 s of long tasks each."""
     ctx = browser.new_context(viewport={"width": 900, "height": 900})
     page = ctx.new_page()
     page.add_init_script(LONG_TASKS)
     try:
+        page.goto(f"{base}/")
+        unit = unit_ms(page)
         page.goto(f"{base}/notes/{note}")
         page.wait_for_selector(".graph-board svg", timeout=30000)
         page.wait_for_timeout(1500)
@@ -146,9 +165,12 @@ def check_sampling_is_bounded(browser, base, note):
         total = page.evaluate("() => window.__long")
     finally:
         ctx.close()
-    print(f"  (long tasks: {drawn:.0f} ms drawing, {total:.0f} ms with a pan)")
+    print(
+        f"  (long tasks: {drawn:.0f} ms drawing, {total:.0f} ms with a pan; unit {unit:.0f} ms, ratio {total / unit:.1f})"
+    )
     return {
-        f"sampling is bounded: long tasks under {LONG_TASK_LIMIT_MS} ms": total < LONG_TASK_LIMIT_MS
+        f"sampling is bounded: long tasks under {LONG_TASK_LIMIT_UNITS} units of work": total
+        < LONG_TASK_LIMIT_UNITS * unit
     }
 
 
@@ -194,6 +216,8 @@ def check_each_board_says_its_own_limits(browser, base, many, mixed):
     page = ctx.new_page()
     page.add_init_script(LONG_TASKS)
     try:
+        page.goto(f"{base}/")
+        unit = unit_ms(page)
         page.goto(f"{base}/notes/{many}")
         page.wait_for_function(
             "() => document.querySelectorAll('.graph-board svg').length === 40", timeout=30000
@@ -225,7 +249,9 @@ def check_each_board_says_its_own_limits(browser, base, many, mixed):
         total = page.evaluate("() => window.__long")
     finally:
         ctx.close()
-    print(f"  (heavy block: long tasks {loaded:.0f} ms on load, {total:.0f} ms with a pan)")
+    print(
+        f"  (heavy block: long tasks {loaded:.0f} ms on load, {total:.0f} ms with a pan; unit {unit:.0f} ms, ratio {total / unit:.1f})"
+    )
     return {
         "40 cheap blocks: no board says it left something out": many_said == []
         and many_drawn == 40,
@@ -233,7 +259,8 @@ def check_each_board_says_its_own_limits(browser, base, many, mixed):
         and "first 24 of 800" in first[0]
         and left_out(after) == left_out(first)
         and "first 24 of 800" in after[0],
-        f"800 functions: long tasks under {LONG_TASK_LIMIT_MS} ms": total < LONG_TASK_LIMIT_MS,
+        f"800 functions: long tasks under {LONG_TASK_LIMIT_UNITS} units of work": total
+        < LONG_TASK_LIMIT_UNITS * unit,
     }
 
 
