@@ -137,6 +137,12 @@ def test_nothing_that_did_not_change_is_rewritten():
     same = (-2 * math.pi, 2 * math.pi)
     assert graph_spec.with_view(text, same, (-1, 1), {"a": 1}) == text
     assert graph_spec.with_view(text, same, (-1, 1)) == text
+    # a value is not re-spelled when it did not change: "1.0" stays, and a slider with no value
+    # at its low end does not gain one
+    spelled = "a = slider(0, 5, value 1.0)\nb = slider(0, 1)\nf(x) = a*b\n"
+    assert graph_spec.with_view(spelled, same, (-1, 1), {"a": 1, "b": 0}) == (
+        "view 2d  x -6.2832..6.2832  y -1..1\n" + spelled
+    )
     # and a box that moved by float noise is the same box
     assert graph_spec.with_view(text, (same[0] + 1e-15, same[1]), (-1, 1 - 1e-15), {"a": 1}) == text
 

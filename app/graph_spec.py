@@ -748,8 +748,6 @@ def _range_text(lo: float, hi: float, axis: str) -> str:
         raise ValueError(f"the {axis} range must be finite")
     if lo > hi:
         raise ValueError(f"the {axis} range must go from low to high")
-    if lo == hi:
-        raise ValueError(f"the {axis} range is too narrow to save")
     if max(abs(lo), abs(hi)) > VIEW_LIMIT:
         raise ValueError(f"the {axis} range is too large to save")
     places = _places(hi - lo)
