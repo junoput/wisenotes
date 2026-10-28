@@ -312,10 +312,16 @@ def check_the_curve_cap_and_its_hint(browser, base, circles, named):
         # every slider move is an update with a fresh allowance: after six of them (24,600
         # evaluations each, 147,600 in all) the circles are still drawn, and nothing says "too
         # much work" (without the 'update' settle the allowance runs out at the third)
+        last_d = (
+            "() => { const ps = [...document.querySelectorAll('.graph-board svg path')]"
+            ".filter((p) => p.getAttribute('stroke-width') === '2px'); return ps.at(-1).getAttribute('d'); }"
+        )
+        first_d = page.evaluate(last_d)
         for value in ("0.6", "0.8", "1.1", "1.4", "1.7", "2"):
             page.locator(".graph-slider input[type=range]").fill(value)
             page.wait_for_timeout(400)
         after_moves = hints(page)
+        moved_d = page.evaluate(last_d)
         still_drawn = page.evaluate(
             "() => [...document.querySelectorAll('.graph-board svg path')]"
             ".filter((p) => p.getAttribute('stroke-width') === '2px' && (p.getAttribute('d') || '').length > 100).length"
@@ -339,7 +345,8 @@ def check_the_curve_cap_and_its_hint(browser, base, circles, named):
         and "functions, then curves" in named_hint[0],
         "update: after six slider moves the 24 circles are still drawn and nothing is left out": still_drawn
         >= 24
-        and left_out(after_moves) == [],
+        and left_out(after_moves) == []
+        and moved_d != first_d,  # the last circle followed the slider: it was redrawn, not frozen
     }
 
 
