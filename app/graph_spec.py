@@ -58,6 +58,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
+from decimal import Decimal
 
 MAX_DEPTH = 64  # nesting of parentheses and calls; deeper is refused, not recursed into
 # A chain such as 1+1+1+... nests no parentheses but still builds a tree as deep as it
@@ -720,16 +721,94 @@ def validate(text: str) -> list[SpecError]:
 # ---------------------------------------------------------------- the saved view
 
 
+VIEW_LIMIT = 1e15  # a saved bound is a plain decimal (the language has no exponent): keep it short
+SAME = 1e-9  # a saved number this close (of the span) to what the line says is left as written
+
+
 def _places(span: float) -> int:
-    """Decimals that keep six significant digits of a range this wide (never an exponent)."""
-    return min(15, max(0, 5 - math.floor(math.log10(span)))) if span > 0 else 0
+    """Decimals that keep six significant digits of a range this wide."""
+    return min(20, max(0, 5 - math.floor(math.log10(span)))) if span > 0 else 0
+
+
+def _decimal(value: float) -> str:
+    """The shortest decimal that reads back as `value`, with no exponent."""
+    text = repr(value)
+    if "e" in text:
+        text = format(Decimal(text), "f")
+    text = text.removesuffix(".0")
+    return "0" if text == "-0" else text
 
 
 def _plain(value: float, places: int) -> str:
-    text = f"{round(value, places):.{places}f}"
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return "0" if text in ("-0", "") else text
+    return _decimal(round(value, places))
+
+
+def _range_text(lo: float, hi: float, axis: str) -> str:
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        raise ValueError(f"the {axis} range must be finite")
+    if lo > hi:
+        raise ValueError(f"the {axis} range must go from low to high")
+    if lo == hi:
+        raise ValueError(f"the {axis} range is too narrow to save")
+    if max(abs(lo), abs(hi)) > VIEW_LIMIT:
+        raise ValueError(f"the {axis} range is too large to save")
+    places = _places(hi - lo)
+    lo_text, hi_text = _plain(lo, places), _plain(hi, places)
+    if not float(lo_text) < float(hi_text):
+        raise ValueError(f"the {axis} range is too narrow to save")
+    return f"{lo_text}..{hi_text}"
+
+
+def _close(a: float, b: float, span: float) -> bool:
+    return abs(a - b) <= SAME * span
+
+
+def _words(head: str) -> list[re.Match[str]]:
+    return list(re.finditer(r"[^ \t\r]+", head))
+
+
+def _view_head(head: str, old: View | None, x: tuple[float, float], y: tuple[float, float]) -> str:
+    """The view line with only the ranges that moved changed: the spacing, the order and
+    the text of a range that did not move stay as written."""
+    words = _words(head)
+    edits: list[tuple[int, int, str]] = []
+    for axis, new in (("x", x), ("y", y)):
+        at = next((i for i, w in enumerate(words) if i >= 2 and w.group() == axis), None)
+        text = _range_text(*new, axis)
+        was = (
+            (old.x if axis == "x" else old.y) if old else None
+        )  # what the line says, or the default
+        if was and all(_close(a, b, new[1] - new[0]) for a, b in zip(was, new, strict=True)):
+            continue
+        if at is None:
+            edits.append((words[-1].end(), words[-1].end(), f"  {axis} {text}"))
+        else:
+            edits.append((words[at + 1].start(), words[at + 1].end(), text))
+    for start, end, text in sorted(edits, reverse=True):
+        head = head[:start] + text + head[end:]
+    return head
+
+
+def _slider_head(head: str, slider: Slider, value: float) -> str:
+    """The slider line with only its value changed: in place when it has one, else added
+    after the last option."""
+    span = slider.step if slider.step is not None else (slider.hi - slider.lo) / 1000
+    text = _plain(value, _places(span))
+    if value in (slider.lo, slider.hi) or not slider.lo <= float(text) <= slider.hi:
+        text = _decimal(value)  # an end is written as it is, and never rounded outside
+    opening = head.index("(", head.index("slider", head.index("=")))
+    closing = head.rindex(")")
+    pieces = _split_top(head[opening + 1 : closing])
+    for i, piece in enumerate(pieces[2:], 2):
+        core = piece.strip(BLANK)
+        if core.partition(" ")[0] == "value":
+            lead = piece[: len(piece) - len(piece.lstrip(BLANK))]
+            pieces[i] = lead + f"value {text}" + piece[len(piece.rstrip(BLANK)) :]
+            break
+    else:
+        last = pieces[-1]
+        pieces[-1] = last.rstrip(BLANK) + f", value {text}" + last[len(last.rstrip(BLANK)) :]
+    return head[: opening + 1] + ",".join(pieces) + head[closing:]
 
 
 def with_view(
@@ -740,38 +819,34 @@ def with_view(
 ) -> str:
     """The definition with its default view set to x and y, and each named slider's value
     set to the given one. Nothing else changes: comments, other lines and their order
-    stay (the view line is replaced where it is, or put first when there is none).
-    Raises ValueError when the definition has errors, a number is not finite or not
-    in order, a name is not a slider, or a value is outside its slider's range."""
+    stay, and so does the spacing of the lines this edits: only a range that moved and a
+    value that changed are written, in place (a definition without a view line gets one
+    first). A slider value a hair outside its range, as a browser's range input gives at
+    an irrational end, is taken as that end.
+    Raises ValueError when the definition has errors, a number is not finite, too narrow,
+    too large or not in order, a name is not a slider, or a value is outside its range."""
     spec = parse(text)
     if spec.errors:
         raise ValueError("the definition has errors; fix them before saving a view")
-    values = values or {}
-    for lo, hi, axis in ((*x, "x"), (*y, "y")):
-        if not (math.isfinite(lo) and math.isfinite(hi)) or not lo < hi:
-            raise ValueError(f"the {axis} range must be finite and go from low to high")
+    values = dict(values or {})
     for name, value in values.items():
         slider = spec.sliders.get(name)
         if slider is None:
             raise ValueError(f"{name} is not a slider")
-        if not math.isfinite(value) or not slider.lo <= value <= slider.hi:
+        edge = SAME * (slider.hi - slider.lo)
+        if not math.isfinite(value) or not slider.lo - edge <= value <= slider.hi + edge:
             raise ValueError(f"the value of {name} must be within its range")
-    view = (
-        f"view 2d  x {_plain(x[0], _places(x[1] - x[0]))}..{_plain(x[1], _places(x[1] - x[0]))}"
-        f"  y {_plain(y[0], _places(y[1] - y[0]))}..{_plain(y[1], _places(y[1] - y[0]))}"
-    )
+        values[name] = min(max(value, slider.lo), slider.hi)
+    ranges = {axis: _range_text(*new, axis) for axis, new in (("x", x), ("y", y))}  # may raise
     out: list[str] = []
     placed = False
     for line in text.split("\n"):
         head, hash_, comment = line.partition("#")
         stripped = head.strip(BLANK)
-        rest = (
-            head[len(head.rstrip(BLANK)) :] + hash_ + comment
-        )  # blanks, a CR, the comment: as they were
         if not placed and (
             stripped == "view" or stripped.startswith(("view ", "view\t", "view\r"))
         ):
-            out.append(view + rest)
+            out.append(_view_head(head, spec.view, x, y) + hash_ + comment)
             placed = True
             continue
         m = ASSIGN.fullmatch(stripped)
@@ -782,19 +857,14 @@ def with_view(
         )
         if m and s and m.group(1) in values:
             slider = spec.sliders[m.group(1)]
-            span = slider.step if slider.step is not None else (slider.hi - slider.lo) / 1000
-            value = _plain(values[m.group(1)], _places(span))
-            args = [a.strip(BLANK) for a in _split_top(s.group(1))]
-            new_value = f"value {value}"
-            if any(a.partition(" ")[0] == "value" for a in args[2:]):
-                args = [new_value if a.partition(" ")[0] == "value" else a for a in args]
-            else:
-                args.append(new_value)
-            out.append(f"{m.group(1)} = slider({', '.join(args)}){rest}")
+            value = values[m.group(1)]
+            if not _close(value, slider.value, slider.hi - slider.lo):
+                head = _slider_head(head, slider, value)
+            out.append(head + hash_ + comment)
             continue
         out.append(line)
     if not placed:
-        out.insert(0, view)
+        out.insert(0, f"view 2d  x {ranges['x']}  y {ranges['y']}")
     result = "\n".join(out)
     if errors := validate(result):
         raise ValueError(f"the saved view would not parse: {errors[0]}")

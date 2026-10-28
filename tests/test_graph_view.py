@@ -88,6 +88,90 @@ def test_numbers_that_cannot_be_saved_are_refused(x, y, values, why):
         graph_spec.with_view(TEXT, x, y, values)
 
 
+@pytest.mark.parametrize(
+    ("decl", "end"),
+    [
+        ("slider(0, 2*pi)", "hi"),
+        ("slider(0, e)", "hi"),
+        ("slider(0, 2/3)", "hi"),
+        ("slider(-2*pi, 0)", "lo"),
+        ("slider(-2*pi, 2*pi, step 0.01, play)", "hi"),
+        ("slider(-2*pi, 2*pi, step 0.01, play)", "lo"),
+    ],
+)
+@pytest.mark.parametrize("beyond", [0, 4e-15, 1e-12, 1e-10])
+def test_a_slider_at_an_irrational_end_saves(decl, end, beyond):
+    # a browser's range input gives "6.28318530717959" at the end 2*pi: a hair outside it,
+    # and rounding the value to the slider's decimals goes outside too
+    slider = graph_spec.parse(f"a = {decl}\nf(x) = a*x").sliders["a"]
+    edge = slider.hi if end == "hi" else slider.lo
+    value = edge + beyond if end == "hi" else edge - beyond
+    saved = graph_spec.with_view(f"a = {decl}\nf(x) = a*x", (0, 1), (0, 1), {"a": value})
+    assert graph_spec.parse(saved).errors == []
+    assert graph_spec.parse(saved).sliders["a"].value == edge
+
+
+def test_a_value_well_outside_the_range_is_still_refused():
+    with pytest.raises(ValueError, match="within its range"):
+        graph_spec.with_view("a = slider(0, 2*pi)\nf(x) = a", (0, 1), (0, 1), {"a": 6.2832 + 0.001})
+    with pytest.raises(ValueError, match="within its range"):
+        graph_spec.with_view("a = slider(0, 2*pi)\nf(x) = a", (0, 1), (0, 1), {"a": -0.001})
+
+
+def test_the_spacing_of_the_lines_that_are_edited_is_kept():
+    text = (
+        "  view   2d x -5..5   y -3..3\t# keep\n"
+        "  a  =  slider( 0 , 5 ,step 0.1,  value 1 , play )  # speed\n"
+        "  b = slider(0, 1)\n"
+        "f(x) = a*b\n"
+    )
+    got = graph_spec.with_view(text, (-5, 5), (-4, 4), {"a": 2.5, "b": 0.5}).split("\n")
+    assert got[0] == "  view   2d x -5..5   y -4..4\t# keep"  # only the y range moved
+    assert got[1] == "  a  =  slider( 0 , 5 ,step 0.1,  value 2.5 , play )  # speed"
+    assert got[2] == "  b = slider(0, 1, value 0.5)"
+    assert got[3] == "f(x) = a*b"
+
+
+def test_nothing_that_did_not_change_is_rewritten():
+    text = "view 2d x -2*pi..2*pi y -1..1\na   =   slider(0, 5, value 1)\nf(x) = a\n"
+    same = (-2 * math.pi, 2 * math.pi)
+    assert graph_spec.with_view(text, same, (-1, 1), {"a": 1}) == text
+    assert graph_spec.with_view(text, same, (-1, 1)) == text
+    # and a box that moved by float noise is the same box
+    assert graph_spec.with_view(text, (same[0] + 1e-15, same[1]), (-1, 1 - 1e-15), {"a": 1}) == text
+
+
+@pytest.mark.parametrize(
+    ("x", "text"),
+    [
+        ((1000000, 1000000.000001), "1000000..1000000.000001"),
+        ((0.1 + 0.2, 1), "0.3..1"),
+        ((0, 0.000000000000001), "0..0.000000000000001"),
+        ((1e15 - 2, 1e15), "999999999999998..1000000000000000"),
+        ((1, 1 + 2**-52), "1..1.0000000000000002"),
+    ],
+)
+def test_numbers_are_written_as_the_shortest_plain_decimal(x, text):
+    got = graph_spec.with_view("f(x) = x", x, (0, 1))
+    assert got.startswith(f"view 2d  x {text}  y 0..1\n")
+    assert graph_spec.parse(got).errors == []
+
+
+@pytest.mark.parametrize(
+    ("x", "why"),
+    [
+        ((-1e300, 1e300), "x range is too large to save"),
+        ((0, 1e16), "x range is too large to save"),
+        ((1, 1), "x range is too narrow to save"),
+        ((0, 1e-300), "x range is too narrow to save"),
+        ((2, 1), "x range must go from low to high"),
+    ],
+)
+def test_a_box_that_cannot_be_written_says_why(x, why):
+    with pytest.raises(ValueError, match=why):
+        graph_spec.with_view("f(x) = x", x, (0, 1))
+
+
 def test_a_definition_with_errors_is_not_rewritten():
     with pytest.raises(ValueError, match="has errors"):
         graph_spec.with_view("f(x) = 2x", (0, 1), (0, 1))
