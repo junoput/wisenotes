@@ -9,6 +9,7 @@
  * policy allows inline event-handler attributes. Nothing here builds markup from user
  * text: the DOM is made with createElement and textContent. */
 import { parse, newEnv } from '/static/js/graph-spec.js';
+import { admitCurve, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -37,22 +38,7 @@ function el(tag, attrs = {}, text = null) {
 /** A finite number, or NaN: JSXGraph leaves a gap at NaN, and Infinity would draw a line to nowhere. */
 const finite = (v) => (Number.isFinite(v) ? v : NaN);
 
-/* The cost of a drawing is bounded twice. JSXGraph samples a curve adaptively, down to a
- * recursion depth, so sin(1000000*x) would otherwise take it seconds of one task (the
- * default depths are 17 and 15): the depths are lowered in renderGraphs. And the
- * evaluations of every board on the page in one task share a budget; past it a function
- * answers NaN (a gap), which JSXGraph handles cheaply. The budget refills each task. */
-const MAX_EVALS = 50000;
-let spent = 0;
-let leftOut = false; // the budget ran out since the last time a board looked
-function overBudget() {
-  if (spent === 0) setTimeout(() => { spent = 0; }, 0);
-  if (++spent <= MAX_EVALS) return false;
-  leftOut = true;
-  return true;
-}
-
-function drawBoard(box, spec, env, colors, label) {
+function drawBoard(box, spec, env, colors, label, work) {
   const JXG = window.JXG;
   const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
   const axis = { strokeColor: colors.muted, ticks: { strokeColor: colors.muted, label: { strokeColor: colors.muted } } };
@@ -72,7 +58,8 @@ function drawBoard(box, spec, env, colors, label) {
   });
   let n = 0;
   for (const [name, f] of spec.functions) {
-    board.create('functiongraph', [(x) => (overBudget() ? NaN : finite(f(x, env)))], {
+    if (!admitCurve(work)) continue;
+    board.create('functiongraph', [(x) => (overBudget(work) ? NaN : finite(f(x, env)))], {
       strokeColor: colors.curves[n++ % colors.curves.length],
       strokeWidth: 2,
       highlight: false,
@@ -81,7 +68,7 @@ function drawBoard(box, spec, env, colors, label) {
     });
   }
   for (const [name, [px, py]] of spec.points) {
-    board.create('point', [() => (overBudget() ? NaN : finite(px(env))), () => (overBudget() ? NaN : finite(py(env)))], {
+    board.create('point', [() => (overBudget(work) ? NaN : finite(px(env))), () => (overBudget(work) ? NaN : finite(py(env)))], {
       name, // an identifier, by the grammar
       size: 3,
       fixed: true,
@@ -162,10 +149,17 @@ export async function renderGraphs(loadOnce) {
     return;
   }
   const colors = palette();
+  let first = true;
   for (const { figure, spec } of drawable) {
+    // One task per board: a page of many blocks stays responsive while it is drawn.
+    if (!first) await new Promise((resolve) => setTimeout(resolve, 0));
+    first = false;
+    // The page may have swapped while the library loaded or while earlier boards were drawn.
+    if (!figure.isConnected) continue;
     let live = null;
     try {
       const env = newEnv();
+      const work = newWork();
       // The block's view is a link that opens the editor, so the live graph goes beside
       // it, not inside it: a drag on a board must not be a click on a link, and a slider
       // is not content of an <a>.
@@ -173,16 +167,19 @@ export async function renderGraphs(loadOnce) {
       const box = el('div', { class: 'graph-board' });
       let board = null;
       const hint = el('p', { class: 'graph-hint' }, HINT);
-      const warn = () => {
-        if (!leftOut) return;
-        leftOut = false;
-        hint.textContent = 'Part of this graph is left out: drawing it takes too much work. ' + HINT;
+      // After every update of this board (pan, zoom, resize, slider, theme): say what was
+      // left out of it, or nothing, and give the next update a fresh allowance.
+      const settle = () => {
+        const text = settleWork(work);
+        const want = text ? `${text} ${HINT}` : HINT;
+        if (hint.textContent !== want) hint.textContent = want;
       };
-      const sliders = sliderControls(spec, env, () => { board?.fullUpdate(); warn(); });
+      const sliders = sliderControls(spec, env, () => board?.fullUpdate());
       live.append(box, sliders, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
-      board = drawBoard(box, spec, env, colors, describe(spec));
-      warn();
+      board = drawBoard(box, spec, env, colors, describe(spec), work);
+      settle();
+      board.on('update', settle); // after the first draw, which settles by hand
       const entry = { figure, board, box, extras: [live] };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);

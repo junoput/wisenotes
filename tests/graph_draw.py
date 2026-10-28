@@ -42,6 +42,11 @@ HOSTILE = (
 BROKEN = "f(x) = constructor(x)\nQ = (1, __proto__)\n"
 # short, valid, and a second of work per depth level for JSXGraph's adaptive sampling
 SLOW = "view 2d  x -5..5  y -3..3\nf(x) = sin(1000000*x)\ng(x) = sin(1/(x^3))\n"
+# 40 blocks that are each cheap; and one block with eight hundred functions beside a cheap one
+CHEAP = "f(x) = sin(x)\n"
+MANY = [CHEAP] * 40
+HEAVY = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(800))
+HEAVY_AND_CHEAP = [HEAVY, "a = slider(0, 3, value 1)\ng(x) = a*sin(x)\n"]
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -54,9 +59,17 @@ def make_note(ctx, base, title, spec, unchecked=False):
     """Create a note holding one graph block. The API refuses a definition with errors;
     an import does not check (a stored one gets in that way), which is how a broken
     one is made here."""
-    chapters = [
-        {"id": "ch", "title": "Top", "order": 0, "type": "chapter"},
-        {"id": "g", "title": "", "order": 0, "type": "graph", "parent_id": "ch", "content": spec},
+    specs = [spec] if isinstance(spec, str) else spec
+    chapters = [{"id": "ch", "title": "Top", "order": 0, "type": "chapter"}] + [
+        {
+            "id": f"g{i}",
+            "title": "",
+            "order": i,
+            "type": "graph",
+            "parent_id": "ch",
+            "content": text,
+        }
+        for i, text in enumerate(specs)
     ]
     if unchecked:
         now = "2026-10-27T20:00:00"
@@ -126,6 +139,64 @@ def check_sampling_is_bounded(browser, base, note):
     print(f"  (long tasks: {drawn:.0f} ms drawing, {total:.0f} ms with a pan)")
     return {
         f"sampling is bounded: long tasks under {LONG_TASK_LIMIT_MS} ms": total < LONG_TASK_LIMIT_MS
+    }
+
+
+def hints(page):
+    return page.evaluate(
+        "() => [...document.querySelectorAll('.graph-hint')].map((h) => h.textContent)"
+    )
+
+
+def left_out(texts):
+    return [t for t in texts if "left out" in t or "Only the first" in t]
+
+
+def check_each_board_says_its_own_limits(browser, base, many, mixed):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    page.add_init_script(LONG_TASKS)
+    try:
+        page.goto(f"{base}/notes/{many}")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.graph-board svg').length === 40", timeout=30000
+        )
+        page.wait_for_timeout(1000)
+        many_said = left_out(hints(page))
+        many_drawn = page.evaluate(
+            "() => [...document.querySelectorAll('.graph-board')]"
+            ".filter((b) => b.querySelectorAll('svg path').length > 4).length"
+        )
+
+        page.goto(f"{base}/notes/{mixed}")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.graph-board svg').length === 2", timeout=30000
+        )
+        page.wait_for_timeout(1000)
+        loaded = page.evaluate("() => window.__long")
+        first = hints(page)
+        # pan the heavy board, then move the cheap board's slider
+        box = page.locator(".graph-board").first.bounding_box()
+        page.mouse.move(box["x"] + 100, box["y"] + 100)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 160, box["y"] + 130, steps=6)
+        page.mouse.up()
+        page.wait_for_timeout(800)
+        page.locator(".graph-slider input[type=range]").fill("2")
+        page.wait_for_timeout(800)
+        after = hints(page)
+        total = page.evaluate("() => window.__long")
+    finally:
+        ctx.close()
+    print(f"  (heavy block: long tasks {loaded:.0f} ms on load, {total:.0f} ms with a pan)")
+    return {
+        "40 cheap blocks: no board says it left something out": many_said == []
+        and many_drawn == 40,
+        "800 functions: only that board says so, and how many": len(left_out(first)) == 1
+        and "first 24 of 800" in first[0]
+        and left_out(after) == left_out(first)
+        and "first 24 of 800" in after[0],
+        f"800 functions: long tasks under {LONG_TASK_LIMIT_MS} ms": total < LONG_TASK_LIMIT_MS,
     }
 
 
@@ -221,7 +292,11 @@ def check_a_swap_during_the_load(browser, base, note):
         page.evaluate(
             "() => { const f = document.querySelector('.graph-block-display');"
             " f.insertAdjacentHTML('afterend', f.outerHTML);"
-            " htmx.trigger(document.body, 'htmx:afterSwap', {}); }"
+            " htmx.trigger(document.body, 'htmx:afterSwap', {});"
+            # a third graph that arrives and is swapped away again before the library is here
+            " f.insertAdjacentHTML('afterend', f.outerHTML);"
+            " htmx.trigger(document.body, 'htmx:afterSwap', {});"
+            " f.nextElementSibling.remove(); }"
         )
         page.wait_for_timeout(500)
         held_script = bool(held)
@@ -229,11 +304,13 @@ def check_a_swap_during_the_load(browser, base, note):
             held[0].continue_()
         page.wait_for_timeout(2500)
         boards = page.locator(".graph-board svg").count()
+        known = page.evaluate("() => Object.keys(window.JXG.boards).length")
     finally:
         ctx.close()
     return {
         "a swap during the library load: both graphs are drawn": held_script
         and boards == 2
+        and known == 2  # none drawn into a figure that had left the page
         and not warned,
     }
 
@@ -266,6 +343,8 @@ def drive(p, base, js, shots):
     hostile = make_note(ctx, base, f"Graph hostile {stamp}", HOSTILE)
     broken = make_note(ctx, base, f"Graph broken {stamp}", BROKEN, unchecked=True)
     slow = make_note(ctx, base, f"Graph slow {stamp}", SLOW)
+    many = make_note(ctx, base, f"Graph many {stamp}", MANY)
+    mixed = make_note(ctx, base, f"Graph mixed {stamp}", HEAVY_AND_CHEAP)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -371,10 +450,11 @@ def drive(p, base, js, shots):
                 "pre.graph-spec"
             ).is_visible()
             checks.update(check_sampling_is_bounded(browser, base, slow))
+            checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
-        for nid in (good, hostile, broken, slow):
+        for nid in (good, hostile, broken, slow, many, mixed):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
     return result
