@@ -103,7 +103,7 @@ SINKS = re.compile(
 
 
 def test_the_js_sources_never_evaluate_user_text_or_build_markup():
-    for name in ("graph-spec.js", "graph.js"):
+    for name in ("graph-spec.js", "graph.js", "graph-budget.js"):
         assert SINKS.findall(code_of(name)) == [], name
     # the check can see each kind of sink
     for probe in (

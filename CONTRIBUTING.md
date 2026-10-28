@@ -112,7 +112,7 @@ review criterion, checked per change:
 
 ### The JavaScript floor
 
-Fourteen script files are tracked, and that is the floor while CodeMirror
+Fifteen script files are tracked, and that is the floor while CodeMirror
 stays, not a number to drive down:
 
 | file | why it stays |
@@ -120,12 +120,12 @@ stays, not a number to drive down:
 | `static/vendor/htmx/htmx.min.js` | the enhancement layer itself: fragments instead of full reloads |
 | `static/js/app.js` (~190 lines) | pane state, keyboard, confirms, mounts CodeMirror and KaTeX, re-runs after swaps |
 | `static/js/drag-drop.js` | drag-to-reorder; the reorder buttons are the plain path it enhances |
-| `static/js/graph.js`, `static/js/graph-spec.js` | the graph block: draws a definition with JSXGraph, and the JS parser that shares `tests/graph_spec_cases.json` with `app/graph_spec.py`; without scripts the block shows its definition |
+| `static/js/graph.js`, `static/js/graph-budget.js`, `static/js/graph-spec.js` | the graph block: draws a definition with JSXGraph, the allowance of a board (tested under node), and the JS parser that shares `tests/graph_spec_cases.json` with `app/graph_spec.py`; without scripts the block shows its definition |
 | `static/vendor/jsxgraph/jsxgraphcore.js` | JSXGraph 1.14.1, unmodified, loaded the first time a graph is on the page; `jc.compile` is false (see its README) |
 | `static/js/init-layout.js` (8 lines) | sets the sidebar width before first paint; must be a blocking script, and CSP forbids inline scripts, so it is a file |
 | `static/vendor/codemirror/` (7 files) | editor core, close-brackets, and one mode per offered language (python, javascript for JS and TS, clike for Java, go, rust) |
 
-Delete CodeMirror and the floor is seven. That is a product decision (the
+Delete CodeMirror and the floor is eight. That is a product decision (the
 code editor becomes a plain textarea, which already works with scripts
 off), not a cleanup; make it on a ticket, not in passing.
 
