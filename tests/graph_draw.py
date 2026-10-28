@@ -48,8 +48,11 @@ MANY = [CHEAP] * 40
 HEAVY = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(800))
 HEAVY_AND_CHEAP = [HEAVY, "a = slider(0, 3, value 1)\ng(x) = a*sin(x)\n"]
 CURVE = "a = slider(1, 4, value 2)\nc(t) = (2*cos(a*t), 2*sin(t)), t in 0..2*pi\nP = (2, 0)\n"
-# 24 parametric circles: they all fit one update's allowance, and all are drawn
-CIRCLES = "".join(f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(24))
+# 24 parametric circles: they all fit one update's allowance, and all are drawn; the slider
+# moves them, and each move is an update (a redraw of every curve)
+CIRCLES = "a = slider(0.5, 2, step 0.1, value 1)\n" + "".join(
+    f"c{i}(t) = (cos(t) + a*{i / 10}, sin(t)), t in 0..2*pi\n" for i in range(24)
+)
 # 12 functions and 14 circles: 26 curves, the first 24 in the order of the definition
 NAMED = "".join(f"f{i}(x) = sin(x + {i})\n" for i in range(12)) + "".join(
     f"c{i}(t) = (cos(t) + {i / 10}, sin(t)), t in 0..2*pi\n" for i in range(14)
@@ -306,16 +309,13 @@ def check_the_curve_cap_and_its_hint(browser, base, circles, named):
             " const w = [...b.querySelectorAll('svg path')].filter((p) => p.getAttribute('stroke-width') === '2px');"
             " return w.length; }"
         )
-        # every pan is an update with a fresh allowance: after six of them (24,600 evaluations
-        # each, 147,600 in all) the circles are still drawn, and nothing says "too much work"
-        box = page.locator(".graph-board").bounding_box()
-        for i in range(6):
-            page.mouse.move(box["x"] + 100, box["y"] + 100)
-            page.mouse.down()
-            page.mouse.move(box["x"] + 130 + i, box["y"] + 110, steps=3)
-            page.mouse.up()
+        # every slider move is an update with a fresh allowance: after six of them (24,600
+        # evaluations each, 147,600 in all) the circles are still drawn, and nothing says "too
+        # much work" (without the 'update' settle the allowance runs out at the third)
+        for value in ("0.6", "0.8", "1.1", "1.4", "1.7", "2"):
+            page.locator(".graph-slider input[type=range]").fill(value)
             page.wait_for_timeout(400)
-        after_pans = hints(page)
+        after_moves = hints(page)
         still_drawn = page.evaluate(
             "() => [...document.querySelectorAll('.graph-board svg path')]"
             ".filter((p) => p.getAttribute('stroke-width') === '2px' && (p.getAttribute('d') || '').length > 100).length"
@@ -337,9 +337,9 @@ def check_the_curve_cap_and_its_hint(browser, base, circles, named):
         and "first 24 of 26" in named_hint[0]
         and "left out: c12, c13." in named_hint[0]
         and "functions, then curves" in named_hint[0],
-        "update: after six pans the 24 circles are still drawn and nothing is left out": still_drawn
+        "update: after six slider moves the 24 circles are still drawn and nothing is left out": still_drawn
         >= 24
-        and left_out(after_pans) == [],
+        and left_out(after_moves) == [],
     }
 
 

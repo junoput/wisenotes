@@ -10,12 +10,13 @@
  *  - A board gets MAX_EVALS evaluations per update, one for each sample of a curve (a
  *    parametric curve's x and y are one sample, counted once, in x). Past that a curve
  *    answers NaN (a gap), which JSXGraph handles cheaply. Measured in Chromium with
- *    JSXGraph 1.14.1 at depth 10/8: a simple function takes about 1,025 evaluations per
- *    update, a parametric circle about 2,050 (twice: its samples are denser), so 50,000
- *    is 24 functions with room for curves that sample more, or 24 circles. JSXGraph
- *    evaluates a curve twice when it CREATES it (2,050 and 4,100 here), so creation is
- *    charged at half (CREATION_WEIGHT): the allowance is for one update, and the
- *    twentieth circle is not drawn with gaps because the nineteen before it were made.
+ *    JSXGraph 1.14.1 at depth 10/8: a simple function and a parametric circle each take
+ *    about 1,025 samples per update (the circle's x and y calls make 2,050 calls), so
+ *    50,000 is 24 curves of either kind with room for curves that sample more.
+ *    JSXGraph evaluates a curve twice when it CREATES it (2,050 samples each), so a
+ *    curve being created is charged at half (CREATION_WEIGHT): the allowance is for one
+ *    update, and the twentieth circle is not drawn with gaps because the nineteen
+ *    before it were made.
  *  - A board gets at most MAX_CURVES curves, and none is created once the allowance of
  *    the drawing is spent, because every curve costs JSXGraph work even when it only
  *    sees NaN (800 functions in one block took 5 s of long tasks on load, and per pan).
