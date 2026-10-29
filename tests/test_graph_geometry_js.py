@@ -101,6 +101,11 @@ CASES = {
         "text": "A = (-3, 2)\nB = (3, 2)\nO = (0, 0)\nl = line(A, B)\nc = circle(O, 2)\nX = intersection(l, c, 1)\nY = intersection(l, c, 2)",
         "read": ["X", "Y"],
     },
+    "touching_with_noise": {  # 0.1 + 0.2 is 0.30000000000000004: the line is a hair past the circle
+        "text": "A = (-3, 0.1 + 0.2)\nB = (3, 0.1 + 0.2)\nO = (0, 0)\nl = line(A, B)\nc = circle(O, 0.3)\n"
+        "X = intersection(l, c, 1)\nY = intersection(l, c, 2)\nZ = intersection(l, c)",
+        "read": ["X", "Y", "Z"],
+    },
     "missing": {
         "text": "A = (-3, 3)\nB = (3, 3)\nO = (0, 0)\nl = line(A, B)\nc = circle(O, 2)\nX = intersection(l, c, 1)\nY = intersection(l, c, 2)",
         "read": ["X", "Y"],
@@ -197,6 +202,8 @@ def test_a_line_meets_a_circle_nearer_end_first(tmp_path):
     assert near(got["segment_circle"]["X"], [-2, 0])
     assert got["segment_circle"]["Y"] is None  # (2, 0) is beyond the segment's end
     assert near(got["touching"]["X"], [0, 2]) and near(got["touching"]["Y"], [0, 2])
+    noisy = got["touching_with_noise"]
+    assert near(noisy["X"], [0, 0.3]) and near(noisy["Y"], [0, 0.3]) and near(noisy["Z"], [0, 0.3])
     assert got["missing"] == {"X": None, "Y": None}
 
 
