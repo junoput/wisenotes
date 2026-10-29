@@ -7,7 +7,8 @@ export const FRAME_MS = 1000 / 30; // a play draws at most 30 frames a second
 const BUSY_AT_MOST = 0.5; // and leaves at least half of the time to the page
 
 /** When the next frame of a play may start, given when the last one started and what it
- * cost (ms). A board that takes 80 ms to redraw is redrawn every 160 ms, not back to back:
+ * cost (ms: the redraw and the browser's layout and paint after it). A board whose frame
+ * takes 80 ms is redrawn every 160 ms, not back to back:
  * the sweep keeps its 4 s (a frame moves the slider by the time since the last one, up to
  * LONGEST_FRAME), only choppier, and the tab stays usable. */
 export function nextFrameAt(startedAt, costMs) {

@@ -158,7 +158,10 @@ function sliderControls(spec, env, onChange, presence) {
         frame = null;
       };
       stop = () => { wanted = false; pause(); showState(false); };
-      const tick = (now) => {
+      const tick = () => {
+        // the clock of the page, not the frame's timestamp: a frame that is late (a slow
+        // board) can carry the time it was meant to start, which would count its cost short
+        const now = performance.now();
         frame = null;
         // gone from the page, or the person asked for less motion since: stop
         if (!input.isConnected || reducedMotion()) { stop(); return; }
@@ -168,10 +171,15 @@ function sliderControls(spec, env, onChange, presence) {
         last = now;
         input.value = String(snap(state.value, s));
         show();
-        const started = performance.now();
         onChange();
-        due = nextFrameAt(started, performance.now() - started);
-        frame = requestAnimationFrame(tick);
+        // What a frame costs is the redraw and what the browser does after it (layout and
+        // paint come before the next frame), so the next frame is asked for at once and the
+        // time it takes to arrive is the cost. A cheap board arrives in one 60 Hz frame
+        // (about 17 ms), which the pacing allows.
+        frame = requestAnimationFrame(() => {
+          due = nextFrameAt(now, performance.now() - now);
+          tick();
+        });
       };
       const run = () => {
         if (!wanted || frame !== null || !presence.shown()) return;
@@ -292,6 +300,8 @@ export async function renderGraphs(loadOnce) {
     if (!figure.isConnected) continue;
     const colors = palette(); // this board's, read now: the theme may have changed while earlier boards were drawn
     let live = null;
+    let presence = null; // watching the board, until it is released
+    let sliders = null;
     try {
       const env = newEnv();
       const work = newWork();
@@ -309,8 +319,8 @@ export async function renderGraphs(loadOnce) {
         const want = text ? `${text} ${HINT}` : HINT;
         if (hint.textContent !== want) hint.textContent = want;
       };
-      const presence = watchPresence(box);
-      const sliders = sliderControls(spec, env, () => board?.fullUpdate(), presence);
+      presence = watchPresence(box);
+      sliders = sliderControls(spec, env, () => board?.fullUpdate(), presence);
       const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
       const controls = viewControls(figure, () => board, view, sliders);
       live.append(box, sliders.node, controls, hint);
@@ -326,6 +336,8 @@ export async function renderGraphs(loadOnce) {
       figure.querySelector('.graph-source-caption').textContent = 'Click here to edit the graph';
     } catch (err) {
       console.warn('graph block not drawn, its definition stays as text', err);
+      sliders?.stop();
+      presence?.disconnect(); // its observer and its listener would outlive the board that never was
       live?.remove();
     }
   }

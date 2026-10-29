@@ -424,8 +424,13 @@ def check_play_waits_when_it_cannot_be_seen(browser, base, note):
 
 
 def check_play_leaves_the_page_usable(browser, base, note):
-    """A board that is slow to redraw is redrawn at its own pace: half the time stays idle.
-    The probe counts timer ticks a second with and without the play, in one page."""
+    """A board that is slow to redraw is redrawn at its own pace: at most about half of the
+    main thread's time is spent on it, the layout and paint after each redraw included.
+
+    The probe is the share of wall time the page's main thread spends in tasks while the
+    play runs (CDP TaskDuration over Timestamp). It is a ratio, so a loaded machine slows
+    the redraws and the pacing together; a count of timer ticks was not (it passed one run
+    by 2 ticks)."""
     ctx = browser.new_context(viewport={"width": 900, "height": 900})
     page = ctx.new_page()
     try:
@@ -437,28 +442,115 @@ def check_play_leaves_the_page_usable(browser, base, note):
             " const t = performance.now(); for (let i = 0; i < 5; i++) b.fullUpdate();"
             " return (performance.now() - t) / 5; }"
         )
-        page.evaluate("() => { window.__ticks = 0; setInterval(() => { window.__ticks++; }, 10); }")
+        page.evaluate(
+            "() => { window.__updates = 0;"
+            " Object.values(window.JXG.boards)[0].on('update', () => { window.__updates++; }); }"
+        )
+        cdp = ctx.new_cdp_session(page)
+        cdp.send("Performance.enable")
 
-        def ticks(ms):
-            before = page.evaluate("() => window.__ticks")
+        def busy(ms):
+            """(share of the time the main thread was busy, redraws) over the next `ms`."""
+
+            def read():
+                m = {x["name"]: x["value"] for x in cdp.send("Performance.getMetrics")["metrics"]}
+                return m["TaskDuration"], m["Timestamp"], page.evaluate("() => window.__updates")
+
+            t0, w0, u0 = read()
             page.wait_for_timeout(ms)
-            return page.evaluate("() => window.__ticks") - before
+            t1, w1, u1 = read()
+            return (t1 - t0) / (w1 - w0), u1 - u0
 
-        idle = ticks(1500)
+        idle, _ = busy(1500)
         page.locator(".graph-play").click()
         page.wait_for_timeout(300)
         moved_1 = page.locator(".graph-slider output").inner_text()
-        playing = ticks(1500)
+        playing, redraws = busy(3000)
         moved_2 = page.locator(".graph-slider output").inner_text()
         page.locator(".graph-play").click()
     finally:
         ctx.close()
     return {
-        # the premise: one redraw is slow enough that back-to-back frames would starve the page
+        # the premise: one redraw is slow enough that back-to-back frames would starve the page,
+        # and the instrument sees the page idle when nothing plays
         f"play: the heavy board takes real work per redraw ({cost:.0f} ms)": cost >= 15,
-        "play: the heavy board still plays": moved_1 != moved_2,
-        f"play: half the time stays idle ({playing} of {idle} timer ticks)": idle > 50
-        and playing >= 0.4 * idle,
+        f"play: the page is idle when nothing plays ({idle:.0%} busy)": idle < 0.1,
+        "play: the heavy board still plays": moved_1 != moved_2 and redraws >= 5,
+        f"play: about half the time stays idle ({playing:.0%} busy, {redraws} redraws in 3 s)": playing
+        <= 0.55,
+    }
+
+
+WATCH_OBSERVERS = """
+window.__watch = { made: 0, gone: 0, listeners: 0 };
+const IO = window.IntersectionObserver;
+window.IntersectionObserver = class extends IO {  // only those that watch a graph board
+  observe(target) {
+    if (target.classList && target.classList.contains('graph-board')) { this.board = true; window.__watch.made++; }
+    return super.observe(target);
+  }
+  disconnect() { if (this.board) window.__watch.gone++; super.disconnect(); }
+};
+const addListener = document.addEventListener.bind(document);
+const removeListener = document.removeEventListener.bind(document);
+document.addEventListener = (type, ...rest) => {
+  if (type === 'visibilitychange') window.__watch.listeners++;
+  return addListener(type, ...rest);
+};
+document.removeEventListener = (type, ...rest) => {
+  if (type === 'visibilitychange') window.__watch.listeners--;
+  return removeListener(type, ...rest);
+};
+"""
+
+
+def check_a_board_that_fails_to_draw_leaves_nothing_watching(browser, base, note):
+    """The board watches whether it can be seen from before it is drawn. If drawing then
+    fails (here: the library throws when it makes the board), the observer and the document
+    listener must go with the board that never was."""
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    page.add_init_script(WATCH_OBSERVERS)
+    warnings = []
+    page.on("console", lambda m: warnings.append(m.text) if m.type == "warning" else None)
+
+    def break_the_library(route):
+        response = route.fetch()
+        route.fulfill(
+            response=response,
+            body=response.text()
+            + "\n;window.JXG.JSXGraph.initBoard = () => { throw new Error('the library fails'); };",
+        )
+
+    try:
+        page.goto(f"{base}/")  # a page with no board: the listeners the page has of its own
+        page.wait_for_load_state("networkidle")
+        baseline = page.evaluate("() => window.__watch.listeners")
+        page.route("**/jsxgraphcore.js", break_the_library)
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_function(
+            "() => window.__watch.made >= 1 && window.JXG && document.querySelector('.graph-block-display')",
+            timeout=15000,
+        )
+        page.wait_for_timeout(800)
+        watch = page.evaluate("() => window.__watch")
+        broke = page.evaluate("() => window.JXG.JSXGraph.initBoard.toString()")
+        shown = page.locator("pre.graph-spec").is_visible()
+        live = page.locator(".graph-live, .graph-board").count()
+    finally:
+        ctx.close()
+    return {
+        "failed draw: the library was broken as intended (the premise)": "the library fails"
+        in broke
+        and any("graph block not drawn" in w for w in warnings),
+        f"failed draw: a board was being watched ({watch['made']} observer made)": watch["made"]
+        >= 1,
+        f"failed draw: every observer was disconnected ({watch['gone']} of {watch['made']})": watch[
+            "gone"
+        ]
+        == watch["made"],
+        "failed draw: no visibilitychange listener is left behind": watch["listeners"] == baseline,
+        "failed draw: nothing of the board stays, the definition is shown": live == 0 and shown,
     }
 
 
@@ -608,7 +700,10 @@ def check_a_theme_change_while_drawing(browser, base, many):
         page.wait_for_function(
             "() => document.querySelectorAll('.graph-board svg').length >= 1", timeout=30000
         )
-        page.evaluate("() => { document.documentElement.dataset.theme = 'light'; }")
+        drawn_at_flip = page.evaluate(
+            "() => { const n = document.querySelectorAll('.graph-board svg').length;"
+            " document.documentElement.dataset.theme = 'light'; return n; }"
+        )
         page.wait_for_function(
             "() => document.querySelectorAll('.graph-board svg').length === 40", timeout=30000
         )
@@ -624,6 +719,9 @@ def check_a_theme_change_while_drawing(browser, base, many):
     return {
         "theme: the light and dark accents differ (the premise)": accents["light"]
         != accents["dark"],
+        f"theme: the flip came while drawing, not after ({drawn_at_flip} of 40 drawn)": 1
+        <= drawn_at_flip
+        < 40,
         f"theme: all 40 boards use the new theme's accent ({with_light} of {len(colors)})": len(
             colors
         )
@@ -678,7 +776,7 @@ def check_the_curve_cap_and_its_hint(browser, base, circles, named):
         == 1
         and "first 24 of 26" in named_hint[0]
         and "left out: c12, c13." in named_hint[0]
-        and "functions, then curves" in named_hint[0],
+        and "functions first, then curves" in named_hint[0],
         "update: after six slider moves the 24 circles are still drawn and nothing is left out": still_drawn
         >= 24
         and left_out(after_moves) == []
@@ -955,6 +1053,9 @@ def drive(p, base, js, shots):
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_a_theme_change_while_drawing(browser, base, many))
             checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
+            checks.update(
+                check_a_board_that_fails_to_draw_leaves_nothing_watching(browser, base, played)
+            )
             checks.update(check_one_finger_scrolls(browser, base, good))
             checks.update(check_a_swap_during_the_load(browser, base, good))
     finally:
