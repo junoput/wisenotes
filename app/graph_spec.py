@@ -602,21 +602,7 @@ class _Checker:
             return self.function(m.group(1), m.group(2), m.group(3))
         m = ASSIGN.fullmatch(stripped)
         if m:
-            name, rhs = m.group(1), m.group(2).strip(BLANK)
-            s = SLIDER.fullmatch(rhs)
-            if s:
-                return self.slider(name, s.group(1))
-            p = POINT.fullmatch(rhs)
-            if p and len(_split_top(p.group(1))) > 1:
-                return self.point(name, p.group(1))
-            c = CONSTRUCTION.fullmatch(rhs)
-            if c:
-                return self.construction(name, c.group(1), c.group(2))
-            raise _Refused(
-                "statement",
-                f"{name} = ... must be a slider(...), a point (x, y) or a construction "
-                "such as segment(P, Q)",
-            )
+            return self.assignment(m.group(1), m.group(2).strip(BLANK))
         c = CONSTRUCTION.fullmatch(stripped)
         if c:
             return self.construction(None, c.group(1), c.group(2))
@@ -625,6 +611,23 @@ class _Checker:
             "not a statement: expected view, a slider, a function f(x) = ..., a curve "
             "c(t) = (x, y), t in a..b, a point P = (x, y) or a construction such as "
             "segment(P, Q)",
+        )
+
+    def assignment(self, name: str, rhs: str) -> None:
+        """name = slider(...), a point (x, y) or a construction such as segment(P, Q)."""
+        s = SLIDER.fullmatch(rhs)
+        if s:
+            return self.slider(name, s.group(1))
+        p = POINT.fullmatch(rhs)
+        if p and len(_split_top(p.group(1))) > 1:
+            return self.point(name, p.group(1))
+        c = CONSTRUCTION.fullmatch(rhs)
+        if c:
+            return self.construction(name, c.group(1), c.group(2))
+        raise _Refused(
+            "statement",
+            f"{name} = ... must be a slider(...), a point (x, y) or a construction "
+            "such as segment(P, Q)",
         )
 
     def view(self, text: str) -> None:

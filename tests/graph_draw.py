@@ -661,7 +661,8 @@ def check_geometry(browser, base, note):
             for k, n in (("segment", 1), ("line", 1), ("circle", 2), ("polygon", 1))
         ),
         # P, Q, R, M, X and nothing else: the points a segment or a polygon is built on are not shown
-        "geometry: the points of midpoint and intersection are drawn": first["kinds"].get("point") == 5
+        "geometry: the points of midpoint and intersection are drawn": first["kinds"].get("point")
+        == 5
         and first["named"].get("M") is not None
         and x is not None,
         "geometry: a midpoint is halfway": first["named"].get("M") is not None
