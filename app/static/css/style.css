@@ -1229,6 +1229,7 @@ details#note-list:not([open]) > summary { margin-bottom: 0; }
 details#note-list:not([open]) .pane-title { display: none; }
 details#note-list:not([open]) .sidebar-toggle-btn { transform: rotate(180deg); }
 .layout:has(details#note-list:not([open])) { --notes-col: 48px; }  /* CSS-only narrow rail; JS sets the same variable */
+.save-refused { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: calc(100% - 32px); padding: 8px 12px; background: var(--raised); color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; font-size: 13px; }
 .noscript-note { margin: 0; padding: 8px 16px; background: var(--raised); color: var(--text); font-size: 13px; border-bottom: 1px solid var(--border); }
 
 /* After the narrow-pane block above: tests/test_narrow_layout.py reads the first media block. */

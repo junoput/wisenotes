@@ -7,8 +7,11 @@ from fastapi import FastAPI
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from app import logs
+from app import write_fence
+from app.config import get_settings
 from app.routes import api
 from app.routes import pages
 
@@ -17,6 +20,34 @@ logs.configure()
 request_logger = logging.getLogger("wisenotes.request")
 # Probes are not events (docs/OBSERVABILITY.md, health).
 UNLOGGED_PATHS = {"/health"}
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+# Declared before the headers middleware, so that one wraps this one's 503 too.
+@app.middleware("http")
+async def write_fence_check(request: Request, call_next):
+    """Refuse a write unless this container is the one named to write (app/write_fence.py).
+
+    The shared lock is held until the handler has finished, so a deploy that
+    changes the writer waits for this write instead of overlapping it."""
+    if request.method in SAFE_METHODS:
+        return await call_next(request)
+    fd, allowed = await run_in_threadpool(write_fence.acquire, get_settings().data_dir)
+    if not allowed:
+        # Planned, and already logged by write_fence with its reason: the request
+        # record reads this and logs WARN, not the ERROR a real 5xx gets.
+        request.scope[logs.PLANNED_REFUSAL] = True
+        return PlainTextResponse(
+            "Wisenotes is switching to a new version and this copy no longer saves changes. "
+            "Try again in a moment.",
+            status_code=503,
+            headers={"Retry-After": "2"},
+        )
+    try:
+        return await call_next(request)
+    finally:
+        write_fence.release(fd)
 
 
 @app.middleware("http")
@@ -70,7 +101,9 @@ async def log_request(request: Request, call_next):
             route = request.scope.get("route")
             status = response.status_code
             request_logger.log(
-                logs.request_severity(status),
+                logs.request_severity(
+                    status, planned=bool(request.scope.get(logs.PLANNED_REFUSAL))
+                ),
                 "%s %s %s",
                 request.method,
                 path,

@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,8 @@ STUBS = {
     "podman": r"""#!/usr/bin/env bash
 S=$STUB_STATE; echo "podman $*" >>"$S/log"
 img() { printf '%s' "$1" | tr ':/' '__'; }
+# One container only: a <NAME>-next (a deploy beside the serving one) never exists here.
+case "$1" in container|inspect|rm|start|stop|logs|port) case "$*" in *-next|*-next" "*) exit 125 ;; esac ;; esac
 case "$1" in
   image) [ -f "$S/images/$(img "$3")" ] ;;
   container) [ -f "$S/container" ] ;;
@@ -69,6 +72,9 @@ case "$*" in *rev-parse*) echo "$STUB_SHA" ;;
 """,
     "tar": "#!/usr/bin/env bash\ncat >/dev/null\n",
     "sleep": "#!/usr/bin/env bash\n",
+    # Never the real ones: a test that reached them would repoint a live tailnet slot.
+    "tailscale": '#!/usr/bin/env bash\necho "tailscale $*" >>"$STUB_STATE/log"; exit 1\n',
+    "systemd-run": '#!/usr/bin/env bash\necho "systemd-run $*" >>"$STUB_STATE/log"; exit 1\n',
 }
 
 
@@ -86,20 +92,24 @@ def box(tmp_path):
     return tmp_path
 
 
-def run(box, *args, script="deploy.sh", sha="new", **env):
-    environ = {
+def environment(box, sha="new", **env):
+    return {
         "PATH": f"{box / 'bin'}:/usr/bin:/bin",
         "HOME": str(box / "home"),
         "XDG_CONFIG_HOME": str(box / "home/.config"),
+        "XDG_RUNTIME_DIR": str(box / "run"),
         "STUB_STATE": str(box / "state"),
         "STUB_SHA": sha,
         "WISENOTES_DATA": str(box / "data"),
         "WISENOTES_SMOKE_SECONDS": "1",
         **env,
     }
+
+
+def run(box, *args, script="deploy.sh", sha="new", **env):
     return subprocess.run(
         ["bash", str(box / "repo/deploy" / script), *args],
-        env=environ,
+        env=environment(box, sha, **env),
         capture_output=True,
         text=True,
         check=False,
@@ -363,7 +373,7 @@ def loop(box):
     (work / "deploy").mkdir()
     for script in ("deploy.sh", "preview.sh"):
         shutil.copy(REPO / "deploy" / script, work / "deploy" / script)
-    (work / ".gitignore").write_text(".env\n.preview-last-tried\n.preview-deaf\n")
+    (work / ".gitignore").write_text(".env\n.preview-last-tried\n.preview-retried\n.preview-deaf\n")
     (work / "Dockerfile").write_text("FROM scratch\n")
     a = commit(work, "A")
     git(box, "clone", "-q", "-b", "develop", str(origin), str(checkout))
@@ -375,6 +385,7 @@ def preview(box, checkout, *args, timeout=60):
         "PATH": f"{box / 'bin'}:/usr/bin:/bin",
         "HOME": str(box / "home"),
         "XDG_CONFIG_HOME": str(box / "home/.config"),
+        "XDG_RUNTIME_DIR": str(box / "run"),
         "STUB_STATE": str(box / "state"),
         "WISENOTES_DATA": str(box / "data"),
         "WISENOTES_SMOKE_SECONDS": "1",
@@ -620,3 +631,1103 @@ def test_harness_control_the_unconditional_stop_is_harmless_when_there_is_no_uni
     deploy_good(box, "bbb")
     assert "systemctl --user stop wisenotes-container.service" in (box / "state/log").read_text()
     assert serving(box) == "id-wisenotes:bbb"
+
+
+# ---------------------------------------------------------------- 20261022-035: deploy beside, no gap
+#
+# Two-container stubs. Each container is a file under state/c/<name> holding
+# "<image id> <created|running|stopped> <host port> <writer id>"; an image is a
+# file holding "<id> <fence|nofence>". The tailnet slot is state/slot (its
+# proxy target). After every command that changes a container or the slot, the
+# stubs record a GAP if the slot's port has no running, answering container,
+# and log "route <port> writer=<.writer>" on each repoint, so a test can read
+# the order of writer changes and repoints.
+
+STUBS_BESIDE = {
+    "podman": r"""#!/usr/bin/env bash
+S=$STUB_STATE; echo "podman $*" >>"$S/log"
+img() { printf '%s' "$1" | tr ':/' '__'; }
+last=${!#}
+c="$S/c/$last"
+field() { awk -v n="$1" '{print $n}' "$2"; }
+case "$1" in
+  image) case "$2" in
+           exists) [ -f "$S/images/$(img "$3")" ] ;;
+           inspect) [ -f "$S/images/$(img "$last")" ] || exit 125
+                    case "$*" in *wisenotes.sha*) i=$(field 1 "$S/images/$(img "$last")"); echo "${i##*:}"; exit 0 ;; esac
+                    [ "$(field 2 "$S/images/$(img "$last")")" = fence ] && echo 1 || echo ;;
+         esac ;;
+  container) [ -f "$S/c/$3" ] ;;
+  build) while [ -f "$S/hold_build" ]; do /bin/sleep 0.1; done  # a test holds a run here
+         while [ $# -gt 0 ]; do
+           if [ "$1" = -t ]; then f=fence; grep -qx "$2" "$S/nofence" 2>/dev/null && f=nofence
+             echo "id-$2 $f" >"$S/images/$(img "$2")"; fi; shift; done ;;
+  tag) cp "$S/images/$(img "$2")" "$S/images/$(img "$3")" ;;
+  create) id=$(field 1 "$S/images/$(img "$last")") || exit 125
+       grep -qx "$id" "$S/run_fail" 2>/dev/null && { echo "create failed" >&2; exit 126; }
+       name=; port=; writer=-
+       while [ $# -gt 0 ]; do case "$1" in
+         --name) name=$2 ;; -p) p=${2%:*}; port=${p##*:} ;; --label) case "$2" in wisenotes.writer=*) writer=${2#*=} ;; esac ;;
+       esac; shift; done
+       [ -f "$S/c/$name" ] && { echo "name in use" >&2; exit 125; }
+       echo "$id created $port $writer" >"$S/c/$name" ;;
+  port) c="$S/c/$2"; [ -f "$c" ] && [ "$(field 2 "$c")" = running ] && echo "127.0.0.1:$(field 3 "$c")" ;;
+  rm) rm -f "$c"; gapcheck ;;
+  inspect) [ -f "$c" ] || exit 125
+           id=$(field 1 "$c"); sha=${id##*:}
+           case "$*" in *"if .State.Running"*) [ "$(field 2 "$c")" = running ] && echo "$sha" ;;  # preview.sh
+                        *State.Running*) [ "$(field 2 "$c")" = running ] && echo true || echo false ;;
+                        *wisenotes.writer*) grep -qx "$last" "$S/label_fail" 2>/dev/null || field 4 "$c" ;;
+                        *write-fence*) f=$(grep -l "^$id " "$S"/images/* | head -1); [ "$(field 2 "$f")" = fence ] && echo 1 || echo ;;
+                        *wisenotes.sha*) echo "$sha" ;;
+                        *PortBindings*) field 3 "$c" ;;
+                        *) echo "$id" ;; esac ;;
+  logs) echo "stub log" ;;
+  start) [ -f "$c" ] || exit 125; read -r id _ port w <"$c"; echo "$id running $port $w" >"$c"
+         echo "started $last writer=$(cat "$WISENOTES_DATA/.writer" 2>/dev/null)" >>"$S/log"; gapcheck ;;
+  stop) [ -f "$c" ] || exit 125; read -r id _ port w <"$c"; echo "$id stopped $port $w" >"$c"; gapcheck ;;
+  ps) ;;
+esac
+""",
+    "curl": r"""#!/usr/bin/env bash
+S=$STUB_STATE; url=${!#}; hp=${url#http://}; hp=${hp%%/*}; port=${hp##*:}
+# hang "curl": no answer, so curl gives up after its own --max-time, as the real one does
+if grep -qx curl "$S/hang" 2>/dev/null; then
+  mt=0; prev=; for a in "$@"; do [ "$prev" = --max-time ] && mt=$a; prev=$a; done
+  /bin/sleep "$mt"; printf 000; exit 28
+fi
+for c in "$S"/c/*; do
+  [ -f "$c" ] || continue
+  read -r id st p _ <"$c"
+  [ "$p" = "$port" ] && [ "$st" = running ] || continue
+  if grep -qx "$id" "$S/bad" 2>/dev/null || { grep -qx "$port" "$S/bad_port" 2>/dev/null && grep -q running "$S/c/wisenotes-next" 2>/dev/null; }; then printf 500; else printf 200; fi
+  exit 0
+done
+printf 000; exit 7
+""",
+    "systemctl": r"""#!/usr/bin/env bash
+S=$STUB_STATE; echo "systemctl $*" >>"$S/log"
+case "$2" in
+  is-system-running) echo running ;;
+  start|restart)
+    # signal_at_restart "<name> <SIG>": signal deploy.sh (our parent) instead of starting that container
+    if [ -f "$S/signal_at_restart" ] && read -r who sig <"$S/signal_at_restart" && [ "$who" = "${3%-container.service}" ]; then
+      rm -f "$S/signal_at_restart"; kill -s "$sig" "$PPID"; exit 1
+    fi
+    podman start "${3%-container.service}" ;;
+  stop) [ -f "$S/c/${3%-container.service}" ] && podman stop "${3%-container.service}"; true ;;
+  is-enabled) grep -qx "$3" "$S/enabled" 2>/dev/null ;;
+  enable) echo "$3" >>"$S/enabled" ;;
+  daemon-reload) ;;
+esac
+""",
+    "systemd-run": r"""#!/usr/bin/env bash
+echo "systemd-run $*" >>"$STUB_STATE/log"; podman start "${!#}"
+""",
+    "tailscale": r"""#!/usr/bin/env bash
+S=$STUB_STATE; echo "tailscale $*" >>"$S/log"
+case "$*" in
+  "serve status --json")
+    # hang "status": the command never returns; only the caller's timeout ends it
+    grep -qx status "$S/hang" 2>/dev/null && exec /bin/sleep 30
+    if [ -s "$S/status_fail" ]; then  # fail this many reads, then answer
+      n=$(cat "$S/status_fail"); echo $((n - 1)) >"$S/status_fail"; [ "$n" -gt 0 ] && exit 1
+    fi
+    printf '{"Web":{"devbox.example.ts.net:%s":{"Handlers":{"/":{"Proxy":"%s"}}}}}\n' "$(cat "$S/slot_port")" "$(cat "$S/slot")" ;;
+  "serve --bg --http="*)
+    t=${!#}
+    # signal_at_route "<port> <SIG>": signal deploy.sh (parent of timeout) while routing there
+    if [ -f "$S/signal_at_route" ] && read -r kp sig <"$S/signal_at_route" && [ "$kp" = "${t##*:}" ]; then
+      rm -f "$S/signal_at_route"
+      # hold_at_signal: a write in flight (a shared lock) from the moment of the signal
+      if [ -f "$S/hold_at_signal" ]; then
+        flock -s "$WISENOTES_DATA/.writer.lock" /bin/sleep 40 >/dev/null 2>&1 9>&- &
+        echo $! >"$S/holder.pid"
+        for _ in $(seq 100); do flock -n -x "$WISENOTES_DATA/.writer.lock" true || break; /bin/sleep 0.02; done
+      fi
+      # hang_after_signal: the commands it names hang from the moment of the signal (the trap's own calls)
+      [ -f "$S/hang_after_signal" ] && cp "$S/hang_after_signal" "$S/hang"
+      kill -s "$sig" "$(ps -o ppid= -p "$PPID" | tr -d ' ')"
+      [ "$sig" = KILL ] && exit 1
+      exit 1  # TERM: deploy.sh runs its trap once this command returns; not applied
+    fi
+    grep -qx route "$S/hang" 2>/dev/null && exec /bin/sleep 30
+    # unreadable_after_route "<port>": from the first route to that port on, status cannot be read
+    if [ -f "$S/unreadable_after_route" ] && [ "$(cat "$S/unreadable_after_route")" = "${t##*:}" ]; then echo 999 >"$S/status_fail"; fi
+    [ -f "$S/route_fail" ] && exit 1
+    # route_fail_to "<port>": a route to that port never applies
+    [ -f "$S/route_fail_to" ] && [ "$(cat "$S/route_fail_to")" = "${t##*:}" ] && exit 1
+    echo "$t" >"$S/slot"
+    echo "route ${t##*:} writer=$(cat "$WISENOTES_DATA/.writer" 2>/dev/null)" >>"$S/log"
+    gapcheck
+    if [ -f "$S/route_apply_then_fail" ]; then
+      [ -f "$S/status_fail_after_route" ] && mv "$S/status_fail_after_route" "$S/status_fail"
+      exit 1
+    fi
+    true ;;
+esac
+""",
+    "gapcheck": r"""#!/usr/bin/env bash
+# Is something running and answering on the port the tailnet slot proxies to?
+S=$STUB_STATE; [ -f "$S/slot" ] || exit 0
+t=$(cat "$S/slot"); port=${t##*:}
+[ "$(curl -s "http://127.0.0.1:$port/health")" = 200 ] || echo "GAP slot->$port after: $(tail -1 "$S/log")" >>"$S/gaps"
+exit 0
+""",
+    "git": STUBS["git"],
+    "tar": STUBS["tar"],
+    "sleep": STUBS["sleep"],
+}
+
+
+@pytest.fixture()
+def beside(tmp_path):
+    """A fake host for deploys beside the serving container; slot 8094 proxies to 20250."""
+    for d in ("bin", "state/images", "state/c", "repo/deploy", "home", "data"):
+        (tmp_path / d).mkdir(parents=True)
+    for name, body in STUBS_BESIDE.items():
+        f = tmp_path / "bin" / name
+        f.write_text(body)
+        f.chmod(0o755)
+    for script in ("deploy.sh", "preview.sh"):
+        shutil.copy(REPO / "deploy" / script, tmp_path / "repo/deploy" / script)
+    (tmp_path / "state/slot").write_text("http://localhost:20250\n")
+    (tmp_path / "state/slot_port").write_text("8094\n")
+    return tmp_path
+
+
+BESIDE_SETTINGS = {
+    "WISENOTES_PORT": "20250",
+    "WISENOTES_SPARE_PORT": "20260",
+    "WISENOTES_SERVE_SLOT": "8094",
+    "WISENOTES_DRAIN_SECONDS": "2",
+}
+
+
+def run_beside(box, *args, sha="new", **env):
+    return run(box, *args, sha=sha, **{**BESIDE_SETTINGS, **env})
+
+
+def image_id(box, tag):
+    """The image's id without its fence flag."""
+    got = image(box, tag)
+    return got.split()[0] if got else None
+
+
+def containers(box):
+    """{name: (image id, state, port, writer id)}"""
+    return {c.name: tuple(c.read_text().split()) for c in (box / "state/c").iterdir()}
+
+
+def writer(box):
+    f = box / "data/.writer"
+    return f.read_text().strip() if f.exists() else None
+
+
+def slot(box):
+    return (box / "state/slot").read_text().strip()
+
+
+def gaps(box):
+    f = box / "state/gaps"
+    return f.read_text() if f.exists() else ""
+
+
+def log(box):
+    return (box / "state/log").read_text()
+
+
+def reset_log(box):
+    (box / "state/log").write_text("")
+    (box / "state/gaps").unlink(missing_ok=True)
+
+
+def serving_aaa(box):
+    """aaa deployed in place (nothing served before it), then the log cleared."""
+    r = run_beside(box, sha="aaa")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in place" in r.stdout and "not running" in r.stdout
+    reset_log(box)
+
+
+def test_beside_a_good_deploy_leaves_no_gap_on_the_slot(beside):
+    serving_aaa(beside)
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "no gap" in r.stdout
+    assert gaps(beside) == ""
+    # at rest: exactly as an in-place deploy leaves it
+    assert set(containers(beside)) == {"wisenotes"}
+    img, state, port, wid = containers(beside)["wisenotes"]
+    assert (img, state, port) == ("id-wisenotes:bbb", "running", "20250")
+    assert writer(beside) == wid
+    assert slot(beside).endswith(":20250")
+    assert image_id(beside, "wisenotes:current") == "id-wisenotes:bbb"
+    assert image_id(beside, "wisenotes:previous") == "id-wisenotes:aaa"
+
+
+def test_harness_control_an_in_place_deploy_is_seen_as_a_gap(beside):
+    # The gap check must be able to see a gap: the same deploy, forced in place.
+    serving_aaa(beside)
+    r = run_beside(beside, sha="bbb", WISENOTES_SPARE_PORT="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in place" in r.stdout and "WISENOTES_SPARE_PORT is unset" in r.stdout
+    assert "GAP slot->20250" in gaps(beside)
+
+
+def test_beside_the_writer_changes_before_each_repoint(beside):
+    serving_aaa(beside)
+    old = writer(beside)
+    run_beside(beside, sha="bbb")
+    routes = [line for line in log(beside).splitlines() if line.startswith("route ")]
+    assert len(routes) == 2, routes
+    # to the spare port: the new container is already the writer
+    assert routes[0].startswith("route 20260 writer=wisenotes-next.")
+    # back to 20250: the new wisenotes is already the writer
+    assert routes[1] == f"route 20250 writer={writer(beside)}"
+    assert old not in routes[0] and writer(beside).startswith("wisenotes.")
+
+
+def started(box):
+    return [line for line in log(box).splitlines() if line.startswith("started ")]
+
+
+def test_beside_the_new_container_cannot_write_while_smoked(beside):
+    serving_aaa(beside)
+    old = writer(beside)
+    run_beside(beside, sha="bbb")
+    starts = started(beside)
+    assert len(starts) == 2, starts
+    # each new container starts while another is still named the writer
+    assert starts[0] == f"started wisenotes-next writer={old}"
+    assert starts[1].startswith("started wisenotes writer=wisenotes-next."), starts
+
+
+@pytest.mark.parametrize("failure", ["bad", "run_fail"])
+def test_beside_a_failed_smoke_leaves_the_old_serving_and_writing(beside, failure):
+    serving_aaa(beside)
+    old = writer(beside)
+    mark(beside, failure, "id-wisenotes:bbb")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 1
+    assert "ROLLED BACK" in r.stdout and "served throughout" in r.stdout
+    assert gaps(beside) == ""
+    assert containers(beside) == {"wisenotes": ("id-wisenotes:aaa", "running", "20250", old)}
+    assert writer(beside) == old and slot(beside).endswith(":20250")
+    assert image_id(beside, "wisenotes:current") == "id-wisenotes:aaa"  # never pointed at bbb
+    assert "tailscale serve --bg" not in log(beside)
+
+
+def test_beside_a_failed_repoint_gives_the_writer_back(beside):
+    serving_aaa(beside)
+    old = writer(beside)
+    (beside / "state/route_fail").write_text("")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 1 and "NOT deployed" in r.stdout
+    assert writer(beside) == old
+    assert set(containers(beside)) == {"wisenotes"} and slot(beside).endswith(":20250")
+    assert image_id(beside, "wisenotes:current") == "id-wisenotes:aaa"
+
+
+def test_beside_a_write_in_flight_holds_the_handover(beside):
+    # A write holds the shared lock (app/write_fence.py); the change of writer must
+    # wait for it, and give up after WISENOTES_DRAIN_SECONDS without changing anything.
+    serving_aaa(beside)
+    old = writer(beside)
+    holder = subprocess.Popen(["flock", "-s", str(beside / "data/.writer.lock"), "sleep", "30"])
+    try:
+        r = run_beside(beside, sha="bbb", WISENOTES_DRAIN_SECONDS="1")
+    finally:
+        holder.kill()
+        holder.wait()
+    assert r.returncode == 1 and "did not finish within 1s" in r.stdout
+    assert writer(beside) == old and slot(beside).endswith(":20250")
+    assert set(containers(beside)) == {"wisenotes"}
+
+
+def test_harness_control_the_handover_proceeds_once_the_write_ends(beside):
+    serving_aaa(beside)
+    holder = subprocess.Popen(["flock", "-s", str(beside / "data/.writer.lock"), "sleep", "0.5"])
+    try:
+        r = run_beside(beside, sha="bbb")
+    finally:
+        holder.wait()
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize(
+    "setup, why",
+    [
+        (
+            lambda b: (b / "state/nofence").write_text("wisenotes:bbb\n"),
+            "the new image has no write fence",
+        ),
+        (
+            lambda b: (b / "state/slot").write_text("http://localhost:9999\n"),
+            "proxies to http://localhost:9999, not to 20250",
+        ),
+    ],
+)
+def test_beside_falls_back_to_in_place_and_says_why(beside, setup, why):
+    serving_aaa(beside)
+    setup(beside)
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in place" in r.stdout and why in r.stdout
+    assert "systemd-run" not in log(beside)
+
+
+def test_beside_an_old_image_without_the_fence_is_replaced_in_place(beside):
+    # the first deploy of this change: the serving image predates the fence
+    (beside / "state/nofence").write_text("wisenotes:aaa\n")
+    serving_aaa(beside)
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "the serving image predates the write fence" in r.stdout
+    assert "systemd-run" not in log(beside)
+
+
+def test_beside_the_slot_url_never_changes(beside):
+    serving_aaa(beside)
+    run_beside(beside, sha="bbb")
+    repoints = [
+        line for line in log(beside).splitlines() if line.startswith("tailscale serve --bg")
+    ]
+    assert repoints and all(
+        line.startswith("tailscale serve --bg --http=8094 ") for line in repoints
+    )
+
+
+def test_beside_the_new_container_has_one_restarter_and_no_restart_policy(beside):
+    serving_aaa(beside)
+    run_beside(beside, sha="bbb")
+    text = log(beside)
+    runs = [line for line in text.splitlines() if line.startswith("systemd-run ")]
+    assert len(runs) == 1 and "--unit=wisenotes-next-container.service" in runs[0]
+    assert "Restart=on-failure" in runs[0]
+    assert "--restart" not in "".join(
+        line for line in text.splitlines() if line.startswith("podman create")
+    )
+    assert "podman-restart" not in text
+    # its unit is stopped before the container is removed
+    stop = text.index("systemctl --user stop wisenotes-next-container.service")
+    assert stop < text.index("podman rm -f wisenotes-next")
+
+
+def test_start_hands_back_from_a_container_left_beside(beside):
+    # A deploy whose second leg failed leaves wisenotes-next serving; --start brings wisenotes back.
+    serving_aaa(beside)
+    run_beside(beside, sha="bbb")
+    # the state a failed second leg leaves: wisenotes gone, next serving and writing
+    (beside / "state/c/wisenotes").unlink()
+    (beside / "state/c/wisenotes-next").write_text(
+        "id-wisenotes:bbb running 20260 wisenotes-next.1.1\n"
+    )
+    (beside / "data/.writer").write_text("wisenotes-next.1.1\n")
+    (beside / "state/slot").write_text("http://127.0.0.1:20260\n")
+    reset_log(beside)
+    r = run_beside(beside, "--start")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert gaps(beside) == ""
+    # wisenotes starts unable to write: the container serving the slot keeps writing until the hand-back
+    assert started(beside) == ["started wisenotes writer=wisenotes-next.1.1"]
+    assert set(containers(beside)) == {"wisenotes"} and slot(beside).endswith(":20250")
+    assert writer(beside) == containers(beside)["wisenotes"][3]
+
+
+def test_start_after_a_reboot_mid_handover_points_the_slot_home(beside):
+    # tailscale serve config survives a reboot; the transient container does not.
+    serving_aaa(beside)
+    (beside / "state/c/wisenotes").write_text("id-wisenotes:aaa stopped 20250 x\n")
+    (beside / "state/slot").write_text("http://127.0.0.1:20260\n")
+    r = run_beside(beside, "--start")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert slot(beside).endswith(":20250")
+
+
+def test_harness_control_start_leaves_a_slot_pointing_elsewhere_alone(beside):
+    serving_aaa(beside)
+    (beside / "state/c/wisenotes").write_text("id-wisenotes:aaa stopped 20250 x\n")
+    (beside / "state/slot").write_text("http://127.0.0.1:9999\n")
+    r = run_beside(beside, "--start")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert slot(beside) == "http://127.0.0.1:9999"
+
+
+# ---- interrupted hand-overs, the deploy lock, and routes that apply but do not verify
+# (MR 20261022-036 review). Each state below refuses every write while reads answer;
+# the repair must reach it while $NAME serves, without restarting $NAME.
+
+
+def at_rest(box, image="id-wisenotes:bbb"):
+    """One container, $NAME, running on 20250 as the writer; the slot points at it."""
+    cs = containers(box)
+    assert set(cs) == {"wisenotes"}, cs
+    img, state, port, wid = cs["wisenotes"]
+    assert (img, state, port) == (image, "running", "20250")
+    assert writer(box) == wid
+    assert slot(box).endswith(":20250")
+
+
+def restarted(box, name="wisenotes"):
+    return f"started {name} " in log(box)
+
+
+def signal_at_route(box, port, sig):
+    (box / "state/signal_at_route").write_text(f"{port} {sig}\n")
+
+
+def check(box, **env):
+    return run_beside(box, "--check", **env)
+
+
+def test_check_is_quiet_and_changes_nothing_at_rest(beside):
+    serving_aaa(beside)
+    r = check(beside)
+    assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+    assert "serve --bg" not in log(beside) and not restarted(beside)
+
+
+def test_killed_after_the_writer_moved_before_the_slot_did_is_repaired(beside):
+    # (a) deploy.sh:311-316: the writer names -next, the slot still points at $NAME
+    serving_aaa(beside)
+    signal_at_route(beside, 20260, "KILL")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode != 0
+    name_id = containers(beside)["wisenotes"][3]
+    assert writer(beside) != name_id and slot(beside).endswith(":20250")  # the broken state
+    assert (beside / "run/wisenotes-deploy-wisenotes.lock").exists()  # left by the killed run
+    reset_log(beside)
+    r = check(beside)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "NOT AT REST" in r.stdout and "refuses every write" in r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+    assert not restarted(beside)  # nothing serving went away
+    assert gaps(beside) == ""
+
+
+def test_killed_in_the_hand_back_after_the_writer_moved_is_repaired(beside):
+    # (b) the writer names $NAME again, the slot still points at -next
+    serving_aaa(beside)
+    signal_at_route(beside, 20250, "KILL")
+    run_beside(beside, sha="bbb")
+    assert slot(beside).endswith(":20260")
+    assert writer(beside) == containers(beside)["wisenotes"][3]
+    reset_log(beside)
+    r = check(beside)
+    assert r.returncode == 0, r.stdout + r.stderr
+    at_rest(beside)
+    assert not restarted(beside)
+    assert gaps(beside) == ""
+
+
+def test_a_reboot_mid_hand_over_with_name_running_fenced_is_repaired(beside):
+    # (c) boot: the enabled unit starts $NAME (fenced: the writer file names -next);
+    # the transient -next unit is gone, the slot config survived, pointing at -next.
+    serving_aaa(beside)
+    signal_at_route(beside, 20250, "KILL")
+    run_beside(beside, sha="bbb")
+    next_id = containers(beside)["wisenotes-next"][3]
+    (beside / "data/.writer").write_text(next_id + "\n")
+    for name in ("wisenotes", "wisenotes-next"):  # the reboot
+        f = beside / "state/c" / name
+        img, _, port, wid = f.read_text().split()
+        f.write_text(f"{img} stopped {port} {wid}\n")
+    f = beside / "state/c/wisenotes"
+    img, _, port, wid = f.read_text().split()
+    f.write_text(f"{img} running {port} {wid}\n")  # the unit started $NAME
+    reset_log(beside)
+    r = run_beside(beside, script="preview.sh", sha="bbb")  # the next preview pass
+    assert "NOT AT REST" in r.stdout, r.stdout + r.stderr
+    at_rest(beside)
+    assert not restarted(beside)
+
+
+def test_a_stale_writer_file_from_a_restored_backup_is_repaired(beside):
+    # (d) at rest, but the data dir came back from a backup taken mid-hand-over
+    serving_aaa(beside)
+    (beside / "data/.writer").write_text("wisenotes-next.1.2.3\n")
+    r = check(beside)
+    assert r.returncode == 0 and "the writer file names wisenotes-next.1.2.3" in r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_status_says_when_the_serving_container_may_not_write(beside):
+    serving_aaa(beside)
+    assert "writer: wisenotes" in run_beside(beside, "status").stdout
+    (beside / "data/.writer").write_text("someone-else\n")
+    assert "writer: NOT wisenotes" in run_beside(beside, "status").stdout
+
+
+def test_terminated_mid_hand_over_settles_before_exiting(beside):
+    # demos restart / down stop the preview unit, whose cgroup holds deploy.sh
+    serving_aaa(beside)
+    signal_at_route(beside, 20260, "TERM")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert "interrupted" in r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+    assert not lock_held(beside)
+
+
+LOCK = "run/wisenotes-deploy-wisenotes.lock"
+
+
+def lock_held(box) -> bool:
+    """Is the deploy lock held by a live process? (A flock file is never removed.)"""
+    probe = subprocess.run(["flock", "-n", str(box / LOCK), "true"], check=False)
+    return probe.returncode != 0
+
+
+def hold_lock(box, pid="4242"):
+    """A live holder of the deploy lock, in another process; its pid is in the file."""
+    lock = box / LOCK
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(f"{pid}\n")
+    holder = subprocess.Popen(["flock", "-x", str(lock), "sleep", "30"])
+    for _ in range(200):
+        if lock_held(box):
+            return holder
+        time.sleep(0.01)
+    holder.kill()
+    raise AssertionError("the holder never took the lock")
+
+
+def test_a_second_deploy_waits_for_none_and_says_who_holds_the_lock(beside):
+    serving_aaa(beside)
+    holder = hold_lock(beside, pid="4242")
+    try:
+        r = run_beside(beside, sha="bbb")
+        assert r.returncode == 75
+        assert "pid 4242" in r.stdout
+        assert "podman create" not in log(beside)
+        (beside / "data/.writer").write_text("someone-else\n")
+        r = check(beside)  # a deploy in progress is not a state to repair
+        assert (r.returncode, r.stdout) == (0, "")
+        assert writer(beside) == "someone-else"
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_a_lock_whose_owner_died_is_taken_over_and_released(beside):
+    # A flock dies with its process: a lock file naming a dead pid is not held.
+    serving_aaa(beside)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = beside / LOCK
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(f"{dead.pid}\n")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    at_rest(beside)
+    assert not lock_held(beside)  # released at exit
+
+
+def test_two_runs_never_both_hold_the_lock_after_a_crash(beside):
+    # Review F3: taking over a stale lock by renaming it let two runs both win
+    # (17 of 300 with two racers, 84 of 200 with four). Six racers start on a lock
+    # file left by a killed run; the winner is held inside `podman build`.
+    serving_aaa(beside)
+    stale = beside / LOCK
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("99999999\n")
+    (beside / "state/hold_build").touch()
+    env = environment(beside, "bbb", **BESIDE_SETTINGS)
+    racers = [
+        subprocess.Popen(
+            ["bash", str(beside / "repo/deploy/deploy.sh")],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        for _ in range(6)
+    ]
+    try:
+        deadline = time.time() + 20
+        while time.time() < deadline and sum(r.poll() == 75 for r in racers) < 5:
+            time.sleep(0.05)
+        refused = [r for r in racers if r.poll() == 75]
+        running = [r for r in racers if r.poll() is None]
+        assert (len(refused), len(running)) == (5, 1), (len(refused), len(running))
+    finally:
+        (beside / "state/hold_build").unlink()
+        for r in racers:
+            r.communicate(timeout=60)
+    assert [r.returncode for r in racers].count(0) == 1
+
+
+def test_a_command_that_outlives_the_run_does_not_keep_the_lock(beside):
+    # run() closes fd 9 for what it starts. A daemon (conmon) that kept it would hold
+    # the lock for days. The stub podman reports whether fd 9 was open in `start`.
+    serving_aaa(beside)
+    stub = beside / "bin/podman"
+    stub.write_text(
+        stub.read_text().replace(
+            "  start) [ -f",
+            '  start) [ -e /proc/self/fd/9 ] && echo "FD9 open in $*" >>"$S/log"; [ -f',
+            1,
+        )
+    )
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FD9 open" not in log(beside)
+    assert "podman start" in log(beside)  # premise: the check saw a start
+
+
+def test_a_route_that_applies_but_fails_is_treated_as_applied(beside):
+    serving_aaa(beside)
+    (beside / "state/route_apply_then_fail").touch()
+    (beside / "state/status_fail_after_route").write_text("1\n")  # and the next read fails too
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    at_rest(beside)
+    assert gaps(beside) == ""
+
+
+def test_harness_control_a_route_that_never_applies_brings_everything_back(beside):
+    serving_aaa(beside)
+    (beside / "state/route_fail").touch()
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 1 and "NOT deployed" in r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_a_slot_left_on_the_spare_port_alone_is_pointed_home(beside):
+    # the slot is the only thing out of place: no -next, the writer is right
+    serving_aaa(beside)
+    (beside / "state/slot").write_text("http://127.0.0.1:20260\n")
+    r = check(beside)
+    assert r.returncode == 0 and "points at the spare port 20260" in r.stdout, r.stdout
+    at_rest(beside, image="id-wisenotes:aaa")
+    assert not restarted(beside)
+
+
+def test_check_never_repoints_a_slot_that_proxies_elsewhere(beside):
+    # the operator pointed the slot at something else: not ours to move back
+    serving_aaa(beside)
+    (beside / "state/slot").write_text("http://127.0.0.1:9999\n")
+    (beside / "data/.writer").write_text("wisenotes-next.1.2.3\n")
+    r = check(beside)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert writer(beside) == containers(beside)["wisenotes"][3]  # the writer is still repaired
+    assert slot(beside) == "http://127.0.0.1:9999"
+    assert "serve --bg" not in log(beside)
+
+
+# ---- review of b0a05a3 (2026-10-27): F1 unreadable slot, F2 empty writer id, F4 mutants,
+# F6 old image serving, F7 the trap inside systemd's stop timeout
+
+
+def state_file(box, name, text):
+    (box / "state" / name).write_text(text + "\n")
+
+
+def next_is_kept(box):
+    return containers(box).get("wisenotes-next", ("", "stopped"))[1] == "running"
+
+
+def test_an_unreadable_slot_never_removes_next_and_is_never_a_clean_deploy(beside):
+    # F1: the route home did not apply and the status could not be read. The old code
+    # took "unreadable" for "off the spare port", removed -next (the slot's target)
+    # and exited 0 with "no gap".
+    serving_aaa(beside)
+    state_file(beside, "route_fail_to", "20250")
+    state_file(beside, "unreadable_after_route", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "no gap" not in r.stdout and "NOT CONFIRMED" in r.stdout
+    assert next_is_kept(beside)
+    assert slot(beside).endswith(":20260")
+    # --check does not call an unreadable slot at rest either, and still keeps -next
+    c = check(beside)
+    assert c.returncode == 1 and "cannot be read" in c.stdout, c.stdout
+    assert next_is_kept(beside)
+    # once the slot reads again, the next pass settles everything
+    (beside / "state/status_fail").unlink()
+    (beside / "state/route_fail_to").unlink()
+    (beside / "state/unreadable_after_route").unlink()
+    c = check(beside)
+    assert c.returncode == 0, c.stdout + c.stderr
+    at_rest(beside)
+
+
+def test_harness_control_a_slot_that_reads_off_the_spare_port_lets_next_go(beside):
+    # the quiet side of F1: readable and elsewhere is not "may still need -next"
+    serving_aaa(beside)
+    state_file(beside, "slot", "http://127.0.0.1:9999")
+    state_file(beside, "route_fail_to", "20250")
+    run_beside(beside, "--start", sha="aaa")  # NAME runs; nothing beside
+    reset_log(beside)
+    c = check(beside)
+    assert c.returncode == 0, c.stdout + c.stderr
+    assert "wisenotes-next" not in containers(beside)
+
+
+def test_an_empty_writer_label_never_empties_the_writer_file(beside):
+    # F2: a failed label inspect gave an empty id, set_writer wrote it, and --check
+    # then called the notes at rest while every container refused every write.
+    serving_aaa(beside)
+    (beside / "data/.writer").write_text("someone-else\n")
+    state_file(beside, "label_fail", "wisenotes")
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert "cannot read" in c.stdout
+    assert writer(beside) == "someone-else"  # left as it was: not emptied
+    # at rest with the right writer, an unreadable label is "cannot check", not "fine"
+    (beside / "data/.writer").write_text(containers(beside)["wisenotes"][3] + "\n")
+    c = check(beside)
+    assert c.returncode == 1 and "cannot be read" in c.stdout, c.stdout
+    assert writer(beside) == containers(beside)["wisenotes"][3]
+
+
+def test_an_unreadable_label_in_the_hand_back_changes_nothing(beside):
+    serving_aaa(beside)
+    # -next's label cannot be read when the hand-back wants to give the writer back
+    state_file(beside, "label_fail", "wisenotes-next")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "cannot read the writer label" in r.stdout
+    next_id = containers(beside)["wisenotes-next"][3]
+    assert writer(beside) == next_id  # -next is still the writer, and still serves the slot
+    assert slot(beside).endswith(":20260") and next_is_kept(beside)
+
+
+def test_the_trap_does_not_empty_the_writer_when_a_label_is_unreadable(beside):
+    # F2, on_signal: $NAME is not serving (killed during the swap) and -next's label is unreadable
+    serving_aaa(beside)
+    state_file(beside, "signal_at_restart", "wisenotes TERM")
+    state_file(beside, "label_fail", "wisenotes-next")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # not emptied
+    assert "refusing to name an empty writer" in r.stdout
+
+
+def test_check_repairs_a_missing_writer_lock_file(beside):
+    # F4 M1: a data dir restored from a backup without .writer.lock refuses every write
+    serving_aaa(beside)
+    (beside / "data/.writer.lock").unlink()
+    c = check(beside)
+    assert "the writer lock file is missing" in c.stdout, c.stdout
+    assert c.returncode == 0 and (beside / "data/.writer.lock").exists()
+    at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_a_hand_back_that_cannot_repoint_gives_the_writer_back_to_next(beside):
+    # F4 M3: the slot stayed on -next, which must be the writer again
+    serving_aaa(beside)
+    state_file(beside, "route_fail_to", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "stays the writer" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]
+    assert slot(beside).endswith(":20260") and next_is_kept(beside)
+    assert "NAME" not in r.stdout and "no gap" not in r.stdout
+
+
+def test_a_settle_that_cannot_repoint_gives_the_writer_back_to_next(beside):
+    # F4 M4: --check names $NAME the writer, cannot move the slot home, and -next serves it
+    serving_aaa(beside)
+    state_file(beside, "route_fail_to", "20250")
+    run_beside(beside, sha="bbb")  # leaves -next serving the slot, as the writer
+    next_id = containers(beside)["wisenotes-next"][3]
+    # $NAME is back up, fenced: the unit started the old image (a writer id the file does not name)
+    (beside / "state/c/wisenotes").write_text("id-wisenotes:aaa running 20250 wisenotes.1.2.3\n")
+    assert writer(beside) == next_id
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert "keeps serving it and is the writer again" in c.stdout
+    assert writer(beside) == next_id
+    assert slot(beside).endswith(":20260") and next_is_kept(beside)
+
+
+def test_the_trap_leaves_next_as_the_writer_when_it_alone_serves_the_slot(beside):
+    # F4 M5: terminated while $NAME is down in the swap: -next serves, so it must write
+    serving_aaa(beside)
+    state_file(beside, "signal_at_restart", "wisenotes TERM")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert "wisenotes-next serves tailnet slot 8094 and is the writer" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]
+    assert slot(beside).endswith(":20260") and next_is_kept(beside)
+
+
+def test_preview_deploys_again_when_the_old_image_serves_beside_a_newer_current(beside):
+    # F6: a reboot between the retag and the swap leaves aaa serving while :current is
+    # bbb; the tip (bbb) is marked "failed smoke earlier", so nothing would ever deploy it.
+    serving_aaa(beside)
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:bbb fence")
+    state_file(beside, "images/wisenotes_bbb", "id-wisenotes:bbb fence")
+    (beside / "repo/deploy/.preview-last-tried").write_text("bbb\n")
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "its current image is bbb" in r.stdout, r.stdout + r.stderr
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:bbb"
+    assert "failed smoke earlier" not in r.stdout
+
+
+def test_harness_control_preview_leaves_the_marker_when_current_is_what_serves(beside):
+    serving_aaa(beside)
+    (beside / "repo/deploy/.preview-last-tried").write_text("bbb\n")
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "failed smoke earlier" in r.stdout, r.stdout + r.stderr
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+
+
+def test_the_trap_settles_inside_systemds_stop_timeout(beside):
+    # F7: demo@wisenotes-preview gets TimeoutStopUSec=15s before SIGKILL. With a write in
+    # flight from the moment of the signal and a 20 s drain configured, the trap must not
+    # wait the full drain.
+    serving_aaa(beside)
+    signal_at_route(beside, 20260, "TERM")
+    state_file(beside, "hold_at_signal", "1")
+    try:
+        started = time.time()
+        r = run_beside(beside, sha="bbb", WISENOTES_DRAIN_SECONDS="20")
+        took = time.time() - started
+    finally:
+        pid = (beside / "state/holder.pid").read_text().strip()
+        subprocess.run(["pkill", "-P", pid], check=False)
+        subprocess.run(["kill", pid], check=False)
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert took < 12, (took, r.stdout)  # the full drain alone is 20 s
+    assert "not settled" in r.stdout and "NOT SETTLED" in r.stdout  # it says so; --check repairs it
+
+
+def test_an_unreadable_slot_at_otherwise_rest_is_listed_not_ignored(beside):
+    # F1: nothing else is wrong (no -next, the writer is right): the slot alone cannot be read
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert "cannot be confirmed to point at wisenotes on 20250" in c.stdout
+    assert not restarted(beside)
+
+
+def test_a_deploy_does_not_go_beside_when_the_slot_cannot_be_read(beside):
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "in place" in r.stdout and "tailnet slot 8094 cannot be read" in r.stdout
+
+
+# ---- MR 20261022-036, second send-back (2026-10-28)
+
+
+def test_preview_does_not_build_every_pass_when_the_tip_fails_smoke_in_the_f6_state(beside):
+    # F6 state: aaa serves, :current names bbb (a hand-over cut short), and the tip ccc
+    # fails smoke. ccc is never retagged, so the marker naming it must survive: the old
+    # code cleared it on every pass (current != serving) and built and smoked ccc again.
+    serving_aaa(beside)
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:bbb fence")
+    mark(beside, "bad", "id-wisenotes:ccc")
+    first = run_beside(beside, script="preview.sh", sha="ccc")
+    assert "deploying with the deploy scripts at ccc" in first.stdout, first.stdout + first.stderr
+    assert "refused (exit 1" in first.stdout
+    assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "ccc"
+    reset_log(beside)
+    second = run_beside(beside, script="preview.sh", sha="ccc")
+    assert "failed smoke earlier" in second.stdout, second.stdout + second.stderr
+    assert "podman build" not in log(beside) and "deploying again" not in second.stdout
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+
+
+def f6_state(box, sha):
+    """aaa serves; :current, the marker and the tip are all `sha`, and `sha` fails smoke now."""
+    serving_aaa(box)
+    state_file(box, "images/wisenotes_current", f"id-wisenotes:{sha} fence")
+    state_file(box, "images/wisenotes_" + sha, f"id-wisenotes:{sha} fence")
+    mark(box, "bad", f"id-wisenotes:{sha}")
+    (box / "repo/deploy/.preview-last-tried").write_text(sha + "\n")
+
+
+def builds_over_passes(box, sha, passes):
+    got = []
+    for _ in range(passes):
+        reset_log(box)
+        run_beside(box, script="preview.sh", sha=sha)
+        got.append(log(box).count("podman build"))
+    return got
+
+
+def test_preview_retries_a_current_that_itself_fails_smoke_once_not_every_pass(beside):
+    # aaa serves, :current = marker = tip = bbb (a hand-over cut short), and bbb now fails
+    # smoke: the first pass builds it again, the next ones leave it (it was [1, 1, 1, 1])
+    f6_state(beside, "bbb")
+    assert builds_over_passes(beside, "bbb", 4) == [1, 0, 0, 0]
+    assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
+    assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "bbb"
+
+
+def test_a_different_current_gets_its_own_retry(beside):
+    f6_state(beside, "bbb")
+    assert builds_over_passes(beside, "bbb", 2) == [1, 0]
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:ccc fence")
+    state_file(beside, "images/wisenotes_ccc", "id-wisenotes:ccc fence")
+    mark(beside, "bad", "id-wisenotes:ccc")
+    (beside / "repo/deploy/.preview-last-tried").write_text("ccc\n")
+    assert builds_over_passes(beside, "ccc", 3) == [1, 0, 0]
+
+
+def test_preview_says_a_tip_is_deployed_when_only_the_hand_over_did_not_finish(beside):
+    serving_aaa(beside)
+    state_file(beside, "label_fail", "wisenotes")  # $NAME passes smoke, the hand-back cannot start
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "bbb IS DEPLOYED but the hand-over did not finish cleanly" in r.stdout, r.stdout
+    assert "refused" not in r.stdout
+
+
+def test_preview_says_refused_with_the_exit_code_when_the_tip_fails_smoke(beside):
+    serving_aaa(beside)
+    mark(beside, "bad", "id-wisenotes:bbb")
+    r = run_beside(beside, script="preview.sh", sha="bbb")
+    assert "bbb refused (exit 1" in r.stdout and "IS DEPLOYED" not in r.stdout, r.stdout
+
+
+def test_start_with_an_unconfirmed_slot_does_not_claim_the_writer(beside):
+    # hand_back's ? branch gave the writer back to -next, so --start must not say NAME has it
+    next_id = left_beside(beside)
+    state_file(beside, "route_fail_to", "20250")
+    state_file(beside, "unreadable_after_route", "20250")
+    r = run_beside(beside, "--start", sha="aaa")
+    assert r.returncode == 1 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
+    assert "wisenotes runs on 20250" in r.stdout and "as the writer" not in r.stdout
+    assert writer(beside) == next_id
+
+
+def left_beside(box):
+    """-next serves the slot as the writer; $NAME is back up on 20250, fenced (the unit started it)."""
+    serving_aaa(box)
+    state_file(box, "route_fail_to", "20250")
+    run_beside(box, sha="bbb")
+    (box / "state/route_fail_to").unlink()
+    (box / "state/c/wisenotes").write_text("id-wisenotes:aaa running 20250 wisenotes.1.2.3\n")
+    next_id = containers(box)["wisenotes-next"][3]
+    assert writer(box) == next_id and slot(box).endswith(":20260")
+    return next_id
+
+
+def test_settle_leaves_the_writer_alone_when_the_slot_cannot_be_read(beside):
+    # the slot may point at -next: moving the writer to $NAME would refuse every write there
+    next_id = left_beside(beside)
+    state_file(beside, "status_fail", "999")
+    c = check(beside)
+    assert c.returncode == 1, c.stdout + c.stderr
+    assert "the writer is left as it is" in c.stdout
+    # no claim for the real name (the literal "$NAME" is never printed, so it proves nothing)
+    assert "wisenotes serves" not in c.stdout and "at rest" not in c.stdout
+    assert writer(beside) == next_id
+    assert next_is_kept(beside)
+
+
+def test_harness_control_settle_moves_the_writer_once_the_slot_reads(beside):
+    next_id = left_beside(beside)
+    c = check(beside)
+    assert c.returncode == 0, c.stdout + c.stderr
+    assert writer(beside) != next_id
+    at_rest(beside, image="id-wisenotes:aaa")
+
+
+def test_a_hand_back_that_cannot_read_the_slot_keeps_next_as_the_writer(beside):
+    serving_aaa(beside)
+    state_file(beside, "route_fail_to", "20250")
+    state_file(beside, "unreadable_after_route", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3 and "NOT CONFIRMED" in r.stdout, r.stdout + r.stderr
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # the last confirmed route
+    assert "wisenotes is the writer" not in r.stdout  # no claim for $NAME
+    assert next_is_kept(beside)
+
+
+def test_a_hand_back_that_returns_1_does_not_remove_a_healthy_name(beside):
+    # $NAME passed its smoke; only its label cannot be read, so nothing is handed back.
+    # The old code fell through to "did not come back" and removed it.
+    serving_aaa(beside)
+    state_file(beside, "label_fail", "wisenotes")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "did not come back" not in r.stdout and "IS DEPLOYED" in r.stdout
+    assert containers(beside)["wisenotes"][1] == "running"
+    assert next_is_kept(beside) and slot(beside).endswith(":20260")
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]
+    (beside / "state/label_fail").unlink()
+    c = check(beside)  # the next pass hands it back
+    assert c.returncode == 0, c.stdout + c.stderr
+    at_rest(beside)
+
+
+def test_a_name_that_does_not_come_back_leaves_next_serving_and_the_exit_says_deployed(beside):
+    # bbb passes smoke beside, becomes :current, and then fails on $PORT (the stub answers 500
+    # on bad_port only while -next runs, so the deploy still goes beside): it IS deployed,
+    # -next serves it, and the exit is 3, not 1
+    serving_aaa(beside)
+    state_file(beside, "bad_port", "20250")
+    r = run_beside(beside, sha="bbb")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert (
+        "bbb IS DEPLOYED but serves from wisenotes-next" in r.stdout and "20250 is down" in r.stdout
+    )
+    assert next_is_kept(beside) and slot(beside).endswith(":20260")
+
+
+def test_settle_says_there_is_no_next_to_keep_when_there_is_none(beside):
+    # route_home, reached by --start with the slot unreadable and no -next beside
+    serving_aaa(beside)
+    state_file(beside, "status_fail", "999")
+    r = run_beside(beside, "--start", sha="aaa")
+    assert "there is no wisenotes-next to keep" in r.stdout, r.stdout + r.stderr
+    assert "keeping wisenotes-next" not in r.stdout
+
+
+# F7, one test per shortened timeout of the trap. A stub that hangs from the moment of
+# the signal makes the timeout the only thing that ends the call; the lower bound
+# proves the hang was reached, the upper bound that the short value is the one in use.
+
+
+def trapped(box, signal_port, hang):
+    serving_aaa(box)
+    signal_at_route(box, signal_port, "TERM")
+    state_file(box, "hang_after_signal", hang)
+    started = time.time()
+    r = run_beside(box, sha="bbb")
+    return r, time.time() - started
+
+
+def status_reads_after_the_last_route(box):
+    n = 0
+    for line in reversed(log(box).splitlines()):
+        if line == "tailscale serve status --json":
+            n += 1
+        elif n or line.startswith("tailscale serve --bg"):
+            return n if n else 0
+    return n
+
+
+def test_the_trap_reads_the_slot_with_the_short_read_timeout(beside):
+    r, took = trapped(beside, 20260, "status")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 1.8 <= took < 8, (took, r.stdout)  # READ_SECONDS=2 in the trap; 10 outside it
+    assert "cannot be read" in r.stdout and "NOT SETTLED" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # not moved on a guess
+
+
+def test_the_trap_routes_with_the_short_tailscale_timeout_and_reads_the_slot_once(beside):
+    r, took = trapped(beside, 20250, "route")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 2.8 <= took < 9, (took, r.stdout)  # TS_SECONDS=3 in the trap; 20 outside it
+    assert "NOT SETTLED" in r.stdout
+    assert writer(beside) == containers(beside)["wisenotes-next"][3]  # still serves the slot
+    # ROUTE_READS=1 in the trap (3 outside it) plus settle's own read of the slot
+    assert status_reads_after_the_last_route(beside) == 2, log(beside)
+
+
+def test_the_trap_probes_with_the_short_probe_timeout(beside):
+    r, took = trapped(beside, 20260, "curl")
+    assert r.returncode == 130, r.stdout + r.stderr
+    assert 1.8 <= took < 6, (
+        took,
+        r.stdout,
+    )  # two probes of PROBE_SECONDS=1; 5 each outside the trap
+    assert "does not serve" in r.stdout

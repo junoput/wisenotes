@@ -163,6 +163,25 @@ document.body.addEventListener('htmx:beforeSwap', (e) => {
   }
 });
 
+// A write refused while a deploy hands over answers 503 with one plain-text sentence
+// (the write fence in app/main.py). htmx shows nothing for a 5xx, so a save looked
+// as if it did nothing (20261022-036 review). Without scripts the browser shows the
+// 503 page itself; drag-and-drop already alerts with the server's text.
+document.body.addEventListener('htmx:responseError', (e) => {
+  if (e.detail.xhr.status !== 503) return;
+  let note = document.getElementById('save-refused');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'save-refused';
+    note.className = 'save-refused';
+    note.setAttribute('role', 'alert');
+    document.body.prepend(note);
+  }
+  note.textContent = (e.detail.xhr.responseText || 'Not saved. Try again in a moment.').trim().slice(0, 300);
+  clearTimeout(note._hide);
+  note._hide = setTimeout(() => note.remove(), 10000);
+});
+
 // ---------------------------------------------------------------- code and math
 
 const CM = '/static/vendor/codemirror';

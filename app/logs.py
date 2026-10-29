@@ -141,9 +141,14 @@ def configure() -> None:
         )
 
 
-def request_severity(status: int) -> int:
-    """INFO for a success, WARN for the caller's failure (4xx), ERROR for ours (5xx)."""
-    if status >= 500:
+# A request scope key: set by a middleware that refused the request on purpose.
+PLANNED_REFUSAL = "wisenotes.planned_refusal"
+
+
+def request_severity(status: int, planned: bool = False) -> int:
+    """INFO for a success, WARN for the caller's failure (4xx) or a refusal we chose
+    (the write fence's 503 while a deploy hands over), ERROR for ours (5xx)."""
+    if status >= 500 and not planned:
         return logging.ERROR
     if status >= 400:
         return logging.WARNING
