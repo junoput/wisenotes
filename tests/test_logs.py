@@ -1,5 +1,6 @@
 """Log records in the conventions v6 vocabulary (docs/OBSERVABILITY.md, 20261020-042)."""
 
+import hashlib
 import io
 import json
 import logging
@@ -8,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -169,6 +171,56 @@ def test_the_fingerprint_is_the_shape_not_the_data():
 
     assert fingerprint("/a/one") == fingerprint("/b/two")
     assert fingerprint("/a/one") != other_site()
+
+
+def test_the_fingerprint_is_taken_at_the_innermost_app_frame(monkeypatch, tmp_path):
+    # the tests stand in for app/: frames from this file count as the app's own
+    monkeypatch.setattr(logs, "APP_DIR", Path(__file__).resolve().parent)
+    missing = tmp_path / "missing"
+
+    def read_site_one():
+        missing.read_text()
+
+    def read_site_two():
+        missing.read_text()
+
+    def deeper():
+        read_site_one()
+
+    def fingerprint(fn) -> tuple[str, str]:
+        try:
+            fn()
+        except OSError as e:
+            tb = e.__traceback__
+            # the premise: the innermost frame is the library's, the same for both sites
+            assert not Path(traceback.extract_tb(tb)[-1].filename).is_relative_to(logs.APP_DIR)
+            return logs._exception_fields(e, tb)["error.fingerprint"], traceback.extract_tb(tb)[
+                -1
+            ].name
+        raise AssertionError("fn() returned")
+
+    one, one_lib = fingerprint(read_site_one)
+    two, two_lib = fingerprint(read_site_two)
+    assert one_lib == two_lib  # both end in the same library call...
+    assert one != two  # ...and the two app sites still tell apart
+    # the innermost app frame wins over an outer one, and the shape is stable
+    assert fingerprint(deeper)[0] == one
+    assert fingerprint(read_site_one)[0] == one
+
+
+def test_the_fingerprint_falls_back_to_the_innermost_frame_without_an_app_frame(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(logs, "APP_DIR", tmp_path / "no-frame-is-here")
+    try:
+        (tmp_path / "missing").read_text()
+    except OSError as e:
+        fields = logs._exception_fields(e, e.__traceback__)
+        frame = traceback.extract_tb(e.__traceback__)[-1]  # pathlib's, here
+    expected = hashlib.sha256(
+        f"builtins.FileNotFoundError@{frame.filename.rsplit('/', 1)[-1]}:{frame.name}".encode()
+    )
+    assert fields["error.fingerprint"] == expected.hexdigest()[:16]
 
 
 def test_the_route_is_logged_and_the_query_and_host_are_not(client, service, records):
