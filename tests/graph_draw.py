@@ -618,7 +618,7 @@ ELEMENTS = """() => {
     kinds[e.elType] = (kinds[e.elType] ?? 0) + 1;
   }
   const named = {};
-  for (const e of board.objectsList) if (e.elType === 'point' && /^[A-Z]$/.test(e.name) && !['A','B','C','D','E','F','G','H','I'].includes(e.name) || ['X', 'M', 'P', 'Q', 'R'].includes(e.name)) {
+  for (const e of board.objectsList) if (e.elType === 'point' && ['X', 'M', 'P', 'Q', 'R'].includes(e.name)) {
     named[e.name] = live(e) ? [e.X(), e.Y()] : null;
   }
   const circles = board.objectsList.filter((e) => e.elType === 'circle' && live(e)).map((c) => [c.Radius(), Number(c.rendNode?.getAttribute('rx') ?? 0), Number(c.rendNode?.getAttribute('ry') ?? -1)]);
@@ -660,8 +660,9 @@ def check_geometry(browser, base, note):
             first["kinds"].get(k, 0) >= n
             for k, n in (("segment", 1), ("line", 1), ("circle", 2), ("polygon", 1))
         ),
-        "geometry: the points of midpoint and intersection are drawn": first["named"].get("M")
-        is not None
+        # P, Q, R, M, X and nothing else: the points a segment or a polygon is built on are not shown
+        "geometry: the points of midpoint and intersection are drawn": first["kinds"].get("point") == 5
+        and first["named"].get("M") is not None
         and x is not None,
         "geometry: a midpoint is halfway": first["named"].get("M") is not None
         and abs(first["named"]["M"][0] - 1) < 1e-9

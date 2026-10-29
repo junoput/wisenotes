@@ -73,8 +73,8 @@ CASES = {
     "segment_stops": {  # the lines meet at (1.5, 1.5), which the short segment does not reach
         "text": "P = (0, 0)\nQ = (1, 1)\nR = (0, 3)\nS = (3, 0)\n"
         "s = segment(P, Q)\nw = segment(R, S)\nk = line(P, Q)\nX = intersection(s, w)\n"
-        "Y = intersection(k, w)\nZ = intersection(w, k)",
-        "read": ["X", "Y", "Z"],
+        "Y = intersection(k, w)\nZ = intersection(w, k)\nV = intersection(w, s)",
+        "read": ["X", "Y", "Z", "V"],
     },
     "parallel": {
         "text": "P = (0, 0)\nQ = (1, 1)\nR = (0, 1)\nS = (1, 2)\nl = line(P, Q)\nm = line(R, S)\nX = intersection(l, m)\nY = intersection(l, l)",
@@ -183,6 +183,7 @@ def test_two_straight_things_cross_once_and_a_segment_stops_at_its_ends(tmp_path
     assert near(got["cross"]["X"], [1, 1])
     assert near(got["segments_cross"]["X"], [1, 1])
     assert got["segment_stops"]["X"] is None  # two segments that do not reach each other
+    assert got["segment_stops"]["V"] is None  # and when it is the second that falls short
     assert near(got["segment_stops"]["Y"], [1.5, 1.5])  # the line goes on, the segment t holds it
     assert near(got["segment_stops"]["Z"], [1.5, 1.5])  # in either order
     assert got["parallel"] == {"X": None, "Y": None}  # parallel, and a line with itself
