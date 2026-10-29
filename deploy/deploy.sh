@@ -477,9 +477,12 @@ beside_blocker() { # $1 new image; prints why it cannot start beside the serving
 
 hand_back() { # $NEXT serves and writes; make $NAME (running fenced on $PORT) the writer and the slot's target
   # Returns 0 when done. 1 when $NEXT keeps the slot and is the writer (NAME did not
-  # take over). 2 when it cannot be told: $NAME is the writer, but the slot could not
-  # be confirmed at $PORT (it reads nothing, something else, or cannot be read).
-  # Success is never reported for a 2 (20261022-036 F1).
+  # take over). 2 when it cannot be told: the slot could not be confirmed at $PORT.
+  # Who writes then depends on what the slot reads: when it reads something else,
+  # $NAME is the writer and $NEXT is stopped; when it cannot be read at all, $NEXT is
+  # kept and stays the writer (the last confirmed route) until deploy.sh --check.
+  # deploy_beside turns a 1 or a 2 into exit 3. Success is never reported for a 2
+  # (20261022-036 F1).
   local next_id name_id t
   next_id=$(writer_of "$NEXT"); name_id=$(writer_of "$NAME")
   if [ -z "$next_id" ] || [ -z "$name_id" ]; then

@@ -116,7 +116,7 @@ the new image beside the serving container and moves the tailnet slot over:
    port, as before.
 
 If step 4 fails, the new image is deployed but serves from `<name>-next`; the
-script says so and exits 1, and the next preview pass (`deploy.sh --start`,
+script says so and exits 3, and the next preview pass (`deploy.sh --start`,
 because `<name>` is not running) brings `<name>` back beside it and hands back.
 `--start` also points the slot home if it was left on the spare port (a
 reboot mid-deploy: the slot's config survives, the transient unit does not).
@@ -236,7 +236,7 @@ The slot read has three answers: a target, `nothing` (the slot exists and
 proxies nowhere) and `cannot be read` (no `jq`, `tailscale` failed or timed
 out, or its output is not JSON). An unreadable slot is never taken for an
 empty one: `<name>-next` is kept, a deploy that ends there prints `NOT
-CONFIRMED` and exits 1 instead of claiming `no gap`, and `--check` lists the
+CONFIRMED` and exits 3 instead of claiming `no gap`, and `--check` lists the
 slot as a difference. The same holds for a writer: a container whose writer
 label cannot be read is not given a name, and `.writer` is never written empty.
 
