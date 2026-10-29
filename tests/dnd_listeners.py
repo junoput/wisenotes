@@ -37,7 +37,14 @@ def main() -> int:
         page = ctx.new_page()
         chapters = [
             {"id": "ch", "title": "Top", "order": 0, "type": "chapter"},
-            {"id": "c", "title": "", "order": 0, "type": "code", "parent_id": "ch", "content": "x = 1"},
+            {
+                "id": "c",
+                "title": "",
+                "order": 0,
+                "type": "code",
+                "parent_id": "ch",
+                "content": "x = 1",
+            },
         ]
         note = ctx.request.post(
             base + "/api/notes",
