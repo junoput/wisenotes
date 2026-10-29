@@ -72,6 +72,13 @@ IRRATIONAL = (
     "  b = slider( 0 , 5 , value 2 )\n"
     "f(x) = a*sin(x) + b\n"
 )
+GEOMETRY = (
+    "view 2d  x -6..6  y -4..4\n"
+    "r = slider(0.5, 6, value 2)\n"
+    "P = (-1, 0)\nQ = (3, 1)\nR = (0, 3)\n"
+    "s = segment(P, Q)\nc = circle(P, r)\nX = intersection(s, c)\nM = midpoint(P, Q)\n"
+    "polygon(P, Q, R)\nl = line(Q, R)\nd = circle(P, Q)\n"
+)
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
     "(e) => { window.__long += e.duration; })).observe({ type: 'longtask', buffered: true });"
@@ -603,6 +610,81 @@ def check_saving_at_an_irrational_end(browser, base, note, ctx_for_api):
     }
 
 
+ELEMENTS = """() => {
+  const board = Object.values(JXG.boards)[0];
+  const live = (e) => e.isReal && e.visPropCalc.visible;
+  const kinds = {};
+  for (const e of board.objectsList) if (live(e) && !['text', 'label', 'axis', 'ticks', 'grid', 'sketchcurve', 'curve'].includes(e.elType)) {
+    kinds[e.elType] = (kinds[e.elType] ?? 0) + 1;
+  }
+  const named = {};
+  for (const e of board.objectsList) if (e.elType === 'point' && /^[A-Z]$/.test(e.name) && !['A','B','C','D','E','F','G','H','I'].includes(e.name) || ['X', 'M', 'P', 'Q', 'R'].includes(e.name)) {
+    named[e.name] = live(e) ? [e.X(), e.Y()] : null;
+  }
+  const circles = board.objectsList.filter((e) => e.elType === 'circle' && live(e)).map((c) => [c.Radius(), Number(c.rendNode?.getAttribute('rx') ?? 0), Number(c.rendNode?.getAttribute('ry') ?? -1)]);
+  return { kinds, named, circles };
+}"""
+
+
+def check_geometry(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    problems = []
+    page.on(
+        "console", lambda m: problems.append(m.text) if m.type in ("error", "warning") else None
+    )
+    page.on("pageerror", lambda e: problems.append(str(e)))
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(800)
+        first = page.evaluate(ELEMENTS)
+        page.locator(".graph-slider input[type=range]").fill(
+            "5.5"
+        )  # the circle swallows the segment
+        page.wait_for_timeout(500)
+        wide = page.evaluate(ELEMENTS)
+        page.locator(".graph-slider input[type=range]").fill("3")
+        page.wait_for_timeout(500)
+        back = page.evaluate(ELEMENTS)
+        label = page.locator(".graph-board").get_attribute("aria-label") or ""
+    finally:
+        ctx.close()
+    x = first["named"].get("X")
+    px, py = first["named"]["P"]
+    on_circle = x is not None and abs(((x[0] - px) ** 2 + (x[1] - py) ** 2) ** 0.5 - 2) < 1e-6
+    # on the segment P -> Q = (4, 1) from P: (x - P) is a multiple of it, inside it
+    along = x is not None and abs((x[0] - px) * 1 - (x[1] - py) * 4) < 1e-6 and x[0] > px
+    return {
+        "geometry is drawn: a segment, a line, two circles, a polygon": all(
+            first["kinds"].get(k, 0) >= n
+            for k, n in (("segment", 1), ("line", 1), ("circle", 2), ("polygon", 1))
+        ),
+        "geometry: the points of midpoint and intersection are drawn": first["named"].get("M")
+        is not None
+        and x is not None,
+        "geometry: a midpoint is halfway": first["named"].get("M") is not None
+        and abs(first["named"]["M"][0] - 1) < 1e-9
+        and abs(first["named"]["M"][1] - 0.5) < 1e-9,
+        "geometry: an intersection is on both the circle and the segment": on_circle and along,
+        "geometry: a circle has its radius from the slider": sorted(
+            round(r, 6) for r, _, _ in first["circles"]
+        )
+        == [2.0, round(17**0.5, 6)],
+        "geometry: a circle is on the page, and round": len(first["circles"]) == 2
+        and all(rx > 5 and abs(rx - ry) < 1 for _, rx, ry in first["circles"]),
+        "geometry: a point that no longer exists is not drawn": wide["named"].get("X") is None
+        and wide["named"].get("M") is not None,
+        "geometry: the circle follows the slider": sorted(
+            round(r, 6) for r, _, _ in wide["circles"]
+        )
+        == [round(17**0.5, 6), 5.5],
+        "geometry: the point comes back": back["named"].get("X") is not None,
+        "geometry: a construction's name is in the board's label": "M" in label and "X" in label,
+        "geometry: no console error": not problems,
+    }
+
+
 def hints(page):
     return page.evaluate(
         "() => [...document.querySelectorAll('.graph-hint')].map((h) => h.textContent)"
@@ -939,6 +1021,7 @@ def drive(p, base, js, shots):
     tall = make_note(ctx, base, f"Graph play tall {stamp}", PLAY_TALL)
     heavy_play = make_note(ctx, base, f"Graph play heavy {stamp}", PLAY_HEAVY)
     irrational = make_note(ctx, base, f"Graph irrational {stamp}", IRRATIONAL)
+    geometry = make_note(ctx, base, f"Graph geometry {stamp}", GEOMETRY)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -1051,6 +1134,7 @@ def drive(p, base, js, shots):
             checks.update(check_play_waits_when_it_cannot_be_seen(browser, base, tall))
             checks.update(check_play_leaves_the_page_usable(browser, base, heavy_play))
             checks.update(check_saving_at_an_irrational_end(browser, base, irrational, ctx))
+            checks.update(check_geometry(browser, base, geometry))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_a_theme_change_while_drawing(browser, base, many))
             checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
@@ -1076,6 +1160,7 @@ def drive(p, base, js, shots):
             tall,
             heavy_play,
             irrational,
+            geometry,
         ):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()

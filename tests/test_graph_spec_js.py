@@ -103,7 +103,13 @@ SINKS = re.compile(
 
 
 def test_the_js_sources_never_evaluate_user_text_or_build_markup():
-    for name in ("graph-spec.js", "graph.js", "graph-budget.js", "graph-play.js"):
+    for name in (
+        "graph-spec.js",
+        "graph.js",
+        "graph-budget.js",
+        "graph-play.js",
+        "graph-geometry.js",
+    ):
         assert SINKS.findall(code_of(name)) == [], name
     # the check can see each kind of sink
     for probe in (
@@ -127,7 +133,15 @@ def test_jsxgraph_is_only_handed_closures_and_numbers():
     # a string term ('sin(a*x)') would go to JessieCode and be compiled with eval
     code = code_of("graph.js")
     creates = re.findall(r"board\.create\(\s*'(\w+)'\s*,\s*\[(.*?)\]\s*,", code, flags=re.S)
-    assert {kind for kind, _ in creates} == {"functiongraph", "curve", "point"}
+    assert {kind for kind, _ in creates} == {
+        "functiongraph",
+        "curve",
+        "point",
+        "segment",
+        "line",
+        "circle",
+        "polygon",
+    }
     for kind, args in creates:
         assert not re.search(r"['\"`]", args), (kind, args)
 

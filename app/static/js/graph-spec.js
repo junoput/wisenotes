@@ -22,6 +22,8 @@ export const MAX_TOKENS = 256;
 // calls. Bounds chains of functions calling functions and a function calling another twice at
 // every level; the drawing code calls a function hundreds of times per frame.
 export const MAX_COST = 512;
+export const MAX_SHAPES = 200; // geometry statements in a definition
+export const MAX_CORNERS = 32; // corners of one polygon
 const BLANK = ' \t\r';
 
 // name -> [arity, implementation]. Math.* already gives the JS values the cases pin:
@@ -295,6 +297,9 @@ const SLIDER = new RegExp(`^slider${B}\\((.*)\\)${B}$`, 's');
 const POINT = new RegExp(`^\\((.*)\\)${B}$`, 's');
 const CURVE_RANGE = new RegExp(`^${B},${B}t[ \\t\\r]+in[ \\t\\r]+([^ \\t\\r]+)${B}$`, 's');
 const CURVE_FORM = 'a curve is written c(t) = (x, y), t in 0..2*pi';
+const CONSTRUCTION = new RegExp(`^(segment|line|circle|polygon|midpoint|intersection)${B}\\((.*)\\)${B}$`, 's');
+const NAME_ONLY = new RegExp(`^${N}$`);
+const CROSSING = ['segment', 'line', 'circle']; // what intersection(...) takes
 
 /** Index of the ')' that closes the '(' at the start of text; -1 when there is none. */
 function matchingParen(text) {
@@ -322,7 +327,7 @@ function splitTop(text) {
 
 class Checker {
   constructor() {
-    this.spec = { view: null, sliders: new Map(), functions: new Map(), points: new Map(), curves: new Map(), errors: [] };
+    this.spec = { view: null, sliders: new Map(), functions: new Map(), points: new Map(), curves: new Map(), shapes: [], errors: [] };
     this.kinds = new Map(); // every name defined, and what it is
   }
 
@@ -376,12 +381,19 @@ class Checker {
       if (s) return this.slider(name, s[1]);
       const p = POINT.exec(rhs);
       if (p && splitTop(p[1]).length > 1) return this.point(name, p[1]);
-      throw new Refused('statement', `${name} = ... must be a slider(...) or a point (x, y)`);
+      const c = CONSTRUCTION.exec(rhs);
+      if (c) return this.construction(name, c[1], c[2]);
+      throw new Refused(
+        'statement',
+        `${name} = ... must be a slider(...), a point (x, y) or a construction such as segment(P, Q)`,
+      );
     }
+    const c = CONSTRUCTION.exec(stripped);
+    if (c) return this.construction(null, c[1], c[2]);
     throw new Refused(
       'statement',
       'not a statement: expected view, a slider, a function f(x) = ..., a curve ' +
-        'c(t) = (x, y), t in a..b, or a point P = (x, y)',
+        'c(t) = (x, y), t in a..b, a point P = (x, y) or a construction such as segment(P, Q)',
     );
   }
 
@@ -491,6 +503,64 @@ class Checker {
       return fn;
     };
     this.spec.curves.set(name, { x: at1(fx), y: at1(fy), lo, hi });
+  }
+
+  /** An argument that must name an object defined above, of one of the kinds `want`. */
+  named(text, want, what) {
+    if (!NAME_ONLY.test(text)) throw new Refused('geometry_arg', `${what} is given by its name, as in segment(P, Q)`);
+    const kind = this.kinds.get(text);
+    if (kind === undefined) throw new Refused('unknown_name', `${text} is not defined above`);
+    if (!want.includes(kind)) throw new Refused('wrong_kind', `${text} is a ${kind}, not ${what}`);
+    return text;
+  }
+
+  construction(name, ctor, inner) {
+    if (this.spec.shapes.length >= MAX_SHAPES) {
+      throw new Refused('too_many', `a graph has at most ${MAX_SHAPES} geometry statements`);
+    }
+    if (name === null && (ctor === 'midpoint' || ctor === 'intersection')) {
+      throw new Refused('geometry_name', `${ctor} makes a point: name it, M = ${ctor}(P, Q)`);
+    }
+    const args = splitTop(inner).map(strip);
+    let refs;
+    let radius = null;
+    let index = null; // the first place that exists; 1 or 2 when written
+    if (ctor === 'segment' || ctor === 'line' || ctor === 'midpoint') {
+      if (args.length !== 2) throw new Refused('geometry_form', `${ctor} needs two points: ${ctor}(P, Q)`);
+      refs = args.map((a) => this.named(a, ['point'], 'a point'));
+    } else if (ctor === 'polygon') {
+      if (args.length < 3 || args.length > MAX_CORNERS) {
+        throw new Refused('geometry_form', `a polygon has 3 to ${MAX_CORNERS} corners: polygon(P, Q, R)`);
+      }
+      refs = args.map((a) => this.named(a, ['point'], 'a point'));
+    } else if (ctor === 'circle') {
+      if (args.length !== 2) {
+        throw new Refused('geometry_form', 'a circle is circle(P, Q), through Q, or circle(P, 2), of radius 2');
+      }
+      const centre = this.named(args[0], ['point'], 'a point');
+      if (NAME_ONLY.test(args[1]) && this.kinds.get(args[1]) === 'point') {
+        refs = [centre, args[1]];
+      } else {
+        refs = [centre];
+        radius = this.expression(args[1]);
+      }
+    } else {
+      if (args.length !== 2 && args.length !== 3) {
+        throw new Refused('geometry_form', 'intersection needs two objects: intersection(a, b), or (a, b, 2)');
+      }
+      refs = args.slice(0, 2).map((a) => this.named(a, CROSSING, 'a line, segment or circle'));
+      if (args.length === 3) {
+        if (args[2] !== '1' && args[2] !== '2') {
+          throw new Refused('geometry_index', 'the index is 1 or 2: intersection(a, b, 2)');
+        }
+        index = Number(args[2]);
+      }
+      if (index === 2 && !refs.some((r) => this.kinds.get(r) === 'circle')) {
+        throw new Refused('geometry_index', 'two straight things meet in at most one place');
+      }
+    }
+    if (name !== null) this.define(name, ctor === 'midpoint' || ctor === 'intersection' ? 'point' : ctor);
+    this.spec.shapes.push({ kind: ctor, name, refs, radius, index });
   }
 
   point(name, inner) {
