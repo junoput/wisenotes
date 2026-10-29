@@ -45,16 +45,41 @@ out.cleanAfter = heavy.spent === 0 && heavy.overran === false;
 // allowance is spent
 const many = b.newWork();
 let admitted = 0;
-for (let i = 0; i < 800; i++) if (b.admitCurve(many)) admitted++;
+for (let i = 0; i < 800; i++) if (b.admitCurve(many, `f${i}`)) admitted++;
 out.admitted = admitted;
 out.curvesSaid = b.leftOutText(many);
 const spentFirst = b.newWork();
 spentFirst.spent = b.MAX_EVALS;
-out.noCurveOnceSpent = b.admitCurve(spentFirst) === false && spentFirst.skipped === 1;
+out.noCurveOnceSpent = b.admitCurve(spentFirst, 'g') === false && spentFirst.skipped.length === 1;
 // skipped curves stay said after an update (they are still not drawn)
 b.settleWork(many);
 out.skippedStaySaid = b.leftOutText(many).includes('first 24 of 800');
 out.maxCurves = b.MAX_CURVES;
+
+// the curves left out are named, in the order of the definition, five and then a count
+out.named = b.leftOutText(many);
+const two = b.newWork();
+for (let i = 0; i < b.MAX_CURVES + 2; i++) b.admitCurve(two, `h${i}`);
+out.namedTwo = b.leftOutText(two);
+
+// creating a curve charges half (JSXGraph evaluates a curve twice when it makes it), and
+// the weight is back to 1 afterwards, also when the creation throws
+const made = b.newWork();
+b.creating(made, () => { for (let k = 0; k < 1000; k++) b.overBudget(made); });
+out.createdSpent = made.spent;
+for (let k = 0; k < 1000; k++) b.overBudget(made);
+out.thenFull = made.spent;
+try { b.creating(made, () => { throw new Error('x'); }); } catch { /* the point */ }
+out.weightAfterThrow = made.weight;
+out.creationWeight = b.CREATION_WEIGHT;
+// 24 creations at the weight, each of 4,100 evaluations (a circle here), stay inside the allowance
+const circles = b.newWork();
+for (let i = 0; i < 24; i++) {
+  if (!b.admitCurve(circles, `c${i}`)) break;
+  b.creating(circles, () => { for (let k = 0; k < 4100; k++) b.overBudget(circles); });
+}
+out.circlesAdmitted = circles.curves;
+out.circlesOverran = circles.overran;
 console.log(JSON.stringify(out));
 """
 
@@ -81,6 +106,37 @@ def test_a_boards_allowance_and_its_hint(tmp_path):
     assert got["clearedByNext"] and got["cleanAfter"]
     assert got["admitted"] == 24 and "first 24 of 800" in got["curvesSaid"]
     assert got["noCurveOnceSpent"] and got["skippedStaySaid"]
+
+
+def test_the_curves_left_out_are_named(tmp_path):
+    got = run(tmp_path)
+    assert got["maxCurves"] == 24
+    assert "left out: f24, f25, f26, f27, f28 and 771 more." in got["named"]
+    assert "in the order of the definition" in got["named"]
+    assert got["namedTwo"].endswith("left out: h24, h25.")  # two: no count
+
+
+def test_creating_a_curve_is_charged_at_half_and_the_weight_comes_back(tmp_path):
+    got = run(tmp_path)
+    assert got["creationWeight"] == 0.5  # the instrument ran this file
+    assert got["createdSpent"] == 500
+    assert got["thenFull"] == 1500  # the next 1000 are charged in full
+    assert got["weightAfterThrow"] == 1
+    # twenty-four circles of 4,100 evaluations each at creation are all admitted, with no gap
+    assert got["circlesAdmitted"] == 24 and got["circlesOverran"] is False
+
+
+def test_harness_control_creation_charged_in_full_is_seen(tmp_path):
+    # the old design: the 13th circle ran out of allowance at creation
+    source = BUDGET.read_text()
+    broken = source.replace(
+        "export const CREATION_WEIGHT = 0.5;", "export const CREATION_WEIGHT = 1;"
+    )
+    assert broken != source
+    bad = tmp_path / "broken.js"
+    bad.write_text(broken)
+    got = run(tmp_path, bad)
+    assert got["circlesAdmitted"] < 24 and got["circlesOverran"] is True
 
 
 def test_harness_control_a_flag_that_is_never_cleared_is_seen(tmp_path):
