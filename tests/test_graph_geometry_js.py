@@ -56,6 +56,16 @@ for (let r = 0.2; r <= 5; r += 0.1) {
   swept.push([s.named.get('X'), s.named.get('Y')]);
 }
 out.sweep = swept;
+// the box a person set on a board that keeps one scale: the written shape, at the shown scale
+const view = { x: [-6, 6], y: [-4, 4] };
+const fit = (w, h) => Math.min(w / 12, h / 8);
+const widths = [300, 600, 1200];
+out.locked = {
+  atEveryWidth: widths.map((w) => g.lockedBox(view, [-1, 1, 1, -1], fit(w, 300), [w, 300])),
+  zoomedIn: g.lockedBox(view, [-1, 1, 1, -1], 2 * fit(600, 300), [600, 300]),
+  panned: g.lockedBox(view, [0, 0, 2, -2], fit(600, 300), [600, 300]),
+  flat: g.lockedBox({ x: [0, 10], y: [0, 2] }, [3, 3, 7, -1], 40, [400, 300]),
+};
 console.log(JSON.stringify(out));
 """
 
@@ -262,6 +272,17 @@ def test_the_first_place_stays_the_first_while_a_slider_moves(tmp_path):
     both = [(x, y) for x, y in sweep if x is not None and y is not None]
     assert len(sweep) > 40 and 10 < len(both) < len(sweep)  # it crosses, and sometimes misses
     assert all(x[0] <= y[0] for x, y in both)  # never swapped (equal where it touches)
+
+
+def test_the_box_a_person_set_is_the_written_shape_at_the_shown_scale(tmp_path):
+    locked = run_node(tmp_path)["locked"]
+    # saving with no pan or zoom gives back the written box at every width (the shown box
+    # is wider than it, and differently so at each width)
+    for box in locked["atEveryWidth"]:
+        assert near(box, [-6, 4, 6, -4]), box
+    assert near(locked["zoomedIn"], [-3, 2, 3, -2])  # twice the scale: half the box, same shape
+    assert near(locked["panned"], [-5, 3, 7, -5])  # moved with the middle of what is shown
+    assert near(locked["flat"], [0, 2, 10, 0])  # a written box that is not the board's shape
 
 
 def test_harness_control_a_swapped_index_is_seen(tmp_path):

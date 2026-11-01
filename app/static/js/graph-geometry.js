@@ -137,3 +137,19 @@ export function geometry(spec, env) {
     return solved;
   };
 }
+
+/** The box a person has set, for Save view, on a board that keeps one scale on both axes.
+ * The screen shows the written box widened along its longer side to fill the board, so
+ * the box it shows is not the box that was written: saving that one would widen the text
+ * on every save, and differently at every width. The box set is the written shape (`view`)
+ * at the scale the board shows now, around the middle of what is shown, so a save without
+ * a pan or a zoom gives back the box that was written. `size` is the board in pixels,
+ * `unit` its pixels per unit, `shown` the box on the screen [x0, y1, x1, y0]. */
+export function lockedBox(view, shown, unit, size) {
+  const w = view.x[1] - view.x[0];
+  const h = view.y[1] - view.y[0];
+  const zoom = Math.min(size[0] / w, size[1] / h) / unit; // 1 until the person zooms
+  const cx = (shown[0] + shown[2]) / 2;
+  const cy = (shown[1] + shown[3]) / 2;
+  return [cx - (w * zoom) / 2, cy + (h * zoom) / 2, cx + (w * zoom) / 2, cy - (h * zoom) / 2];
+}

@@ -11,7 +11,7 @@
 import { parse, newEnv } from '/static/js/graph-spec.js';
 import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
 import { advance, nextFrameAt, snap } from '/static/js/graph-play.js';
-import { geometry } from '/static/js/graph-geometry.js';
+import { geometry, lockedBox } from '/static/js/graph-geometry.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -263,14 +263,17 @@ function sliderControls(spec, env, onChange, presence) {
 }
 
 /** Reset view, and (when the page says where) Save view: the box on the screen and the
- * sliders' values go to the server, which writes them into the definition. */
-function viewControls(figure, getBoard, view, sliders) {
+ * sliders' values go to the server, which writes them into the definition. A board that
+ * keeps one scale on both axes (`locked`: it has geometry) says so to every call that sets
+ * the box, or JSXGraph drops the lock and a circle turns into an ellipse; and it saves the
+ * box that was set, not the wider one it shows (lockedBox). */
+function viewControls(figure, getBoard, view, sliders, locked) {
   const bar = el('div', { class: 'graph-controls' });
   const reset = el('button', { type: 'button', class: 'graph-reset' }, 'Reset view');
   const status = el('span', { class: 'graph-status', role: 'status' });
   reset.addEventListener('click', () => {
     sliders.reset();
-    getBoard().setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
+    getBoard().setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], locked);
     getBoard().fullUpdate();
     status.textContent = '';
   });
@@ -279,7 +282,10 @@ function viewControls(figure, getBoard, view, sliders) {
   if (url && window.htmx) {
     const save = el('button', { type: 'button', class: 'graph-save' }, 'Save view');
     save.addEventListener('click', () => {
-      const [x0, y1, x1, y0] = getBoard().getBoundingBox();
+      const board = getBoard();
+      const [x0, y1, x1, y0] = locked
+        ? lockedBox(view, board.getBoundingBox(), Math.abs(board.unitX), [board.canvasWidth, board.canvasHeight])
+        : board.getBoundingBox();
       status.textContent = 'Saving\u2026';
       window.htmx.ajax('POST', url, { source: save, target: 'body', swap: 'none', values: { x0, x1, y0, y1, slider: sliders.changed() } });
     });
@@ -373,7 +379,7 @@ export async function renderGraphs(loadOnce) {
       presence = watchPresence(box);
       sliders = sliderControls(spec, env, () => board?.fullUpdate(), presence);
       const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
-      const controls = viewControls(figure, () => board, view, sliders);
+      const controls = viewControls(figure, () => board, view, sliders, spec.shapes.length > 0);
       live.append(box, sliders.node, controls, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
       board = drawBoard(box, spec, env, colors, describe(spec), work);
