@@ -1530,7 +1530,7 @@ def test_preview_does_not_build_every_pass_when_the_tip_fails_smoke_in_the_f6_st
     reset_log(beside)
     second = run_beside(beside, script="preview.sh", sha="ccc")
     assert "failed smoke earlier" in second.stdout, second.stdout + second.stderr
-    assert "podman build" not in log(beside) and "deploying again" not in second.stdout
+    assert "podman build" not in log(beside) and "deploying it once more" not in second.stdout
     assert containers(beside)["wisenotes"][0] == "id-wisenotes:aaa"
 
 
@@ -1550,6 +1550,24 @@ def builds_over_passes(box, sha, passes):
         run_beside(box, script="preview.sh", sha=sha)
         got.append(log(box).count("podman build"))
     return got
+
+
+def test_a_tip_that_failed_smoke_keeps_its_marker_when_current_is_another_image(beside):
+    # aaa serves, :current names bbb (a hand-over cut short), the tip ccc already failed smoke
+    # (the marker names ccc) and no retry has been spent. The marker names neither the serving
+    # image nor :current, so it is not cleared: this pass builds nothing and says why. This
+    # kills the marker condition's "names :current" clause, which no other test reaches (N1).
+    serving_aaa(beside)
+    state_file(beside, "images/wisenotes_current", "id-wisenotes:bbb fence")
+    mark(beside, "bad", "id-wisenotes:ccc")
+    (beside / "repo/deploy/.preview-last-tried").write_text("ccc\n")
+    reset_log(beside)
+    r = run_beside(beside, script="preview.sh", sha="ccc")
+    assert "failed smoke earlier" in r.stdout, r.stdout + r.stderr
+    assert "podman build" not in log(beside), r.stdout
+    assert "deploying it once more" not in r.stdout
+    assert (beside / "repo/deploy/.preview-last-tried").read_text().strip() == "ccc"
+    assert not (beside / "repo/deploy/.preview-retried").exists()
 
 
 def test_preview_retries_a_current_that_itself_fails_smoke_once_not_every_pass(beside):
