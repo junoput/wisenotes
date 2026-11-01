@@ -18,6 +18,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import UploadFile
 from fastapi.responses import HTMLResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.responses import RedirectResponse
 from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
@@ -426,6 +427,39 @@ async def update_chapter(
     )
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
+    return _after_change(request, service, note)
+
+
+@router.post("/notes/{note_id}/chapters/{chapter_id}/graph-view")
+async def save_graph_view(
+    note_id: str,
+    chapter_id: str,
+    request: Request,
+    x0: float = Form(...),
+    x1: float = Form(...),
+    y0: float = Form(...),
+    y1: float = Form(...),
+    slider: list[str] = Form(default=[]),
+    service: NoteService = Depends(get_note_service),
+):
+    """Save the default view of a graph block: the box on the page and the sliders' values,
+    written into the definition (the view line and each `value`). `slider` is repeated,
+    one `name=value` each."""
+    values: dict[str, float] = {}
+    for item in slider:
+        name, sep, number = item.partition("=")
+        try:
+            values[name] = float(number)
+        except ValueError:
+            sep = ""
+        if not sep:
+            return PlainTextResponse("a slider is sent as name=number", status_code=400)
+    try:
+        note = service.save_graph_view(note_id, chapter_id, (x0, x1), (y0, y1), values)
+    except ValueError as e:
+        return PlainTextResponse(str(e), status_code=400)
+    if not note:
+        raise HTTPException(status_code=404, detail="Block not found")
     return _after_change(request, service, note)
 
 

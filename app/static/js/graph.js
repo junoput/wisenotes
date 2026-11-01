@@ -10,6 +10,7 @@
  * text: the DOM is made with createElement and textContent. */
 import { parse, newEnv } from '/static/js/graph-spec.js';
 import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
+import { advance, nextFrameAt, snap } from '/static/js/graph-play.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -96,8 +97,35 @@ function drawBoard(box, spec, env, colors, label, work) {
   return board;
 }
 
-function sliderControls(spec, env, onChange) {
+/** Is the board on the screen, in a tab that is shown? A play waits while it is not.
+ * `listen(fn)` calls fn when that changes; `disconnect()` lets go of the observers. */
+function watchPresence(node) {
+  const listeners = new Set();
+  let onScreen = true; // until the observer says otherwise
+  const changed = () => listeners.forEach((fn) => fn());
+  const observer = 'IntersectionObserver' in window
+    ? new IntersectionObserver((seen) => { onScreen = seen[seen.length - 1].isIntersecting; changed(); })
+    : null;
+  observer?.observe(node);
+  document.addEventListener('visibilitychange', changed);
+  return {
+    shown: () => onScreen && !document.hidden,
+    listen: (fn) => listeners.add(fn),
+    disconnect() { observer?.disconnect(); document.removeEventListener('visibilitychange', changed); listeners.clear(); },
+  };
+}
+
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** The sliders of a board, with a play button on those declared `play` (not offered when
+ * the person asked for reduced motion). `reset()` puts every slider back to its declared
+ * value; `values()` is what each shows now and `changed()` only those that differ from the
+ * declared value. A play draws at most 30 frames a second and leaves at least half of the
+ * time idle (graph-play.js), and waits while the board is off the screen or the tab is
+ * hidden (`presence`, see watchPresence). */
+function sliderControls(spec, env, onChange, presence) {
   const wrap = el('div', { class: 'graph-sliders' });
+  const parts = [];
   for (const s of spec.sliders.values()) {
     const input = el('input', {
       type: 'range', min: String(s.lo), max: String(s.hi), step: s.step === null ? 'any' : String(s.step),
@@ -105,16 +133,115 @@ function sliderControls(spec, env, onChange) {
     });
     const out = el('output', {}, String(s.value));
     env[s.name] = s.value;
-    input.addEventListener('input', () => {
+    const show = () => {
       env[s.name] = Number(input.value);
       out.textContent = String(Number(input.value));
-      onChange();
-    });
+    };
+    input.addEventListener('input', () => { show(); onChange(); });
     const label = el('label', { class: 'graph-slider' });
     label.append(el('span', { class: 'graph-slider-name' }, s.name), input, out);
+    let stop = () => {};
+    if (s.play && !reducedMotion()) {
+      const button = el('button', { type: 'button', class: 'graph-play', 'aria-label': `Play ${s.name}`, 'aria-pressed': 'false' }, '\u25B6');
+      let frame = null; // the pending animation frame; null while paused or stopped
+      let wanted = false; // the person pressed play, and has not pressed pause
+      let state = null;
+      let last = null;
+      let due = 0;
+      const showState = (playing) => {
+        button.setAttribute('aria-pressed', String(playing));
+        button.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} ${s.name}`);
+        button.textContent = playing ? '\u23F8' : '\u25B6';
+      };
+      const pause = () => { // not drawing, but still wanted: it goes on when the board is back
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = null;
+      };
+      stop = () => { wanted = false; pause(); showState(false); };
+      const tick = () => {
+        // the clock of the page, not the frame's timestamp: a frame that is late (a slow
+        // board) can carry the time it was meant to start, which would count its cost short
+        const now = performance.now();
+        frame = null;
+        // gone from the page, or the person asked for less motion since: stop
+        if (!input.isConnected || reducedMotion()) { stop(); return; }
+        if (!presence.shown()) return; // paused; presence.listen starts it again
+        if (now < due) { frame = requestAnimationFrame(tick); return; }
+        state = advance(state, last === null ? 0 : (now - last) / 1000, s);
+        last = now;
+        input.value = String(snap(state.value, s));
+        show();
+        onChange();
+        // What a frame costs is the redraw and what the browser does after it (layout and
+        // paint come before the next frame), so the next frame is asked for at once and the
+        // time it takes to arrive is the cost. A cheap board arrives in one 60 Hz frame
+        // (about 17 ms), which the pacing allows.
+        frame = requestAnimationFrame(() => {
+          due = nextFrameAt(now, performance.now() - now);
+          tick();
+        });
+      };
+      const run = () => {
+        if (!wanted || frame !== null || !presence.shown()) return;
+        last = null; // the time it was away is not a frame
+        due = 0;
+        frame = requestAnimationFrame(tick);
+      };
+      presence.listen(() => (presence.shown() ? run() : pause()));
+      button.addEventListener('click', () => {
+        if (wanted) { stop(); return; }
+        wanted = true;
+        state = { value: Number(input.value), dir: Number(input.value) >= s.hi ? -1 : 1 };
+        showState(true);
+        run();
+      });
+      // touching the slider takes over
+      input.addEventListener('pointerdown', stop);
+      input.addEventListener('keydown', stop);
+      label.append(button);
+    }
+    parts.push({ s, input, show, stop });
     wrap.append(label);
   }
-  return wrap;
+  return {
+    node: wrap,
+    reset() { for (const { s, input, show, stop } of parts) { stop(); input.value = String(s.value); show(); } },
+    values() { return parts.map(({ s, input }) => `${s.name}=${Number(input.value)}`); },
+    changed() {
+      return parts.filter(({ s, input }) => Number(input.value) !== s.value).map(({ s, input }) => `${s.name}=${Number(input.value)}`);
+    },
+    stop() { for (const { stop } of parts) stop(); },
+  };
+}
+
+/** Reset view, and (when the page says where) Save view: the box on the screen and the
+ * sliders' values go to the server, which writes them into the definition. */
+function viewControls(figure, getBoard, view, sliders) {
+  const bar = el('div', { class: 'graph-controls' });
+  const reset = el('button', { type: 'button', class: 'graph-reset' }, 'Reset view');
+  const status = el('span', { class: 'graph-status', role: 'status' });
+  reset.addEventListener('click', () => {
+    sliders.reset();
+    getBoard().setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
+    getBoard().fullUpdate();
+    status.textContent = '';
+  });
+  bar.append(reset);
+  const url = figure.dataset.viewUrl;
+  if (url && window.htmx) {
+    const save = el('button', { type: 'button', class: 'graph-save' }, 'Save view');
+    save.addEventListener('click', () => {
+      const [x0, y1, x1, y0] = getBoard().getBoundingBox();
+      status.textContent = 'Saving\u2026';
+      window.htmx.ajax('POST', url, { source: save, target: 'body', swap: 'none', values: { x0, x1, y0, y1, slider: sliders.changed() } });
+    });
+    save.addEventListener('htmx:responseError', (e) => {
+      status.textContent = `Not saved: ${e.detail.xhr.responseText || e.detail.xhr.status}`;
+    });
+    bar.append(save);
+  }
+  bar.append(status);
+  return bar;
 }
 
 function describe(spec) {
@@ -131,6 +258,7 @@ function showErrors(figure, errors) {
 }
 
 function release(entry) {
+  entry.stop?.();
   entry.resize?.disconnect();
   try { window.JXG?.JSXGraph.freeBoard(entry.board); } catch { /* the container is gone already */ }
   boards.delete(entry);
@@ -172,6 +300,8 @@ export async function renderGraphs(loadOnce) {
     if (!figure.isConnected) continue;
     const colors = palette(); // this board's, read now: the theme may have changed while earlier boards were drawn
     let live = null;
+    let presence = null; // watching the board, until it is released
+    let sliders = null;
     try {
       const env = newEnv();
       const work = newWork();
@@ -189,13 +319,16 @@ export async function renderGraphs(loadOnce) {
         const want = text ? `${text} ${HINT}` : HINT;
         if (hint.textContent !== want) hint.textContent = want;
       };
-      const sliders = sliderControls(spec, env, () => board?.fullUpdate());
-      live.append(box, sliders, hint);
+      presence = watchPresence(box);
+      sliders = sliderControls(spec, env, () => board?.fullUpdate(), presence);
+      const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
+      const controls = viewControls(figure, () => board, view, sliders);
+      live.append(box, sliders.node, controls, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
       board = drawBoard(box, spec, env, colors, describe(spec), work);
       settle();
       board.on('update', settle); // after the first draw, which settles by hand
-      const entry = { figure, board, box, extras: [live] };
+      const entry = { figure, board, box, extras: [live], stop: () => { sliders.stop(); presence.disconnect(); } };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);
       boards.add(entry);
@@ -203,6 +336,8 @@ export async function renderGraphs(loadOnce) {
       figure.querySelector('.graph-source-caption').textContent = 'Click here to edit the graph';
     } catch (err) {
       console.warn('graph block not drawn, its definition stays as text', err);
+      sliders?.stop();
+      presence?.disconnect(); // its observer and its listener would outlive the board that never was
       live?.remove();
     }
   }

@@ -65,7 +65,7 @@ export function leftOutText(work) {
     const named = work.skipped.slice(0, NAMED).join(', ');
     const more = work.skipped.length > NAMED ? ` and ${work.skipped.length - NAMED} more` : '';
     parts.push(
-      `Only the first ${work.curves} of ${work.curves + work.skipped.length} curves are drawn, in the order of the definition (functions, then curves); left out: ${named}${more}.`,
+      `Only the first ${work.curves} of ${work.curves + work.skipped.length} curves are drawn, in the order of the definition (functions first, then curves); left out: ${named}${more}.`,
     );
   }
   if (work.overran) parts.push('Part of a graph is left out: it takes too much work.');
