@@ -84,6 +84,7 @@ MAX_COST = 512
 # so the text alone must not be able to ask for thousands.
 MAX_SHAPES = 200
 MAX_CORNERS = 32
+MAX_POLYGON_CORNERS = 800  # corners of all the polygons of a definition together
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+")
 BLANK = " \t\r"  # the whitespace of the language
@@ -761,6 +762,13 @@ class _Checker:
             if not 3 <= len(args) <= MAX_CORNERS:
                 raise _Refused(
                     "geometry_form", f"a polygon has 3 to {MAX_CORNERS} corners: polygon(P, Q, R)"
+                )
+            if len(args) + sum(len(c.refs) for c in self.spec.shapes if c.kind == "polygon") > (
+                MAX_POLYGON_CORNERS
+            ):
+                raise _Refused(
+                    "too_many",
+                    f"the polygons of a graph have at most {MAX_POLYGON_CORNERS} corners together",
                 )
             refs = tuple(self.named(a, ("point",), "a point") for a in args)
         elif ctor == "circle":

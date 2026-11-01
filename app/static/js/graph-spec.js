@@ -24,6 +24,7 @@ export const MAX_TOKENS = 256;
 export const MAX_COST = 512;
 export const MAX_SHAPES = 200; // geometry statements in a definition
 export const MAX_CORNERS = 32; // corners of one polygon
+export const MAX_POLYGON_CORNERS = 800; // corners of all the polygons of a definition together
 const BLANK = ' \t\r';
 
 // name -> [arity, implementation]. Math.* already gives the JS values the cases pin:
@@ -531,6 +532,10 @@ class Checker {
     } else if (ctor === 'polygon') {
       if (args.length < 3 || args.length > MAX_CORNERS) {
         throw new Refused('geometry_form', `a polygon has 3 to ${MAX_CORNERS} corners: polygon(P, Q, R)`);
+      }
+      const used = this.spec.shapes.reduce((n, c) => n + (c.kind === 'polygon' ? c.refs.length : 0), 0);
+      if (used + args.length > MAX_POLYGON_CORNERS) {
+        throw new Refused('too_many', `the polygons of a graph have at most ${MAX_POLYGON_CORNERS} corners together`);
       }
       refs = args.map((a) => this.named(a, ['point'], 'a point'));
     } else if (ctor === 'circle') {
