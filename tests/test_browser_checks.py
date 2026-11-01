@@ -94,3 +94,9 @@ def test_the_browser_check_passes_in_both_arms(server, script):
     # exit 0 is a pass; 1 names a failed check; 2 is VACUOUS (it saw nothing to judge)
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.count("VERDICT: PASS") == 2, r.stdout  # both arms gave a verdict
+
+
+def test_drag_and_drop_listeners_do_not_pile_up_per_swap(server):
+    r = run_check("dnd_listeners.py", server)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("VERDICT: PASS") == 1, r.stdout

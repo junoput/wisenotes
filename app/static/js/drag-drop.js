@@ -262,6 +262,50 @@ function performMove(targetId, parentId = '') {
   });
 }
 
+// Allow drop anywhere to prevent browser defaults
+// Global drag handlers are selective: only prevent default when over known drop areas
+function onDocumentDragOver(e) {
+  if (!draggedEl) return;
+  const isHandled = !!e.target.closest('.chapter-section, .chapter-append-drop, .chapter-header, .chapters-display');
+  if (isHandled) e.preventDefault();
+}
+
+function onDocumentDrop(e) {
+  if (!draggedEl) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  // If we have a dragged element positioned somewhere, process the drop
+  onDrop(e);
+}
+
+// Root-level container: allow drops only for `chapter` type blocks
+function onRootDragOver(e) {
+  if (!draggedEl) return;
+  const draggedType = draggedEl.dataset.chapterType || 'chapter';
+  if (draggedType !== 'chapter') {
+    // do not call preventDefault -> drop not allowed here
+    e.dataTransfer.dropEffect = 'none';
+    return;
+  }
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+}
+
+function onRootDrop(e) {
+  if (!draggedEl) return;
+  const draggedType = draggedEl.dataset.chapterType || 'chapter';
+  if (draggedType !== 'chapter') {
+    // restore UI
+    window.location.reload();
+    return;
+  }
+  // Allowed: perform append to root (end)
+  e.preventDefault();
+  e.stopPropagation();
+  performMove('', '');
+}
+
 export function initDragAndDrop() {
   const handles = document.querySelectorAll('.drag-handle');
   handles.forEach(handle => {
@@ -290,51 +334,14 @@ export function initDragAndDrop() {
     header.addEventListener('drop', onHeaderDrop);
   });
 
-  // Allow drop anywhere to prevent browser defaults
-  // Make global drag handlers selective: only prevent default when over known drop areas
-  document.addEventListener('dragover', (e) => {
-    if (!draggedEl) return;
-    const isHandled = !!e.target.closest('.chapter-section, .chapter-append-drop, .chapter-header, .chapters-display');
-    if (isHandled) e.preventDefault();
-  });
+  // The document and the root container outlive a swap, so each gets a named function:
+  // adding the same one again is a no-op, a fresh arrow each time would pile up (20261028-027).
+  document.addEventListener('dragover', onDocumentDragOver);
+  document.addEventListener('drop', onDocumentDrop);
 
-  document.addEventListener('drop', (e) => {
-    if (!draggedEl) return;
-    e.preventDefault();
-    e.stopPropagation();
-    
-    // If we have a dragged element positioned somewhere, process the drop
-    onDrop(e);
-  });
-
-  // Root-level container: allow drops only for `chapter` type blocks
   const rootContainer = document.querySelector('.chapters-display');
   if (rootContainer) {
-    rootContainer.addEventListener('dragover', (e) => {
-      if (!draggedEl) return;
-      const draggedType = draggedEl.dataset.chapterType || 'chapter';
-      if (draggedType !== 'chapter') {
-        // do not call preventDefault -> drop not allowed here
-        e.dataTransfer.dropEffect = 'none';
-        return;
-      }
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-    });
-
-    rootContainer.addEventListener('drop', (e) => {
-      if (!draggedEl) return;
-      const draggedType = draggedEl.dataset.chapterType || 'chapter';
-      if (draggedType !== 'chapter') {
-        // restore UI
-        window.location.reload();
-        return;
-      }
-      // Allowed: perform append to root (end)
-      e.preventDefault();
-      e.stopPropagation();
-      performMove('', '');
-    });
+    rootContainer.addEventListener('dragover', onRootDragOver);
+    rootContainer.addEventListener('drop', onRootDrop);
   }
 }
-
