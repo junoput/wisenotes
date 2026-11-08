@@ -13,6 +13,16 @@ instead of storing something the graph cannot draw. Slice 1 of the plan on
     Q = (3, f(3))
     c(t) = (2*cos(3*t), 2*sin(2*t)), t in 0..2*pi
 
+Slice 4 adds geometry, built from points by name (a bare construction has no name):
+
+    s = segment(P, Q)         l = line(P, Q)            polygon(P, Q, R)
+    c = circle(P, Q)          circle(P, 2)              # centre P through Q, or radius 2
+    M = midpoint(P, Q)        X = intersection(s, c)    # of lines, segments, circles: the first place
+                              intersection(s, c, 2)     # they meet, or the 1st or 2nd of two
+
+A graph with geometry keeps one scale on both axes, so that a circle is round: the box shows
+at least the view that is written, and more along the longer side.
+
 One statement per line. Expressions allow numbers, + - * / ^ and parentheses, the
 functions in FUNCTIONS, the constants pi and e, the sliders and functions already
 defined above the line, inside f(x) = ... the variable x, and inside a curve c(t) = ...
@@ -70,6 +80,11 @@ MAX_TOKENS = 256
 # f(x) = g(x) + g(x) doubling at every level, would otherwise evaluate as deep or as long as
 # the definition lets them (the evaluator draws a curve by calling it hundreds of times).
 MAX_COST = 512
+# Geometry statements in one definition, and corners of one polygon: each is a drawn element,
+# so the text alone must not be able to ask for thousands.
+MAX_SHAPES = 200
+MAX_CORNERS = 32
+MAX_POLYGON_CORNERS = 800  # corners of all the polygons of a definition together
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 NUMBER = re.compile(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+")
 BLANK = " \t\r"  # the whitespace of the language
@@ -120,12 +135,30 @@ class Curve:
 
 
 @dataclass
+class Shape:
+    """One geometry statement: segment, line, circle, polygon, midpoint or intersection.
+
+    `refs` are the names it is built from, all defined above it. A circle takes a centre and
+    either a point it passes through (refs of two) or a radius (refs of one, and `radius`).
+    An intersection takes `index`, 1 or 2: which of the (up to) two places the two meet. With
+    no index (None) it is the first place that exists, so intersection(s, c) is a point whenever
+    s and c meet at all."""
+
+    kind: str
+    name: str | None
+    refs: tuple[str, ...]
+    radius: Callable[[dict[str, float]], float] | None = None
+    index: int | None = None
+
+
+@dataclass
 class GraphSpec:
     view: View | None = None
     sliders: dict[str, Slider] = field(default_factory=dict)
     functions: dict[str, Callable[[float, dict[str, float]], float]] = field(default_factory=dict)
     points: dict[str, tuple[Callable[[dict[str, float]], float], ...]] = field(default_factory=dict)
     curves: dict[str, Curve] = field(default_factory=dict)
+    shapes: list[Shape] = field(default_factory=list)  # geometry, in the order written
     errors: list[SpecError] = field(default_factory=list)
 
 
@@ -474,12 +507,18 @@ def evaluate(text: str, env: Env | None = None) -> float:
 _B = r"[ \t\r]*"  # the language's blanks, not \s: Python's matches Unicode spaces and \f \v
 _B_SPLIT = r"[ \t\r]+"
 _N = "[A-Za-z][A-Za-z0-9_]*"
+NAME_ONLY = re.compile(_N)
 FUNCTION_DEF = re.compile(rf"({_N}){_B}\({_B}({_N}){_B}\){_B}=(.*)")
 ASSIGN = re.compile(rf"({_N}){_B}=(.*)")
 SLIDER = re.compile(rf"slider{_B}\((.*)\){_B}", re.S)
 POINT = re.compile(rf"\((.*)\){_B}", re.S)
 CURVE_RANGE = re.compile(rf"{_B},{_B}t{_B_SPLIT}in{_B_SPLIT}([^ \t\r]+){_B}")
 CURVE_FORM = "a curve is written c(t) = (x, y), t in 0..2*pi"
+CONSTRUCTION = re.compile(
+    rf"(segment|line|circle|polygon|midpoint|intersection){_B}\((.*)\){_B}", re.S
+)
+FLAT = ("segment", "line", "circle", "polygon")  # what a bare construction may draw
+CROSSING = ("segment", "line", "circle")  # what intersection(...) takes
 
 
 def _matching_paren(text: str) -> int:
@@ -564,21 +603,32 @@ class _Checker:
             return self.function(m.group(1), m.group(2), m.group(3))
         m = ASSIGN.fullmatch(stripped)
         if m:
-            name, rhs = m.group(1), m.group(2).strip(BLANK)
-            s = SLIDER.fullmatch(rhs)
-            if s:
-                return self.slider(name, s.group(1))
-            p = POINT.fullmatch(rhs)
-            if p and len(_split_top(p.group(1))) > 1:
-                return self.point(name, p.group(1))
-            raise _Refused(
-                "statement",
-                f"{name} = ... must be a slider(...) or a point (x, y)",
-            )
+            return self.assignment(m.group(1), m.group(2).strip(BLANK))
+        c = CONSTRUCTION.fullmatch(stripped)
+        if c:
+            return self.construction(None, c.group(1), c.group(2))
         raise _Refused(
             "statement",
             "not a statement: expected view, a slider, a function f(x) = ..., a curve "
-            "c(t) = (x, y), t in a..b, or a point P = (x, y)",
+            "c(t) = (x, y), t in a..b, a point P = (x, y) or a construction such as "
+            "segment(P, Q)",
+        )
+
+    def assignment(self, name: str, rhs: str) -> None:
+        """name = slider(...), a point (x, y) or a construction such as segment(P, Q)."""
+        s = SLIDER.fullmatch(rhs)
+        if s:
+            return self.slider(name, s.group(1))
+        p = POINT.fullmatch(rhs)
+        if p and len(_split_top(p.group(1))) > 1:
+            return self.point(name, p.group(1))
+        c = CONSTRUCTION.fullmatch(rhs)
+        if c:
+            return self.construction(name, c.group(1), c.group(2))
+        raise _Refused(
+            "statement",
+            f"{name} = ... must be a slider(...), a point (x, y) or a construction "
+            "such as segment(P, Q)",
         )
 
     def view(self, text: str) -> None:
@@ -684,6 +734,71 @@ class _Checker:
             return fn
 
         self.spec.curves[name] = Curve(at(fx), at(fy), lo, hi)
+
+    def named(self, text: str, want: tuple[str, ...], what: str) -> str:
+        """An argument that must name an object defined above, of one of the kinds `want`."""
+        if not NAME_ONLY.fullmatch(text):
+            raise _Refused("geometry_arg", f"{what} is given by its name, as in segment(P, Q)")
+        kind = self.kinds.get(text)
+        if kind is None:
+            raise _Refused("unknown_name", f"{text} is not defined above")
+        if kind not in want:
+            raise _Refused("wrong_kind", f"{text} is a {kind}, not {what}")
+        return text
+
+    def construction(self, name: str | None, ctor: str, inner: str) -> None:
+        if len(self.spec.shapes) >= MAX_SHAPES:
+            raise _Refused("too_many", f"a graph has at most {MAX_SHAPES} geometry statements")
+        if name is None and ctor in ("midpoint", "intersection"):
+            raise _Refused("geometry_name", f"{ctor} makes a point: name it, M = {ctor}(P, Q)")
+        args = [a.strip(BLANK) for a in _split_top(inner)]
+        radius = None
+        index = None
+        if ctor in ("segment", "line", "midpoint"):
+            if len(args) != 2:
+                raise _Refused("geometry_form", f"{ctor} needs two points: {ctor}(P, Q)")
+            refs = tuple(self.named(a, ("point",), "a point") for a in args)
+        elif ctor == "polygon":
+            if not 3 <= len(args) <= MAX_CORNERS:
+                raise _Refused(
+                    "geometry_form", f"a polygon has 3 to {MAX_CORNERS} corners: polygon(P, Q, R)"
+                )
+            if len(args) + sum(len(c.refs) for c in self.spec.shapes if c.kind == "polygon") > (
+                MAX_POLYGON_CORNERS
+            ):
+                raise _Refused(
+                    "too_many",
+                    f"the polygons of a graph have at most {MAX_POLYGON_CORNERS} corners together",
+                )
+            refs = tuple(self.named(a, ("point",), "a point") for a in args)
+        elif ctor == "circle":
+            if len(args) != 2:
+                raise _Refused(
+                    "geometry_form",
+                    "a circle is circle(P, Q), through Q, or circle(P, 2), of radius 2",
+                )
+            centre = self.named(args[0], ("point",), "a point")
+            if NAME_ONLY.fullmatch(args[1]) and self.kinds.get(args[1]) == "point":
+                refs = (centre, args[1])
+            else:
+                refs = (centre,)
+                radius = self.expression(args[1])
+        else:  # intersection
+            if len(args) not in (2, 3):
+                raise _Refused(
+                    "geometry_form",
+                    "intersection needs two objects: intersection(a, b), or (a, b, 2)",
+                )
+            refs = tuple(self.named(a, CROSSING, "a line, segment or circle") for a in args[:2])
+            if len(args) == 3:
+                if args[2] not in ("1", "2"):
+                    raise _Refused("geometry_index", "the index is 1 or 2: intersection(a, b, 2)")
+                index = int(args[2])
+            if index == 2 and "circle" not in (self.kinds[refs[0]], self.kinds[refs[1]]):
+                raise _Refused("geometry_index", "two straight things meet in at most one place")
+        if name is not None:
+            self.define(name, "point" if ctor in ("midpoint", "intersection") else ctor)
+        self.spec.shapes.append(Shape(ctor, name, refs, radius, index))
 
     def point(self, name: str, inner: str) -> None:
         coords = [c.strip(BLANK) for c in _split_top(inner)]

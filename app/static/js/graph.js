@@ -11,6 +11,7 @@
 import { parse, newEnv } from '/static/js/graph-spec.js';
 import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
 import { advance, nextFrameAt, snap } from '/static/js/graph-play.js';
+import { geometry, lockedBox } from '/static/js/graph-geometry.js';
 import { LIGHT, needsPicture, pictureOf, sendPicture } from '/static/js/graph-snapshot.js';
 
 const JSX = '/static/vendor/jsxgraph';
@@ -52,7 +53,7 @@ function drawBoard(box, spec, env, colors, label, work) {
     showCopyright: false,
     showNavigation: false,
     title: label, // the board's accessible name (JSXGraph sets the aria-label from it)
-    keepAspectRatio: false,
+    keepAspectRatio: spec.shapes.length > 0, // a circle must be round; a plain function graph may stretch to the box
     // Mouse: drag to pan, shift + wheel to zoom (a bare wheel must scroll the page).
     // Touch: two fingers pan and pinch zooms, so one finger still scrolls the page.
     pan: { enabled: true, needShift: false, needTwoFingers: true },
@@ -95,7 +96,54 @@ function drawBoard(box, spec, env, colors, label, work) {
       label: { display: 'internal', parse: false, useMathJax: false, useKatex: false, strokeColor: colors.text, fontSize: 13 },
     });
   }
+  drawGeometry(board, spec, env, colors, n);
   return board;
+}
+
+/** Segments, lines, circles, polygons and the points that come from midpoint(...) and
+ * intersection(...). Where each is comes from graph-geometry.js, which works the whole
+ * definition out once per slider position; JSXGraph is handed the numbers, as everywhere.
+ * What does not exist for the current values has no coordinates (NaN), and is not drawn. */
+function drawGeometry(board, spec, env, colors, n) {
+  const solved = geometry(spec, env);
+  const number = (i, pick) => () => {
+    const v = solved().shapes[i];
+    const got = v ? pick(v) : NaN;
+    return Number.isFinite(got) ? got : NaN;
+  };
+  const corner = (k) => (v) => v.pts?.[k] ?? v.c ?? [v.p, v.q][k]; // a polygon's, a circle's centre, a segment's
+  const hidden = { visible: false, fixed: true, withLabel: false, showInfobox: false };
+  const helper = (i, k) => board.create('point', [number(i, (v) => corner(k)(v)[0]), number(i, (v) => corner(k)(v)[1])], hidden);
+  spec.shapes.forEach((shape, i) => {
+    const look = {
+      strokeColor: colors.curves[n++ % colors.curves.length],
+      strokeWidth: 2,
+      highlight: false,
+      withLabel: false,
+      fixed: true,
+    };
+    const filled = { ...look, fillColor: look.strokeColor, fillOpacity: 0.08, highlightFillOpacity: 0.08 };
+    if (shape.kind === 'midpoint' || shape.kind === 'intersection') {
+      board.create('point', [number(i, (v) => v[0]), number(i, (v) => v[1])], {
+        name: shape.name, // an identifier, by the grammar
+        size: 3,
+        fixed: true,
+        showInfobox: false,
+        strokeColor: colors.text,
+        fillColor: colors.text,
+        label: { display: 'internal', parse: false, useMathJax: false, useKatex: false, strokeColor: colors.text, fontSize: 13 },
+      });
+    } else if (shape.kind === 'segment') {
+      board.create('segment', [helper(i, 0), helper(i, 1)], look);
+    } else if (shape.kind === 'line') {
+      board.create('line', [helper(i, 0), helper(i, 1)], look);
+    } else if (shape.kind === 'circle') {
+      board.create('circle', [helper(i, 0), number(i, (v) => v.r)], filled);
+    } else {
+      const corners = shape.refs.map((_, k) => helper(i, k));
+      board.create('polygon', [...corners], { ...filled, vertices: { visible: false }, borders: look });
+    }
+  });
 }
 
 /** Is the board on the screen, in a tab that is shown? A play waits while it is not.
@@ -227,20 +275,23 @@ function sliderControls(spec, env, onChange, presence) {
 }
 
 /** The default view: every slider at its declared value, the box the definition declares. */
-function resetView(board, view, sliders) {
+function resetView(board, view, sliders, locked) {
   sliders.reset();
-  board.setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
+  board.setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], locked);
   board.fullUpdate();
 }
 
 /** Reset view, and (when the page says where) Save view: the box on the screen and the
- * sliders' values go to the server, which writes them into the definition. */
-function viewControls(figure, getBoard, view, sliders) {
+ * sliders' values go to the server, which writes them into the definition. A board that
+ * keeps one scale on both axes (`locked`: it has geometry) says so to every call that sets
+ * the box, or JSXGraph drops the lock and a circle turns into an ellipse; and it saves the
+ * box that was set, not the wider one it shows (lockedBox). */
+function viewControls(figure, getBoard, view, sliders, locked) {
   const bar = el('div', { class: 'graph-controls' });
   const reset = el('button', { type: 'button', class: 'graph-reset' }, 'Reset view');
   const status = el('span', { class: 'graph-status', role: 'status' });
   reset.addEventListener('click', () => {
-    resetView(getBoard(), view, sliders);
+    resetView(getBoard(), view, sliders, locked);
     status.textContent = '';
   });
   bar.append(reset);
@@ -248,7 +299,10 @@ function viewControls(figure, getBoard, view, sliders) {
   if (url && window.htmx) {
     const save = el('button', { type: 'button', class: 'graph-save' }, 'Save view');
     save.addEventListener('click', () => {
-      const [x0, y1, x1, y0] = getBoard().getBoundingBox();
+      const board = getBoard();
+      const [x0, y1, x1, y0] = locked
+        ? lockedBox(view, board.getBoundingBox(), Math.abs(board.unitX), [board.canvasWidth, board.canvasHeight])
+        : board.getBoundingBox();
       status.textContent = 'Saving\u2026';
       window.htmx.ajax('POST', url, { source: save, target: 'body', swap: 'none', values: { x0, x1, y0, y1, slider: sliders.changed() } });
     });
@@ -262,7 +316,10 @@ function viewControls(figure, getBoard, view, sliders) {
 }
 
 function describe(spec) {
-  const names = [...spec.functions.keys(), ...spec.curves.keys(), ...spec.points.keys()];
+  const names = [
+    ...spec.functions.keys(), ...spec.curves.keys(), ...spec.points.keys(),
+    ...spec.shapes.map((s) => s.name).filter((name) => name !== null),
+  ];
   return names.length ? `Graph of ${names.join(', ')}` : 'Graph';
 }
 
@@ -292,7 +349,7 @@ export async function renderGraphs(loadOnce) {
     const source = figure.querySelector('.graph-spec')?.textContent ?? '';
     const spec = parse(source);
     if (spec.errors.length) { showErrors(figure, spec.errors); continue; }
-    if (spec.functions.size + spec.curves.size + spec.points.size === 0) continue; // nothing to draw: the text stays
+    if (spec.functions.size + spec.curves.size + spec.points.size + spec.shapes.length === 0) continue; // nothing to draw: the text stays
     drawable.push({ figure, spec });
   }
   if (!drawable.length) return;
@@ -340,13 +397,13 @@ export async function renderGraphs(loadOnce) {
       presence = watchPresence(box);
       sliders = sliderControls(spec, env, () => board?.fullUpdate(), presence);
       const view = spec.view ?? { x: [-5, 5], y: [-5, 5] };
-      const controls = viewControls(figure, () => board, view, sliders);
+      const controls = viewControls(figure, () => board, view, sliders, spec.shapes.length > 0);
       live.append(box, sliders.node, controls, hint);
       (figure.closest('.chapter-view') ?? figure).before(live);
       board = drawBoard(box, spec, env, colors, describe(spec), work);
       settle();
       board.on('update', settle); // after the first draw, which settles by hand
-      const entry = { figure, board, box, view, sliders, extras: [live], stop: () => { sliders.stop(); presence.disconnect(); } };
+      const entry = { figure, board, box, view, locked: spec.shapes.length > 0, sliders, extras: [live], stop: () => { sliders.stop(); presence.disconnect(); } };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);
       boards.add(entry);
@@ -395,7 +452,7 @@ export function resetOnPrint() {
     for (const entry of boards) {
       if (entry.saved) continue;
       entry.saved = { box: entry.board.getBoundingBox(), sliders: entry.sliders.current() };
-      resetView(entry.board, entry.view, entry.sliders);
+      resetView(entry.board, entry.view, entry.sliders, entry.locked);
     }
   };
   const after = () => {
@@ -404,7 +461,7 @@ export function resetOnPrint() {
       const { box, sliders } = entry.saved;
       entry.saved = null;
       entry.sliders.apply(sliders);
-      entry.board.setBoundingBox(box, false);
+      entry.board.setBoundingBox(box, entry.locked);
       entry.board.fullUpdate();
     }
   };

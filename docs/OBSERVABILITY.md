@@ -401,8 +401,11 @@ is no `trace_id`.
 An exception record carries `exception.type`, an `exception.message` taken
 from the fixed reason table in `app/services/reasons.py`, the stack frames
 without the final message line, and an `error.fingerprint` on the type and the
-innermost frame. The exception's own text is left out: an `OSError` names a
-path in the data directory, and a note's folder is named after its title.
+innermost frame under `app/`, skipping a middleware frame that only passes the
+request on (its line is the `call_next` call). An error raised entirely outside
+`app/` has no such frame, and is fingerprinted at its innermost frame. The
+exception's own text is left out: an `OSError` names a path in the data
+directory, and a note's folder is named after its title.
 For the same reason, no record names a note's title or folder, or an import
 entry. `tests/test_logs.py` holds each of these rules with a sentinel.
 

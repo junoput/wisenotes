@@ -39,6 +39,8 @@ SPEC = (
     "f(x) = a*sin(x)\n"
     "P = (1, f(1))\n"
 )
+# a circle of radius 2 about the origin, on a view that is not square: the box widens to keep it round
+CIRCLE = "view 2d  x -4..4  y -2.5..2.5\nO = (0, 0)\nQ = (2, 0)\nc = circle(O, Q)\n"
 DEFAULT_BOX = [-6, 4, 6, -4]
 CURVE = (14, 116, 144)  # --accent of the light theme, the first curve's colour
 STATE: dict = {}  # what the scripts-on arm made, for the scripts-off arm
@@ -77,6 +79,10 @@ def picture(ctx, base, note, name):
 def pixels(img):
     raw = img.convert("RGB").tobytes()
     return zip(raw[0::3], raw[1::3], raw[2::3], strict=True)
+
+
+def ink_px(px, near=CURVE, tol=40):
+    return all(abs(a - b) <= tol for a, b in zip(px, near, strict=True))
 
 
 def ink(img, near, tol=40):
@@ -145,6 +151,7 @@ def drive_scripts_on(ctx, page, base, checks, problems, posts, result, shots):
     a = make_note(ctx, base, f"Graph snapshot A {stamp}", [SPEC.format(value=1)])
     b = make_note(ctx, base, f"Graph snapshot B {stamp}", [SPEC.format(value=3)])
     twin = make_note(ctx, base, f"Graph snapshot twin {stamp}", [SPEC.format(value=2)] * 2)
+    geo = make_note(ctx, base, f"Graph snapshot geometry {stamp}", [CIRCLE])
     STATE.update(a=a, b=b)
 
     page.goto(f"{base}/notes/{a}")
@@ -205,6 +212,26 @@ def drive_scripts_on(ctx, page, base, checks, problems, posts, result, shots):
         )
     else:
         checks["the picture follows the slider's declared value"] = False
+
+    # a construction is a picture too, and its circle is round in it
+    page.goto(f"{base}/notes/{geo}")
+    try:
+        page.wait_for_selector(
+            "figure.graph-block-display[data-has-snapshot]", state="attached", timeout=20000
+        )
+    except Exception:
+        pass
+    names_g = pictures(ctx, base, geo)
+    if names_g:
+        _, img_g = picture(ctx, base, geo, names_g[0])
+        hits = [(i % 1280, i // 1280) for i, px in enumerate(pixels(img_g)) if ink_px(px)]
+        xs = [x for x, _ in hits]
+        ys = [y for _, y in hits]
+        wide = max(xs, default=0) - min(xs, default=0)
+        high = max(ys, default=0) - min(ys, default=0)
+        checks["a geometry picture shows a round circle"] = high > 100 and abs(wide - high) <= 12
+    else:
+        checks["a geometry picture shows a round circle"] = False
 
     # two blocks, one definition: one picture
     before = len(posts)

@@ -10,7 +10,9 @@ An exception record carries its type, a fixed reason (failure_reason, never the
 exception's own text), the stack frames without the final message line, and a
 fingerprint on the type and the innermost frame under app/ (a library frame such as
 pathlib's open() is the same whichever app function called it, and moves with the Python
-version; with no app frame it is the innermost frame). The exception text is left
+version). A middleware frame that only passes the request on (its line is the call_next
+call) is not a site: every error would otherwise carry the outermost middleware's name.
+With no such app frame the fingerprint is on the innermost frame. The exception text is left
 out because an OSError's message carries the data directory's paths, which are
 note titles.
 """
@@ -64,11 +66,17 @@ def service_identity() -> dict[str, str]:
     }
 
 
+def _passes_on(frame: traceback.FrameSummary) -> bool:
+    """A middleware frame that is only waiting on the rest of the stack (`await call_next(...)`)."""
+    return "call_next(" in (frame.line or "")
+
+
 def _site(frames: traceback.StackSummary) -> str:
-    """file:function of the innermost frame under app/, else of the innermost frame."""
+    """file:function of the innermost frame under app/ that is not a pass-through
+    middleware, else of the innermost frame."""
     if not frames:
         return "?"
-    inside = [f for f in frames if Path(f.filename).is_relative_to(APP_DIR)]
+    inside = [f for f in frames if Path(f.filename).is_relative_to(APP_DIR) and not _passes_on(f)]
     frame = (inside or frames)[-1]
     return f"{frame.filename.rsplit('/', 1)[-1]}:{frame.name}"
 

@@ -69,6 +69,12 @@ for (const c of cases.specs) {
         const got3 = [curve.x(check.t, env), curve.y(check.t, env)];
         if (!got3.every((g, i) => same(g, check.value[i]))) fail('check', c.name, `curve ${got3}`);
       }
+    } else if (check.shapes) {
+      const got4 = parsed.shapes.map((sh) => [sh.kind, sh.name, sh.refs, sh.index]);
+      if (JSON.stringify(got4) !== JSON.stringify(check.shapes)) fail('check', c.name, `shapes ${JSON.stringify(got4)}`);
+    } else if (check.radius !== undefined) {
+      const got5 = parsed.shapes[check.radius].radius(env);
+      if (!same(got5, check.value)) fail('check', c.name, `radius ${got5}`);
     } else if (check.function) {
       if (!same(parsed.functions.get(check.function)(check.x, env), check.value)) fail('check', c.name, 'function value');
     } else {
