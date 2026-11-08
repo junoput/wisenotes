@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from app import logs
+from app.main import app
 from app.schemas import NoteCreate
 
 SENTINEL = "Zq7SentinelTitle"
@@ -221,6 +222,68 @@ def test_the_fingerprint_falls_back_to_the_innermost_frame_without_an_app_frame(
         f"builtins.FileNotFoundError@{frame.filename.rsplit('/', 1)[-1]}:{frame.name}".encode()
     )
     assert fields["error.fingerprint"] == expected.hexdigest()[:16]
+
+
+def test_the_real_app_dir_finds_a_real_app_frame(repo, records):
+    # No monkeypatch: APP_DIR as the module computes it, against a frame that really is
+    # under app/. If APP_DIR stops naming the app's directory, this falls back to the
+    # library's frame and the hash differs.
+    folder = repo._root_dir / "broken-note"
+    folder.mkdir()
+    (folder / "broken-note.json").write_text("{not json")
+    repo.list_notes()
+    (row,) = [r for r in records() if "exception.type" in r]
+    assert row["exception.type"] == "json.decoder.JSONDecodeError"
+    want = hashlib.sha256(b"json.decoder.JSONDecodeError@storage.py:list_notes")
+    assert row["error.fingerprint"] == want.hexdigest()[:16]
+    # the premise: the innermost frame is the json library's, not the app's
+    assert "json/decoder.py" in row["exception.stacktrace"].rsplit("File ", 1)[-1]
+
+
+@pytest.fixture()
+def failing_routes():
+    """Two routes whose code is outside app/ (this file), each raising the same type."""
+
+    def one():
+        raise ValueError("a")
+
+    def two():
+        raise ValueError("b")
+
+    before = list(app.router.routes)
+    app.add_api_route("/__fail_one", one)
+    app.add_api_route("/__fail_two", two)
+    yield
+    app.router.routes[:] = before
+
+
+def fingerprints(rows: list[dict]) -> list[str]:
+    return [r["error.fingerprint"] for r in rows if "exception.type" in r]
+
+
+def test_a_pass_through_middleware_frame_is_not_the_site(client, records, failing_routes):
+    # Raised outside app/: the only app frame on the stack is the middleware that waits on
+    # the request. It must not make two different failures one group.
+    assert client.get("/__fail_one").status_code == 500
+    assert client.get("/__fail_two").status_code == 500
+    first, second = fingerprints(records())
+    assert first != second
+    # the control: the middleware is on that stack, so the rule is what separates them
+    assert "set_security_headers" in "".join(
+        r["exception.stacktrace"] for r in records() if "exception.type" in r
+    )
+    merged = hashlib.sha256(b"builtins.ValueError@main.py:set_security_headers")
+    assert merged.hexdigest()[:16] not in (first, second)
+
+
+def test_an_app_frame_under_the_middleware_is_still_the_site(client, service, records, monkeypatch):
+    # The quiet side of the rule: only the pass-through frame is skipped. An app function
+    # below the middleware (pages._page calls list_notes) is still found.
+    monkeypatch.setattr(service, "list_notes", lambda: (_ for _ in ()).throw(OSError(13, "x")))
+    assert client.get("/").status_code == 500
+    (fp,) = fingerprints(records())
+    want = hashlib.sha256(b"builtins.PermissionError@pages.py:_page")
+    assert fp == want.hexdigest()[:16]
 
 
 def test_the_route_is_logged_and_the_query_and_host_are_not(client, service, records):
