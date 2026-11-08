@@ -176,6 +176,22 @@ a { color: var(--accent); }
   display: none;
 }
 
+/* The picture of the default view (20261022-064, slice 5): what a page without scripts shows
+   above the definition. Drawn in the light palette on white, so it keeps a white ground on
+   the dark theme. Once the live board is drawn the picture would only repeat it. */
+.graph-snapshot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.graph-block-display.graph-rendered .graph-snapshot {
+  display: none;
+}
+
 .graph-sliders {
   display: grid;
   gap: 6px;
@@ -1255,5 +1271,26 @@ details#note-list:not([open]) .sidebar-toggle-btn { transform: rotate(180deg); }
 @media (max-width: 960px) {
   .graph-board {
     height: 260px;
+  }
+}
+
+/* Paper (20261022-064, slice 5). graph.js puts every board at its default view for the print.
+   The controls are for the screen. A graph that has a picture is the picture, not its
+   definition; one drawn by scripts is the board. A graph with neither prints its definition. */
+@media print {
+  .graph-controls,
+  .graph-hint,
+  .graph-play,
+  .graph-block-display.graph-rendered .graph-source-caption,
+  .graph-block-display.graph-has-snapshot .graph-source-caption,
+  .graph-block-display.graph-has-snapshot .graph-spec {
+    display: none;
+  }
+  .graph-block-display,
+  .graph-live {
+    break-inside: avoid;
+  }
+  .graph-board {
+    max-height: none;
   }
 }

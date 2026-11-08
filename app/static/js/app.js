@@ -3,7 +3,7 @@
  * pane state, confirm dialogs, CodeMirror in code-block editors, KaTeX for
  * math blocks, and re-runs those after htmx swaps. */
 import { initDragAndDrop } from '/static/js/drag-drop.js';
-import { renderGraphs, redrawOnThemeChange } from '/static/js/graph.js';
+import { renderGraphs, redrawOnThemeChange, resetOnPrint } from '/static/js/graph.js';
 
 const NARROW = '(max-width: 960px)';
 const isNarrow = () => window.matchMedia(NARROW).matches;
@@ -249,6 +249,7 @@ function drawGraphs() {
   renderGraphs(loadOnce).catch((err) => console.warn('graphs not drawn, their definitions stay as text', err));
 }
 redrawOnThemeChange(loadOnce);
+resetOnPrint();
 
 function renderMath() {
   if (typeof katex === 'undefined') return;

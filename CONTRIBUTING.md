@@ -107,12 +107,26 @@ review criterion, checked per change:
   .venv/bin/python tests/graph_draw.py http://127.0.0.1:8000
   ```
 
+- The picture of a graph's default view (a page without scripts, and paper) can only be
+  made by a browser, so `tests/graph_snapshot.py` drives it: a graph with no picture sends one
+  (light palette, on white, the declared slider values), a reload sends none, print puts the
+  board at the default view and gives it back, and without scripts the block shows the picture
+  and its text. It runs in `pytest` with the others; by hand:
+
+  ```sh
+  .venv/bin/python tests/graph_snapshot.py http://127.0.0.1:8000   # --shots DIR keeps a screenshot
+  ```
+
+  The picture is `graph-<16 hex of the definition's sha256>.webp` in the note's media
+  (`app/graph_snapshot.py`); it is not a field of the block, so an edit that changes the
+  definition simply leaves it without one until the page is drawn again.
+
   The JS parser is also run by `pytest` (it needs `node`): `tests/test_graph_spec_js.py`
   gives it the same `tests/graph_spec_cases.json` as the Python parser.
 
 ### The JavaScript floor
 
-Sixteen script files are tracked, and that is the floor while CodeMirror
+Seventeen script files are tracked, and that is the floor while CodeMirror
 stays, not a number to drive down:
 
 | file | why it stays |
@@ -120,7 +134,7 @@ stays, not a number to drive down:
 | `static/vendor/htmx/htmx.min.js` | the enhancement layer itself: fragments instead of full reloads |
 | `static/js/app.js` (~190 lines) | pane state, keyboard, confirms, mounts CodeMirror and KaTeX, re-runs after swaps |
 | `static/js/drag-drop.js` | drag-to-reorder; the reorder buttons are the plain path it enhances |
-| `static/js/graph.js`, `static/js/graph-budget.js`, `static/js/graph-play.js`, `static/js/graph-spec.js` | the graph block: draws a definition with JSXGraph, the allowance of a board and the motion of a playing slider (both tested under node), and the JS parser that shares `tests/graph_spec_cases.json` with `app/graph_spec.py`; without scripts the block shows its definition |
+| `static/js/graph.js`, `static/js/graph-budget.js`, `static/js/graph-play.js`, `static/js/graph-snapshot.js`, `static/js/graph-spec.js` | the graph block: draws a definition with JSXGraph, the allowance of a board and the motion of a playing slider (both tested under node), the picture of the default view that a page without scripts and paper show (made in a browser, checked by `tests/graph_snapshot.py`), and the JS parser that shares `tests/graph_spec_cases.json` with `app/graph_spec.py`; without scripts the block shows its definition |
 | `static/vendor/jsxgraph/jsxgraphcore.js` | JSXGraph 1.14.1, unmodified, loaded the first time a graph is on the page; `jc.compile` is false (see its README) |
 | `static/js/init-layout.js` (8 lines) | sets the sidebar width before first paint; must be a blocking script, and CSP forbids inline scripts, so it is a file |
 | `static/vendor/codemirror/` (7 files) | editor core, close-brackets, and one mode per offered language (python, javascript for JS and TS, clike for Java, go, rust) |

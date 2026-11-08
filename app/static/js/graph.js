@@ -11,6 +11,7 @@
 import { parse, newEnv } from '/static/js/graph-spec.js';
 import { admitCurve, creating, newWork, overBudget, settleWork } from '/static/js/graph-budget.js';
 import { advance, nextFrameAt, snap } from '/static/js/graph-play.js';
+import { LIGHT, needsPicture, pictureOf, sendPicture } from '/static/js/graph-snapshot.js';
 
 const JSX = '/static/vendor/jsxgraph';
 const COLORS = ['--accent', '--color-code', '--color-math', '--color-chapter', '--danger'];
@@ -207,11 +208,29 @@ function sliderControls(spec, env, onChange, presence) {
     node: wrap,
     reset() { for (const { s, input, show, stop } of parts) { stop(); input.value = String(s.value); show(); } },
     values() { return parts.map(({ s, input }) => `${s.name}=${Number(input.value)}`); },
+    /** What each slider shows now, by name, and the way back to it (print puts the sliders at
+     * their declared values and then returns them to where the person left them). */
+    current() { return new Map(parts.map(({ s, input }) => [s.name, Number(input.value)])); },
+    apply(values) {
+      for (const { s, input, show, stop } of parts) {
+        if (!values.has(s.name)) continue;
+        stop();
+        input.value = String(values.get(s.name));
+        show();
+      }
+    },
     changed() {
       return parts.filter(({ s, input }) => Number(input.value) !== s.value).map(({ s, input }) => `${s.name}=${Number(input.value)}`);
     },
     stop() { for (const { stop } of parts) stop(); },
   };
+}
+
+/** The default view: every slider at its declared value, the box the definition declares. */
+function resetView(board, view, sliders) {
+  sliders.reset();
+  board.setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
+  board.fullUpdate();
 }
 
 /** Reset view, and (when the page says where) Save view: the box on the screen and the
@@ -221,9 +240,7 @@ function viewControls(figure, getBoard, view, sliders) {
   const reset = el('button', { type: 'button', class: 'graph-reset' }, 'Reset view');
   const status = el('span', { class: 'graph-status', role: 'status' });
   reset.addEventListener('click', () => {
-    sliders.reset();
-    getBoard().setBoundingBox([view.x[0], view.y[1], view.x[1], view.y[0]], false);
-    getBoard().fullUpdate();
+    resetView(getBoard(), view, sliders);
     status.textContent = '';
   });
   bar.append(reset);
@@ -292,6 +309,7 @@ export async function renderGraphs(loadOnce) {
     return;
   }
   let first = true;
+  const drawn = [];
   for (const { figure, spec } of drawable) {
     // One task per board: a page of many blocks stays responsive while it is drawn.
     if (!first) await new Promise((resolve) => setTimeout(resolve, 0));
@@ -328,12 +346,13 @@ export async function renderGraphs(loadOnce) {
       board = drawBoard(box, spec, env, colors, describe(spec), work);
       settle();
       board.on('update', settle); // after the first draw, which settles by hand
-      const entry = { figure, board, box, extras: [live], stop: () => { sliders.stop(); presence.disconnect(); } };
+      const entry = { figure, board, box, view, sliders, extras: [live], stop: () => { sliders.stop(); presence.disconnect(); } };
       entry.resize = new ResizeObserver(() => board.resizeContainer(box.clientWidth, box.clientHeight, true));
       entry.resize.observe(box);
       boards.add(entry);
       figure.classList.add('graph-rendered');
       figure.querySelector('.graph-source-caption').textContent = 'Click here to edit the graph';
+      drawn.push({ figure, spec });
     } catch (err) {
       console.warn('graph block not drawn, its definition stays as text', err);
       sliders?.stop();
@@ -341,6 +360,57 @@ export async function renderGraphs(loadOnce) {
       live?.remove();
     }
   }
+  await sendPictures(drawn);
+}
+
+/** The picture of the default view, for a page without scripts and for paper: made once
+ * for each graph that has none (see graph-snapshot.js). Never throws: the block is drawn
+ * and usable whether or not this works. */
+async function sendPictures(drawn) {
+  const sent = new Set(); // two blocks with one definition need one picture
+  for (const { figure, spec } of drawn) {
+    if (!figure.isConnected || !needsPicture(figure) || sent.has(figure.dataset.specHash)) continue;
+    figure._pictured = true;
+    sent.add(figure.dataset.specHash);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // after the live boards are on the screen
+    try {
+      const blob = await pictureOf(window.JXG, (host) => {
+        const env = newEnv();
+        for (const slider of spec.sliders.values()) env[slider.name] = slider.value;
+        return drawBoard(host, spec, env, LIGHT, describe(spec), newWork());
+      });
+      if (blob && figure.isConnected) await sendPicture(figure, blob);
+    } catch (err) {
+      console.warn('graph picture not made, the block keeps its text', err);
+    }
+  }
+}
+
+/** On paper a graph shows its default view: every board is put back to the box and the
+ * slider values the definition declares, a play stops, and when the print is over the board
+ * returns to where the person had it. A browser that has no beforeprint event is covered by
+ * the print media query, which says the same. */
+export function resetOnPrint() {
+  const before = () => {
+    for (const entry of boards) {
+      if (entry.saved) continue;
+      entry.saved = { box: entry.board.getBoundingBox(), sliders: entry.sliders.current() };
+      resetView(entry.board, entry.view, entry.sliders);
+    }
+  };
+  const after = () => {
+    for (const entry of boards) {
+      if (!entry.saved) continue;
+      const { box, sliders } = entry.saved;
+      entry.saved = null;
+      entry.sliders.apply(sliders);
+      entry.board.setBoundingBox(box, false);
+      entry.board.fullUpdate();
+    }
+  };
+  window.addEventListener('beforeprint', before);
+  window.addEventListener('afterprint', after);
+  window.matchMedia('print').addEventListener('change', (e) => (e.matches ? before() : after()));
 }
 
 /** The palette is read when a board is drawn; draw them again when the theme changes. */

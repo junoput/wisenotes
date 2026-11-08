@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import File
 from fastapi import Form
 from fastapi import HTTPException
 from fastapi import Request
@@ -24,6 +25,7 @@ from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from app import graph_snapshot
 from app import graph_spec
 from app.assets import ASSET_VERSION
 from app.blocks import get_all_blocks
@@ -52,6 +54,7 @@ templates.env.filters["graph_errors"] = lambda text: [
     str(e) for e in graph_spec.validate(text or "")
 ]
 templates.env.filters["missing_name"] = missing_name
+templates.env.filters["graph_hash"] = graph_snapshot.spec_hash
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -77,6 +80,14 @@ def _ctx(request: Request, **kwargs) -> dict:
     return ctx
 
 
+def _snapshots(service: NoteService, note: Note | None) -> frozenset[str]:
+    """The names of the graph snapshots stored for a note: a graph block shows the picture
+    named after its definition when that is among them."""
+    if note is None:
+        return frozenset()
+    return frozenset(f for f in service.repo.list_media(note.name) if graph_snapshot.is_snapshot(f))
+
+
 def _page(
     request: Request,
     service: NoteService,
@@ -91,7 +102,14 @@ def _page(
     return templates.TemplateResponse(
         request,
         template,
-        _ctx(request, notes=notes, active=note, **_disk_notices(service), **extra),
+        _ctx(
+            request,
+            notes=notes,
+            active=note,
+            snapshots=_snapshots(service, note),
+            **_disk_notices(service),
+            **extra,
+        ),
     )
 
 
@@ -118,6 +136,7 @@ def _after_change(
                 request,
                 notes=service.list_notes(),
                 active=note,
+                snapshots=_snapshots(service, note),
                 **_disk_notices(service),
             ),
             headers=headers,
@@ -463,6 +482,31 @@ async def save_graph_view(
     return _after_change(request, service, note)
 
 
+@router.post("/notes/{note_id}/chapters/{chapter_id}/graph-snapshot")
+async def save_graph_snapshot(
+    note_id: str,
+    chapter_id: str,
+    spec: str = Form(...),
+    image: UploadFile = File(...),
+    service: NoteService = Depends(get_note_service),
+):
+    """Store the picture of a graph block's default view, sent by the page that drew it
+    (graph-snapshot.js). It is a display-only enhancement: without scripts the block shows
+    the picture that exists, and its text. 204 when stored; 409 when the definition changed
+    since the page drew it (nothing written); 400 when the image is not one we store."""
+    raw = await image.read(graph_snapshot.MAX_SNAPSHOT_BYTES + 1)
+    try:
+        data = await run_in_threadpool(graph_snapshot.decide, raw)
+        outcome = service.save_graph_snapshot(note_id, chapter_id, spec, data)
+    except (UnsupportedImage, ValueError) as e:
+        return PlainTextResponse(str(e), status_code=400)
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="Block not found")
+    if outcome == "stale":
+        return PlainTextResponse("the definition changed since it was drawn", status_code=409)
+    return Response(status_code=204)
+
+
 def _changed_definition(block: Chapter, text: str) -> bool:
     """The same rule as PUT /api/notes (api._refuse_bad_graphs): a definition is checked when
     it differs from the stored one. A plain form posts a textarea with CRLF line ends, so
@@ -564,6 +608,7 @@ def _media_files(service: NoteService, note: Note, notes: list[Note] | None = No
     return [
         {"name": f, "users": media_users(notes, note, f)}
         for f in service.repo.list_media(note.name)
+        if not graph_snapshot.is_snapshot(f)  # a graph block's picture, not the person's image
     ]
 
 

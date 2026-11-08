@@ -1,6 +1,6 @@
 """The Playwright checks run as part of the suite, when a chromium is present (20261027-036).
 
-tests/graph_refusal.py and tests/graph_draw.py see what no server-side test can: that
+tests/graph_refusal.py, tests/graph_draw.py and tests/graph_snapshot.py see what no server-side test can: that
 app.js lets a refused graph save through htmx, and that a graph draws under the app's
 real Content-Security-Policy. They used to run only by hand, so removing the one clause in
 app.js that the first one guards turned nothing red. Here each runs against a uvicorn on a
@@ -88,7 +88,7 @@ def run_check(script: str, base: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.mark.parametrize("script", ["graph_refusal.py", "graph_draw.py"])
+@pytest.mark.parametrize("script", ["graph_refusal.py", "graph_draw.py", "graph_snapshot.py"])
 def test_the_browser_check_passes_in_both_arms(server, script):
     r = run_check(script, server)
     # exit 0 is a pass; 1 names a failed check; 2 is VACUOUS (it saw nothing to judge)

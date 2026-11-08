@@ -34,6 +34,11 @@ import_bundle also reads a note folder zipped straight from the data directory:
 Entries under __MACOSX/ and dot-files (.DS_Store, ._* AppleDouble forks), which
 macOS Finder adds to every zip, are dropped before anything reads them.
 
+A graph block's picture of its default view (app/graph_snapshot.py) is a file of the note's
+media folder named after the block's definition, so export writes it with the images, and
+import keeps the one whose name is the hash of an imported graph's definition, through the
+same pipeline. It is no media block's image and is not counted among the images.
+
 A media block whose image cannot be stored (not in the bundle, or not a
 readable image) keeps a visible placeholder, MISSING_PREFIX + the file name,
 rather than becoming an empty block. The note page lists every such block.
@@ -58,6 +63,7 @@ from urllib.parse import unquote_to_bytes
 
 from pydantic import ValidationError
 
+from app import graph_snapshot
 from app.blocks import BLOCKS
 from app.media_urls import MISSING_PREFIX
 from app.media_urls import clean
@@ -405,6 +411,7 @@ def _create_note(
     id_map = {ch.id: str(uuid.uuid4()) for ch in src.chapters}
     media_urls: dict[str, str] = {}
     pending: list[tuple[str, bytes, dict]] = []  # images decided, not yet written
+    snapshots: dict[str, bytes] = {}  # graph snapshots decided, by their stored name
     chapters: list[Chapter] = []
     for ch in sorted(src.chapters, key=lambda c: c.order):
         block_type = ch.type if ch.type in BLOCKS else "text"
@@ -413,6 +420,8 @@ def _create_note(
             content = _import_media_ref(
                 service, created.id, scope, content, media, media_urls, result, pending
             )
+        elif block_type == "graph":
+            _import_snapshot(ch.content, content, scope, media, snapshots, result)
         chapters.append(
             Chapter(
                 id=id_map[ch.id],
@@ -442,6 +451,8 @@ def _create_note(
             return
         for new_name, data, _ in pending:
             repo.save_media(note.name, new_name, data)
+        for new_name, data in snapshots.items():
+            repo.save_media(note.name, new_name, data)
         repo.upsert_module_metadata_many(
             note.name, "media", {new_name: meta for new_name, _, meta in pending}
         )
@@ -458,6 +469,26 @@ def _create_note(
         )
     result.images += len(pending)
     result.notes.append(saved)
+
+
+def _import_snapshot(sent, content, scope, media, snapshots, result) -> None:
+    """Keep the picture of a graph block's default view that the bundle carries.
+
+    No block names it: a snapshot is the file named after the definition it was drawn for
+    (graph_snapshot.snapshot_name), so it is looked up by the definition as exported (`sent`)
+    and stored under the name of the definition as imported (`content`, after the text was
+    scrubbed), which is the same name unless scrubbing changed the text. The image goes
+    through the upload pipeline like any other, and is not counted among the images. One
+    that does not decode is dropped and reported; the block falls back to its text, and
+    the page that draws it sends a new picture."""
+    name = graph_snapshot.snapshot_name(sent)
+    raw = media.get((scope, name))
+    if raw is None:
+        return  # an export from before snapshots, a JSON file, or a graph never drawn
+    try:
+        snapshots[graph_snapshot.snapshot_name(content)] = graph_snapshot.decide(raw)
+    except UnsupportedImage as e:
+        result.skipped.append(f"{name}: {e}")
 
 
 def _import_media_ref(service, note_id, scope, content, media, media_urls, result, pending) -> str:

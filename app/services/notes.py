@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
+from app import graph_snapshot
 from app import graph_spec
 from app.config import get_settings
 from app.media_urls import is_data_url
@@ -295,6 +296,47 @@ class NoteService:
                 raise ValueError("only a graph block has a view to save")
             content = graph_spec.with_view(chapter.content, x, y, values)
             return self.update_chapter(note_id, chapter_id, chapter.title, content)
+
+    def save_graph_snapshot(
+        self, note_id: str, chapter_id: str, spec: str, data: bytes
+    ) -> str | None:
+        """Store the picture of a graph block's default view (20261022-064, slice 5).
+        `spec` is the hash of the definition the browser drew; it is compared with the
+        definition stored NOW, under the lock, and the file is named after the stored one.
+        "stored", "stale" (the definition changed since: nothing is written), or None when
+        there is no such block. ValueError when it is not a graph block.
+
+        Afterwards the snapshots no graph block of the note names are removed (an edit
+        gives the definition another name), unless a media block shows one."""
+        with self.repo.lock:
+            note = self.repo.get_note(note_id)
+            chapter = next((c for c in note.chapters if c.id == chapter_id), None) if note else None
+            if note is None or chapter is None:
+                return None
+            if chapter.type != "graph":
+                raise ValueError("only a graph block has a snapshot")
+            if spec != graph_snapshot.spec_hash(chapter.content):
+                return "stale"
+            self.repo.save_media(note.name, graph_snapshot.snapshot_name(chapter.content), data)
+            self._drop_old_snapshots(note)
+            return "stored"
+
+    def _drop_old_snapshots(self, note: Note) -> None:
+        """Called under the repository lock."""
+        wanted = {
+            graph_snapshot.snapshot_name(c.content) for c in note.chapters if c.type == "graph"
+        }
+        old = [
+            f
+            for f in self.repo.list_media(note.name)
+            if graph_snapshot.is_snapshot(f) and f not in wanted
+        ]
+        if not old:
+            return
+        notes = self.repo.list_notes()
+        for f in old:
+            if not media_users(notes, note, f):  # a media block that picked it keeps it
+                self.repo.delete_media(note.name, f)
 
     def _media_exists(self, note_id: str, filename: str) -> bool:
         owner = self.repo.get_note(note_id)

@@ -1,5 +1,5 @@
 {% from 'components/add_block_button.html' import add_block_button %}
-{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0, media_error=none, edit_errors=none) %}
+{% macro render_editor_chapters(chapters, active_note, block_types, editing, media_files, parent_id=none, depth=0, media_error=none, edit_errors=none, snapshots=()) %}
   {% set siblings = chapters|selectattr('parent_id', 'equalto', parent_id)|list|sort(attribute='order') %}
   {% for chapter in siblings %}
     {% set edit_url = '/notes/' ~ active_note.id ~ '/chapters/' ~ chapter.id %}
@@ -36,8 +36,11 @@
           {% elif chapter.type == 'math' %}
             <div class="block-content math-block-display" data-language="{{ chapter.language or 'latex' }}">{% if chapter.content.strip() %}<div class="math-source-caption">Formula source</div>{% endif %}<div class="math-formula-content">{{ chapter.content }}</div></div>
           {% elif chapter.type == 'graph' %}
-            {# Slice 1 of 20261022-064: the definition as text; slice 2 draws it. #}
-            <figure class="block-content graph-block-display" data-view-url="{{ edit_url }}/graph-view"><figcaption class="graph-source-caption">Graph definition</figcaption>{% set graph_problems = chapter.content|graph_errors %}{% if graph_problems %}<ul class="graph-errors" role="alert">{% for err in graph_problems %}<li>{{ err }}</li>{% endfor %}</ul>{% endif %}<pre class="graph-spec">{{ chapter.content }}</pre></figure>
+            {# 20261022-064: the definition as text (slice 1), drawn by scripts (slice 2), and the picture of
+               its default view for a page without scripts and for paper (slice 5). The picture is the stored
+               image named after this definition; the page that draws the graph sends it when it is missing. #}
+            {% set snapshot = 'graph-' ~ (chapter.content|graph_hash) ~ '.webp' %}
+            <figure class="block-content graph-block-display{% if snapshot in snapshots %} graph-has-snapshot{% endif %}" data-view-url="{{ edit_url }}/graph-view" data-snapshot-url="{{ edit_url }}/graph-snapshot" data-spec-hash="{{ chapter.content|graph_hash }}"{% if snapshot in snapshots %} data-has-snapshot{% endif %}>{% if snapshot in snapshots %}<img class="graph-snapshot" src="/api/notes/{{ active_note.id }}/media/{{ snapshot }}" alt="{{ chapter.title or 'Graph' }}, default view">{% endif %}<figcaption class="graph-source-caption">Graph definition</figcaption>{% set graph_problems = chapter.content|graph_errors %}{% if graph_problems %}<ul class="graph-errors" role="alert">{% for err in graph_problems %}<li>{{ err }}</li>{% endfor %}</ul>{% endif %}<pre class="graph-spec">{{ chapter.content }}</pre></figure>
           {% elif chapter.type == 'media' %}
             <div class="block-content media-block-display">
               {% if chapter.content|media_kind in ('image', 'inline') %}
@@ -57,7 +60,7 @@
       {% endif %}
       {% if depth < 3 and chapters|selectattr('parent_id', 'equalto', chapter.id)|list %}
         <div class="chapter-children">
-          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1, media_error, edit_errors) }}
+          {{ render_editor_chapters(chapters, active_note, block_types, editing, media_files, chapter.id, depth + 1, media_error, edit_errors, snapshots) }}
         </div>
       {% endif %}
     </section>
