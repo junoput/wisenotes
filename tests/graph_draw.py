@@ -25,6 +25,7 @@ import time
 import uuid
 from itertools import pairwise
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
@@ -71,6 +72,21 @@ IRRATIONAL = (
     "  a  =  slider(0, 2*pi, play)\n"
     "  b = slider( 0 , 5 , value 2 )\n"
     "f(x) = a*sin(x) + b\n"
+)
+GEOMETRY = (
+    "view 2d  x -6..6  y -4..4\n"
+    "r = slider(0.5, 6, value 2)\n"
+    "P = (-1, 0)\nQ = (3, 1)\nR = (0, 3)\n"
+    "s = segment(P, Q)\nc = circle(P, r)\nX = intersection(s, c)\nM = midpoint(P, Q)\n"
+    "polygon(P, Q, R)\nl = line(Q, R)\nd = circle(P, Q)\n"
+)
+# The most a definition may hold (200 statements, 800 polygon corners between them), every
+# point moving with the slider: 32 points, 25 polygons of 32 corners, 175 segments.
+BIGGEST_GEOMETRY = (
+    "a = slider(0, 3, value 1)\n"
+    + "".join(f"p{i} = (3*cos({i}) + a*0.1, 3*sin({i}))\n" for i in range(32))
+    + "".join(f"polygon({', '.join(f'p{(j + k) % 32}' for j in range(32))})\n" for k in range(25))
+    + "".join(f"segment(p{k % 32}, p{(k + 7) % 32})\n" for k in range(175))
 )
 LONG_TASKS = (
     "window.__long = 0; new PerformanceObserver((l) => l.getEntries().forEach("
@@ -603,6 +619,199 @@ def check_saving_at_an_irrational_end(browser, base, note, ctx_for_api):
     }
 
 
+ELEMENTS = """() => {
+  const board = Object.values(JXG.boards)[0];
+  const live = (e) => e.isReal && e.visPropCalc.visible;
+  const kinds = {};
+  for (const e of board.objectsList) if (live(e) && !['text', 'label', 'axis', 'ticks', 'grid', 'sketchcurve', 'curve'].includes(e.elType)) {
+    kinds[e.elType] = (kinds[e.elType] ?? 0) + 1;
+  }
+  const named = {};
+  for (const e of board.objectsList) if (e.elType === 'point' && ['X', 'M', 'P', 'Q', 'R'].includes(e.name)) {
+    named[e.name] = live(e) ? [e.X(), e.Y()] : null;
+  }
+  const circles = board.objectsList.filter((e) => e.elType === 'circle' && live(e)).map((c) => [c.Radius(), Number(c.rendNode?.getAttribute('rx') ?? 0), Number(c.rendNode?.getAttribute('ry') ?? -1)]);
+  return { kinds, named, circles };
+}"""
+
+
+def check_geometry(browser, base, note):
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    problems = []
+    page.on(
+        "console", lambda m: problems.append(m.text) if m.type in ("error", "warning") else None
+    )
+    page.on("pageerror", lambda e: problems.append(str(e)))
+    try:
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=15000)
+        page.wait_for_timeout(800)
+        first = page.evaluate(ELEMENTS)
+        page.locator(".graph-slider input[type=range]").fill(
+            "5.5"
+        )  # the circle swallows the segment
+        page.wait_for_timeout(500)
+        wide = page.evaluate(ELEMENTS)
+        page.locator(".graph-slider input[type=range]").fill("3")
+        page.wait_for_timeout(500)
+        back = page.evaluate(ELEMENTS)
+        label = page.locator(".graph-board").get_attribute("aria-label") or ""
+    finally:
+        ctx.close()
+    x = first["named"].get("X")
+    px, py = first["named"]["P"]
+    on_circle = x is not None and abs(((x[0] - px) ** 2 + (x[1] - py) ** 2) ** 0.5 - 2) < 1e-6
+    # on the segment P -> Q = (4, 1) from P: (x - P) is a multiple of it, inside it
+    along = x is not None and abs((x[0] - px) * 1 - (x[1] - py) * 4) < 1e-6 and x[0] > px
+    return {
+        "geometry is drawn: a segment, a line, two circles, a polygon": all(
+            first["kinds"].get(k, 0) >= n
+            for k, n in (("segment", 1), ("line", 1), ("circle", 2), ("polygon", 1))
+        ),
+        # P, Q, R, M, X and nothing else: the points a segment or a polygon is built on are not shown
+        "geometry: the points of midpoint and intersection are drawn": first["kinds"].get("point")
+        == 5
+        and first["named"].get("M") is not None
+        and x is not None,
+        "geometry: a midpoint is halfway": first["named"].get("M") is not None
+        and abs(first["named"]["M"][0] - 1) < 1e-9
+        and abs(first["named"]["M"][1] - 0.5) < 1e-9,
+        "geometry: an intersection is on both the circle and the segment": on_circle and along,
+        "geometry: a circle has its radius from the slider": sorted(
+            round(r, 6) for r, _, _ in first["circles"]
+        )
+        == [2.0, round(17**0.5, 6)],
+        "geometry: a circle is on the page, and round": len(first["circles"]) == 2
+        and all(rx > 5 and abs(rx - ry) < 1 for _, rx, ry in first["circles"]),
+        "geometry: a point that no longer exists is not drawn": wide["named"].get("X") is None
+        and wide["named"].get("M") is not None,
+        "geometry: the circle follows the slider": sorted(
+            round(r, 6) for r, _, _ in wide["circles"]
+        )
+        == [round(17**0.5, 6), 5.5],
+        "geometry: the point comes back": back["named"].get("X") is not None,
+        "geometry: a construction's name is in the board's label": "M" in label and "X" in label,
+        "geometry: no console error": not problems,
+    }
+
+
+ROUND = """() => Object.values(JXG.boards)[0].objectsList
+  .filter((e) => e.elType === 'circle' && e.rendNode)
+  .map((c) => [Number(c.rendNode.getAttribute('rx')), Number(c.rendNode.getAttribute('ry'))])"""
+
+
+def round_circles(page):
+    """Every circle drawn has one radius on the screen on both axes (and there is one to see)."""
+    got = page.evaluate(ROUND)
+    return bool(got) and all(rx > 5 and abs(rx - ry) < 0.5 for rx, ry in got)
+
+
+def check_geometry_view(browser, base, note):
+    """Reset view keeps circles round (JSXGraph drops the lock when told `false`), and Save
+    view gives back the written box at any width: the box on the screen is wider than the
+    written one, and must not be what is written (20261029-051, review)."""
+    got = {}
+    for width in (900, 600):
+        ctx = browser.new_context(viewport={"width": width, "height": 900})
+        page = ctx.new_page()
+        sent = []
+
+        def keep(route, _request, sent=sent):
+            sent.append(parse_qs(route.request.post_data or ""))
+            route.fulfill(status=200, content_type="text/plain", body="")
+
+        page.route("**/graph-view", keep)
+        try:
+            page.goto(f"{base}/notes/{note}")
+            page.wait_for_selector(".graph-board svg", timeout=15000)
+            page.wait_for_timeout(600)
+            page.locator(".graph-save").click()
+            page.wait_for_timeout(500)
+            at = page.locator(".graph-board").bounding_box()
+            page.mouse.move(at["x"] + 150, at["y"] + 100)
+            page.mouse.down()
+            page.mouse.move(at["x"] + 230, at["y"] + 150, steps=6)
+            page.mouse.up()
+            page.locator(".graph-reset").click()
+            page.wait_for_timeout(500)
+            after_reset = round_circles(page)
+            page.set_viewport_size({"width": width - 150, "height": 900})
+            page.wait_for_timeout(800)
+            after_resize = round_circles(page)
+            page.locator(".graph-save").click()
+            page.wait_for_timeout(500)
+            # a zoom, then a save: the box is the written shape, not the screen's
+            page.mouse.move(at["x"] + 150, at["y"] + 100)
+            page.keyboard.down("Shift")
+            page.mouse.wheel(0, -300)
+            page.keyboard.up("Shift")
+            page.wait_for_timeout(500)
+            page.locator(".graph-save").click()
+            page.wait_for_timeout(500)
+            zoomed_round = round_circles(page)
+        finally:
+            ctx.close()
+        got[width] = (sent, after_reset, after_resize, zoomed_round)
+
+    def box(q):
+        return [float(q[k][0]) for k in ("x0", "x1", "y0", "y1")]
+
+    def writes_the_written_box(q):
+        return all(abs(a - b) < 0.01 for a, b in zip(box(q), (-6, 6, -4, 4), strict=True))
+
+    saved = {w: [box(q) for q in v[0] if "x0" in q] for w, v in got.items()}
+    zoomed = [b for w in saved for b in saved[w][2:3]]
+    return {
+        "geometry view: Save view without a pan or zoom writes the written box, at 900 and 600 px": all(
+            len(got[w][0]) == 3 and writes_the_written_box(got[w][0][0]) for w in (900, 600)
+        ),
+        "geometry view: a zoomed save keeps the written shape (12 by 8) and has moved the box": len(
+            zoomed
+        )
+        == 2
+        and all(
+            abs((b[1] - b[0]) / (b[3] - b[2]) - 1.5) < 0.01
+            and (b[1] - b[0]) < 11.9
+            and abs(b[0] + b[1]) + abs(b[2] + b[3]) > 0.1  # zoomed about a point off the middle
+            for b in zoomed
+        ),
+        "geometry view: circles are round after Reset view": all(got[w][1] for w in got),
+        "geometry view: circles are round after a resize": all(got[w][2] for w in got),
+        "geometry view: circles are round after a zoom": all(got[w][3] for w in got),
+    }
+
+
+def check_the_biggest_geometry_is_bounded(browser, base, note):
+    """The most the parsers admit: it draws, and it does not freeze the page (it took
+    7 s of long tasks before the polygon corners were capped in all)."""
+    ctx = browser.new_context(viewport={"width": 900, "height": 900})
+    page = ctx.new_page()
+    page.add_init_script(LONG_TASKS)
+    try:
+        page.goto(f"{base}/")
+        unit = unit_ms(page)
+        page.goto(f"{base}/notes/{note}")
+        page.wait_for_selector(".graph-board svg", timeout=60000)
+        page.wait_for_timeout(1500)
+        drawn = page.evaluate("() => window.__long")
+        page.locator(".graph-slider input[type=range]").fill("2")
+        page.wait_for_timeout(1500)
+        total = page.evaluate("() => window.__long")
+        count = page.evaluate("() => Object.values(JXG.boards)[0].objectsList.length")
+    finally:
+        ctx.close()
+    print(
+        f"  (biggest geometry: {count} elements, {drawn:.0f} ms drawing, {total:.0f} ms with a slider move;"
+        f" unit {unit:.0f} ms, ratio {total / unit:.1f})"
+    )
+    return {
+        "geometry: the biggest definition is drawn (the premise)": count > 1500,
+        f"geometry: the biggest definition keeps long tasks under {LONG_TASK_LIMIT_UNITS} units of work": total
+        < LONG_TASK_LIMIT_UNITS * unit,
+    }
+
+
 def hints(page):
     return page.evaluate(
         "() => [...document.querySelectorAll('.graph-hint')].map((h) => h.textContent)"
@@ -939,6 +1148,8 @@ def drive(p, base, js, shots):
     tall = make_note(ctx, base, f"Graph play tall {stamp}", PLAY_TALL)
     heavy_play = make_note(ctx, base, f"Graph play heavy {stamp}", PLAY_HEAVY)
     irrational = make_note(ctx, base, f"Graph irrational {stamp}", IRRATIONAL)
+    geometry = make_note(ctx, base, f"Graph geometry {stamp}", GEOMETRY)
+    biggest = make_note(ctx, base, f"Graph biggest geometry {stamp}", BIGGEST_GEOMETRY)
     try:
         page.goto(f"{base}/notes/{good}")
         page.wait_for_load_state("networkidle")
@@ -1051,6 +1262,9 @@ def drive(p, base, js, shots):
             checks.update(check_play_waits_when_it_cannot_be_seen(browser, base, tall))
             checks.update(check_play_leaves_the_page_usable(browser, base, heavy_play))
             checks.update(check_saving_at_an_irrational_end(browser, base, irrational, ctx))
+            checks.update(check_geometry(browser, base, geometry))
+            checks.update(check_geometry_view(browser, base, geometry))
+            checks.update(check_the_biggest_geometry_is_bounded(browser, base, biggest))
             checks.update(check_each_board_says_its_own_limits(browser, base, many, mixed))
             checks.update(check_a_theme_change_while_drawing(browser, base, many))
             checks.update(check_the_curve_cap_and_its_hint(browser, base, circles, named))
@@ -1076,6 +1290,8 @@ def drive(p, base, js, shots):
             tall,
             heavy_play,
             irrational,
+            geometry,
+            biggest,
         ):
             ctx.request.delete(f"{base}/api/notes/{nid}")
         browser.close()
