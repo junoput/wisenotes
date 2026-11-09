@@ -32,6 +32,7 @@ from app.services.reasons import failure_reason
 
 SERVICE_NAME = "wisenotes"
 APP_DIR = Path(__file__).resolve().parent  # frames under here are the app's own
+_APP_DIR_UNRESOLVED = Path(__file__).parent
 ENVIRONMENTS = ("dev", "staging", "prod")
 
 # (severity_text, severity_number) by the stdlib level at or below which a record falls
@@ -76,7 +77,15 @@ def _site(frames: traceback.StackSummary) -> str:
     middleware, else of the innermost frame."""
     if not frames:
         return "?"
-    inside = [f for f in frames if Path(f.filename).is_relative_to(APP_DIR) and not _passes_on(f)]
+    inside = [
+        f
+        for f in frames
+        if (
+            Path(f.filename).is_relative_to(APP_DIR)
+            or Path(f.filename).is_relative_to(_APP_DIR_UNRESOLVED)
+        )
+        and not _passes_on(f)
+    ]
     frame = (inside or frames)[-1]
     return f"{frame.filename.rsplit('/', 1)[-1]}:{frame.name}"
 

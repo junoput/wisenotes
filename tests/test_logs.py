@@ -1,6 +1,7 @@
 """Log records in the conventions v6 vocabulary (docs/OBSERVABILITY.md, 20261020-042)."""
 
 import hashlib
+import importlib.util
 import io
 import json
 import logging
@@ -221,6 +222,35 @@ def test_the_fingerprint_falls_back_to_the_innermost_frame_without_an_app_frame(
     expected = hashlib.sha256(
         f"builtins.FileNotFoundError@{frame.filename.rsplit('/', 1)[-1]}:{frame.name}".encode()
     )
+    assert fields["error.fingerprint"] == expected.hexdigest()[:16]
+
+
+def test_the_fingerprint_recognizes_app_frames_imported_through_a_symlink(tmp_path):
+    linked_app = tmp_path / "linked_app"
+    linked_app.symlink_to(Path(logs.__file__).resolve().parent, target_is_directory=True)
+    linked_file = linked_app / "logs.py"
+    spec = importlib.util.spec_from_file_location("linked_logs", linked_file)
+    assert spec is not None and spec.loader is not None
+    linked_logs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(linked_logs)
+
+    namespace = {"Path": Path}
+    exec(
+        compile(
+            "def fail():\n    Path('/missing-symlink-test').read_text()\n",
+            str(linked_app / "symlinked_module.py"),
+            "exec",
+        ),
+        namespace,
+    )
+    try:
+        namespace["fail"]()
+    except OSError as exc:
+        fields = linked_logs._exception_fields(exc, exc.__traceback__)
+
+    assert Path(linked_logs.__file__).parent == linked_app
+    assert Path(linked_logs.__file__).resolve().parent == logs.APP_DIR
+    expected = hashlib.sha256(b"builtins.FileNotFoundError@symlinked_module.py:fail")
     assert fields["error.fingerprint"] == expected.hexdigest()[:16]
 
 
